@@ -290,6 +290,65 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
     })
 }
 
+/// The folder a project's own files live in — settings now, and whatever
+/// else a project needs to carry with it later.
+pub const PROJECT_DIR: &str = ".ycode";
+
+/// What a project file may say. Every field is optional, so a project that
+/// only cares about indentation says only that; `recent_projects` is not
+/// here on purpose — that is the user's, not the project's.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ProjectOverrides {
+    theme: Option<String>,
+    indent: Option<Indent>,
+    font_size: Option<f32>,
+    show_sidebar: Option<bool>,
+    show_terminal: Option<bool>,
+    goto_modifiers: Option<GotoModifiers>,
+    keys: Option<Keys>,
+}
+
+impl ProjectOverrides {
+    fn apply(self, settings: &mut Settings) {
+        if let Some(v) = self.theme {
+            settings.theme = v;
+        }
+        if let Some(v) = self.indent {
+            settings.indent = v;
+        }
+        if let Some(v) = self.font_size {
+            settings.font_size = v;
+        }
+        if let Some(v) = self.show_sidebar {
+            settings.show_sidebar = v;
+        }
+        if let Some(v) = self.show_terminal {
+            settings.show_terminal = v;
+        }
+        if let Some(v) = self.goto_modifiers {
+            settings.goto_modifiers = v;
+        }
+        if let Some(keys) = self.keys {
+            // A project's keys lay over the user's, as the user's lay over
+            // the defaults. Keys deserialises over the defaults, so only the
+            // entries the file actually named differ from them.
+            let defaults = Keys::default();
+            for (id, chord) in keys.gui {
+                if defaults.gui.get(&id) != Some(&chord) {
+                    settings.keys.gui.insert(id, chord);
+                }
+            }
+            for (id, chord) in keys.tui {
+                if defaults.tui.get(&id) != Some(&chord) {
+                    settings.keys.tui.insert(id, chord);
+                }
+            }
+            settings.keys.rejected.extend(keys.rejected);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -332,19 +391,44 @@ impl Settings {
     /// or malformed. Returns the settings and a message if the file was bad, so
     /// the caller can show it instead of silently ignoring a typo.
     pub fn load() -> (Self, Option<String>) {
-        let Some(path) = Self::path() else {
-            return (Self::default(), None);
+        Self::load_for(None)
+    }
+
+    /// The global file, with a project's own `.ycode/settings.json` laid over
+    /// it when a project is open. A project can pin its indentation or its
+    /// theme without touching the user's defaults; keys merge the same way
+    /// the global file merges over the built-in defaults.
+    pub fn load_for(root: Option<&Path>) -> (Self, Option<String>) {
+        let mut complaint = None;
+        let mut settings = match Self::path().and_then(|p| std::fs::read_to_string(p).ok()) {
+            Some(text) => match serde_json::from_str::<Self>(&text) {
+                Ok(settings) => settings,
+                Err(e) => {
+                    complaint = Some(format!("settings.json ignored: {e}"));
+                    Self::default()
+                }
+            },
+            None => Self::default(),
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return (Self::default(), None);
-        };
-        match serde_json::from_str::<Self>(&text) {
-            Ok(settings) => {
-                let complaint = settings.binding_complaint();
-                (settings, complaint)
+        if let Some(project) = root.map(Self::project_path) {
+            if let Ok(text) = std::fs::read_to_string(&project) {
+                match serde_json::from_str::<ProjectOverrides>(&text) {
+                    Ok(overrides) => overrides.apply(&mut settings),
+                    Err(e) => {
+                        complaint = Some(format!(".ycode/settings.json ignored: {e}"));
+                    }
+                }
             }
-            Err(e) => (Self::default(), Some(format!("settings.json ignored: {e}"))),
         }
+        if complaint.is_none() {
+            complaint = settings.binding_complaint();
+        }
+        (settings, complaint)
+    }
+
+    /// Where a project keeps its own settings.
+    pub fn project_path(root: &Path) -> PathBuf {
+        root.join(PROJECT_DIR).join("settings.json")
     }
 
     /// What is wrong with the bindings the file gave us, if anything: a chord
@@ -734,6 +818,47 @@ mod settings_tests {
                 .unwrap();
         assert_eq!(settings.goto_modifiers.gui, [Modifier::Cmd]);
         assert_eq!(settings.goto_modifiers.tui, [Modifier::Ctrl, Modifier::Alt]);
+    }
+
+    #[test]
+    fn a_project_file_lays_over_the_global_one() {
+        let dir = crate::core::test_support::Dir::new("yara-project-settings");
+        std::fs::create_dir_all(dir.path().join(PROJECT_DIR)).unwrap();
+        std::fs::write(
+            Settings::project_path(dir.path()),
+            r#"{"indent":{"style":"tabs","width":8},"keys":{"tui":{"save":"Ctrl+D"}}}"#,
+        )
+        .unwrap();
+        let (settings, complaint) = Settings::load_for(Some(dir.path()));
+        assert_eq!(complaint, None);
+        assert_eq!(settings.indent.style, IndentStyle::Tabs);
+        assert_eq!(settings.indent.width, 8);
+        assert_eq!(
+            settings.tui_chord(Command::Save).unwrap().to_string(),
+            "Ctrl+D"
+        );
+        // What the project did not mention keeps the user's value.
+        assert_eq!(
+            settings.tui_chord(Command::Quit).unwrap().to_string(),
+            "Ctrl+Q"
+        );
+        assert_eq!(settings.theme, Settings::default().theme);
+    }
+
+    #[test]
+    fn a_broken_project_file_is_reported_and_the_rest_still_loads() {
+        let dir = crate::core::test_support::Dir::new("yara-project-settings-bad");
+        std::fs::create_dir_all(dir.path().join(PROJECT_DIR)).unwrap();
+        std::fs::write(Settings::project_path(dir.path()), "{not json").unwrap();
+        let (settings, complaint) = Settings::load_for(Some(dir.path()));
+        assert!(complaint.unwrap().contains(".ycode/settings.json ignored"));
+        assert!(
+            settings.gui_chord(Command::Save).is_some(),
+            "defaults survive"
+        );
+        // No project file at all is simply the global settings.
+        let (_, none) = Settings::load_for(Some(Path::new("/nowhere/at/all")));
+        assert_eq!(none, None);
     }
 
     #[test]

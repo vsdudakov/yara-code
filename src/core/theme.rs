@@ -353,21 +353,26 @@ pub fn from_vscode_file(path: &Path) -> Result<Theme, ThemeError> {
 }
 
 fn parse_hex(s: &str) -> Option<Rgb> {
-    let s = s.trim().strip_prefix('#')?;
-    let hex = match s.len() {
-        3 => {
-            let mut out = String::with_capacity(6);
-            for c in s.chars() {
-                out.push(c);
-                out.push(c);
-            }
-            out
-        }
-        // Trailing alpha is dropped: these colors are painted opaque.
-        6 | 8 => s[..6].to_string(),
-        _ => return None,
-    };
-    u32::from_str_radix(&hex, 16).ok().map(rgb)
+    let digits: Vec<char> = s.trim().trim_start_matches('#').chars().collect();
+    // Only ASCII hex digits are read, by char and never by byte, so a stray
+    // non-ASCII character in a theme file is a bad colour, not a panic.
+    if !digits.iter().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let hex = |a: char, b: char| u8::from_str_radix(&format!("{a}{b}"), 16).ok();
+    match digits.len() {
+        3 => Some((
+            hex(digits[0], digits[0])?,
+            hex(digits[1], digits[1])?,
+            hex(digits[2], digits[2])?,
+        )),
+        6 | 8 => Some((
+            hex(digits[0], digits[1])?,
+            hex(digits[2], digits[3])?,
+            hex(digits[4], digits[5])?,
+        )),
+        _ => None,
+    }
 }
 
 /// Reads a VS Code color-theme JSON: the `colors` map drives chrome and the

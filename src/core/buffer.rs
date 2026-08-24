@@ -103,15 +103,22 @@ impl Buffers {
 
     /// Writes buffer `index` back to its file.
     pub fn save(&mut self, index: usize) -> bool {
+        matches!(self.try_save(index), Ok(()))
+    }
+
+    /// Writes buffer `index` back to its file, saying what went wrong when it
+    /// could not — a missing buffer and a failed write are different news.
+    pub fn try_save(&mut self, index: usize) -> Result<(), SaveError> {
         let Some(buf) = self.list.get_mut(index) else {
-            return false;
+            return Err(SaveError::NoBuffer);
         };
-        if std::fs::write(&buf.path, &buf.text).is_ok() {
-            buf.saved_text = buf.text.clone();
-            true
-        } else {
-            false
-        }
+        std::fs::write(&buf.path, &buf.text).map_err(SaveError::Io)?;
+        buf.saved_text = buf.text.clone();
+        Ok(())
+    }
+
+    pub fn try_save_active(&mut self) -> Result<(), SaveError> {
+        self.try_save(self.active)
     }
 
     /// Moves a tab to another position, keeping the active buffer active.
@@ -152,6 +159,22 @@ impl Buffers {
                     to.join(rest)
                 };
             }
+        }
+    }
+}
+
+/// Why a save did not happen.
+#[derive(Debug)]
+pub enum SaveError {
+    NoBuffer,
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoBuffer => write!(f, "nothing to save"),
+            Self::Io(e) => write!(f, "could not write: {e}"),
         }
     }
 }

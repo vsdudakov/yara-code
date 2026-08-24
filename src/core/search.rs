@@ -10,7 +10,15 @@ use regex::{Regex, RegexBuilder};
 
 use crate::core::glob;
 
-const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build", ".venv"];
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    ".ycode",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+];
 const MAX_FILE_SIZE: u64 = 1_000_000;
 const MAX_MATCHES: usize = 1000;
 

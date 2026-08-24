@@ -339,7 +339,10 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
                     modifiers,
                     ..
                 } => {
-                    if modifiers.command {
+                    // ⌘ is the app's; Ctrl is the shell's. On Linux and
+                    // Windows egui folds Ctrl into `command`, so only a real
+                    // ⌘ press may be skipped here.
+                    if modifiers.mac_cmd {
                         continue; // global app shortcuts
                     }
                     if modifiers.ctrl {

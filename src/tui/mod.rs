@@ -24,7 +24,46 @@ use crossterm::terminal::{
 
 /// Sets up the alternate screen, runs the editor, and restores the terminal
 /// even if the app returns an error.
+/// Puts the terminal back the way it was found. It lives on the stack of
+/// `run`, so it runs on a normal return, an early `?`, and a panic unwinding
+/// through — the user never gets their shell back in raw mode.
+struct RestoreTerminal {
+    enhanced: bool,
+}
+
+impl Drop for RestoreTerminal {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut out = io::stdout();
+        if self.enhanced {
+            let _ = execute!(out, PopKeyboardEnhancementFlags);
+        }
+        let _ = execute!(
+            out,
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            crossterm::cursor::Show
+        );
+    }
+}
+
 pub fn run(root: Option<PathBuf>) -> io::Result<()> {
+    // A panic inside the draw loop would otherwise print into the alternate
+    // screen and vanish with it. Restore first, then report.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            crossterm::cursor::Show
+        );
+        default_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(
@@ -44,21 +83,9 @@ pub fn run(root: Option<PathBuf>) -> io::Result<()> {
         )?;
     }
 
+    let _restore = RestoreTerminal { enhanced };
     let backend = ratatui::backend::CrosstermBackend::new(out);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let result = app::App::new(root).run(&mut terminal);
-
-    disable_raw_mode()?;
-    if enhanced {
-        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
-    }
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        DisableBracketedPaste
-    )?;
-    terminal.show_cursor()?;
-    result
+    app::App::new(root).run(&mut terminal)
 }

@@ -366,6 +366,9 @@ pub struct App {
     pub diffs: Vec<Diff>,
     /// Which diff tab is in front; `None` while a file is.
     pub active_diff: Option<usize>,
+    /// Set by Quit while a dirty buffer is being asked about: once that
+    /// buffer is dealt with, the next dirty one is asked, and then we go.
+    quit_after_close: bool,
     /// The update check, and the release it found.
     pub updates: core_update::Checker,
     pub update: Option<core_update::Release>,
@@ -436,7 +439,7 @@ pub struct App {
 impl App {
     pub fn new(root: Option<PathBuf>) -> Self {
         let themes = core_theme::load_all();
-        let (mut settings, settings_error) = Settings::load();
+        let (mut settings, settings_error) = Settings::load_for(root.as_deref());
         if let Some(root) = &root {
             settings.push_recent(root);
             let _ = settings.save();
@@ -456,6 +459,7 @@ impl App {
             git: GitState::default(),
             diffs: Vec::new(),
             active_diff: None,
+            quit_after_close: false,
             updates: core_update::Checker::default(),
             update: None,
             blame: None,
@@ -626,6 +630,9 @@ impl App {
 
     fn close_tab_now(&mut self, i: usize) {
         self.buffers.close(i);
+        if self.quit_after_close {
+            self.continue_quit();
+        }
         if i < self.edit.len() {
             self.edit.remove(i);
         }
@@ -797,6 +804,19 @@ impl App {
     fn tab_changed(&mut self) {
         if self.focus == Focus::Find && !self.find_showing() {
             self.focus = Focus::Editor;
+        }
+    }
+
+    /// Quitting with unsaved work: ask about the next dirty buffer, or go.
+    fn continue_quit(&mut self) {
+        match self.buffers.list.iter().position(|b| b.modified()) {
+            Some(index) => {
+                self.prompt = Some(Prompt::ConfirmClose {
+                    index,
+                    name: format!("{} (then quit)", self.buffers.list[index].name()),
+                });
+            }
+            None => self.quit = true,
         }
     }
 
@@ -1272,7 +1292,15 @@ impl App {
                     (self.tab_drag.take(), self.tab_drag_over.take())
                 {
                     match strip {
-                        TabStrip::Editor => self.buffers.reorder(from, to),
+                        TabStrip::Editor => {
+                            self.buffers.reorder(from, to);
+                            // The per-buffer editing state rides along, or
+                            // every tab after the move gets another's cursor.
+                            if from < self.edit.len() && to < self.edit.len() {
+                                let state = self.edit.remove(from);
+                                self.edit.insert(to, state);
+                            }
+                        }
                         TabStrip::Terminal => self.shell.sessions.reorder(from, to),
                     }
                     self.press = None;
@@ -1973,11 +2001,12 @@ impl App {
                 }
             }
             Command::Save => {
-                self.status = if self.buffers.save_active() {
-                    self.after_save();
-                    "saved".into()
-                } else {
-                    "nothing to save".into()
+                self.status = match self.buffers.try_save_active() {
+                    Ok(()) => {
+                        self.after_save();
+                        "saved".into()
+                    }
+                    Err(e) => e.to_string(),
                 };
             }
             Command::SaveAs => {
@@ -2009,7 +2038,12 @@ impl App {
                 Err(e) => self.status = format!("cannot open settings: {e}"),
             },
             Command::CloseEditor => self.close_tab(),
-            Command::Quit => self.quit = true,
+            Command::Quit => {
+                // Unsaved work asks first; the prompt's answers are the same
+                // as closing a tab, applied to every dirty buffer.
+                self.quit_after_close = true;
+                self.continue_quit();
+            }
             Command::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;
                 if !self.show_sidebar && self.focus == Focus::Tree {
@@ -2251,6 +2285,13 @@ impl App {
     /// Switches the project to another folder, keeping open buffers.
     fn set_root(&mut self, root: PathBuf) {
         let root = self.project.set_root(root);
+        let (settings, complaint) = Settings::load_for(Some(&root));
+        let recent = std::mem::take(&mut self.settings.recent_projects);
+        self.settings = settings;
+        self.settings.recent_projects = recent;
+        if let Some(message) = complaint {
+            self.status = message;
+        }
         self.tree.set_roots(self.project.roots().to_vec());
         self.search = Search::default();
         self.settings.push_recent(&root);
@@ -2851,6 +2892,7 @@ impl App {
         if key.code == KeyCode::Esc {
             self.prompt = None;
             self.prompt_input.clear();
+            self.quit_after_close = false;
             return;
         }
 
@@ -3025,8 +3067,23 @@ impl App {
             }
             Prompt::ConfirmDelete(path) => match fs_ops::delete(&path) {
                 Ok(()) => {
+                    // close_path may drop buffers from the middle of the
+                    // list; the edit states that belonged to them go with
+                    // them, matched by path rather than by position.
+                    let before: Vec<PathBuf> =
+                        self.buffers.list.iter().map(|b| b.path.clone()).collect();
                     self.buffers.close_path(&path);
-                    self.edit.truncate(self.buffers.list.len());
+                    let kept: std::collections::HashSet<&PathBuf> =
+                        self.buffers.list.iter().map(|b| &b.path).collect();
+                    let states = std::mem::take(&mut self.edit);
+                    self.edit = before
+                        .iter()
+                        .zip(states)
+                        .filter(|(p, _)| kept.contains(p))
+                        .map(|(_, state)| state)
+                        .collect();
+                    self.edit
+                        .resize_with(self.buffers.list.len(), EditState::default);
                     self.tree.rebuild();
                 }
                 Err(e) => self.status = format!("delete failed: {e}"),

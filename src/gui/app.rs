@@ -51,6 +51,9 @@ pub struct App {
     show_theme_picker: bool,
     /// Last file-operation error, shown in the status bar.
     status: Option<String>,
+    /// Set by Quit (or the window's close button) while a dirty buffer is
+    /// being asked about; cleared by Cancel.
+    quit_after_close: bool,
     /// The update check, and the release it found.
     updates: crate::core::update::Checker,
     update: Option<crate::core::update::Release>,
@@ -78,7 +81,7 @@ impl App {
     /// made one, and what an end-to-end test can make for itself.
     pub fn with_context(ctx: &egui::Context, root: Option<PathBuf>) -> Self {
         let themes = core_theme::load_all();
-        let (mut settings, settings_error) = Settings::load();
+        let (mut settings, settings_error) = Settings::load_for(root.as_deref());
         if let Some(root) = &root {
             settings.push_recent(root);
             let _ = settings.save();
@@ -107,6 +110,7 @@ impl App {
             theme_index,
             show_theme_picker: false,
             status: settings_error,
+            quit_after_close: false,
             updates: crate::core::update::Checker::default(),
             update: None,
             blame: None,
@@ -130,8 +134,12 @@ impl App {
         }
         self.theme_index = index;
         let theme = self.themes[index].clone();
+        // What the picker chose is what the next save writes; the sidebar and
+        // terminal flags are synced the same way, in `remember_layout`.
+        self.settings.theme = theme.name.clone();
         crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
         highlight::set_theme(&theme);
+        let _ = self.settings.save();
     }
 
     /// Runs a bound command, whether it came from a key chord or the menu bar.
@@ -272,13 +280,10 @@ impl App {
                     self.show_recent = true;
                 }
             }
-            Command::Save => {
-                if self.editor.buffers.save_active() {
-                    self.after_save(ctx);
-                } else {
-                    self.status = Some("nothing to save".into());
-                }
-            }
+            Command::Save => match self.editor.buffers.try_save_active() {
+                Ok(()) => self.after_save(ctx),
+                Err(e) => self.status = Some(e.to_string()),
+            },
             Command::SaveAll => {
                 let previous = self.editor.buffers.active;
                 let mut saved = 0;
@@ -303,7 +308,7 @@ impl App {
                 let active = self.editor.buffers.active;
                 self.editor.request_close(active);
             }
-            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Command::Quit => self.request_quit(ctx),
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Command::ToggleTerminal => self.show_terminal = !self.show_terminal,
             Command::NewTerminal => {
@@ -637,6 +642,30 @@ impl App {
         };
     }
 
+    /// A project may carry settings of its own; they take effect the moment
+    /// the project opens, without disturbing what the user has saved.
+    fn reload_project_settings(&mut self, root: Option<&Path>) {
+        let (settings, complaint) = Settings::load_for(root);
+        let recent = std::mem::take(&mut self.settings.recent_projects);
+        self.settings = settings;
+        self.settings.recent_projects = recent;
+        if let Some(message) = complaint {
+            self.status = Some(message);
+        }
+    }
+
+    /// Quitting with unsaved work asks about each dirty buffer in turn, the
+    /// way closing a tab does, and only then closes the window.
+    fn request_quit(&mut self, ctx: &egui::Context) {
+        match self.editor.buffers.list.iter().position(|b| b.modified()) {
+            Some(index) => {
+                self.quit_after_close = true;
+                self.editor.pending_close = Some(index);
+            }
+            None => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+    }
+
     /// Whether anything is layered over the editor — a picker, a
     /// confirmation, the bindings overlay — and so owns the next Escape.
     fn modal_open(&self) -> bool {
@@ -706,6 +735,7 @@ impl App {
 
     fn set_root(&mut self, root: PathBuf) {
         let root = self.project.set_root(root);
+        self.reload_project_settings(Some(&root));
         self.tree.set_roots(self.project.roots().to_vec());
         self.search = Search::default();
         self.terminal.sessions.clear();
@@ -1148,16 +1178,27 @@ impl App {
                 if self.editor.buffers.save(index) {
                     self.editor.close(index);
                     self.git.invalidate();
+                    self.editor.pending_close = None;
+                    if self.quit_after_close {
+                        self.request_quit(ctx);
+                    }
                 } else {
                     self.status = Some(format!("could not write \"{name}\""));
+                    self.editor.pending_close = None;
+                    self.quit_after_close = false;
                 }
-                self.editor.pending_close = None;
             }
             Some(Choice::Discard) => {
                 self.editor.close(index);
                 self.editor.pending_close = None;
+                if self.quit_after_close {
+                    self.request_quit(ctx);
+                }
             }
-            Some(Choice::Cancel) => self.editor.pending_close = None,
+            Some(Choice::Cancel) => {
+                self.editor.pending_close = None;
+                self.quit_after_close = false;
+            }
             None => {}
         }
     }
@@ -1449,6 +1490,10 @@ impl App {
                 buf.text = text;
             }
         }
+        // The find bar's hits were offsets into the old text.
+        if self.editor.find_showing() {
+            self.editor.refresh_find();
+        }
     }
 
     /// The find bar above the editor, opened with Cmd+F.
@@ -1705,6 +1750,15 @@ impl App {
         self.refresh_git_lines();
         self.refresh_blame();
         self.collect_update();
+        // The window's close button is a Quit too: with unsaved work, hold
+        // the window open and ask.
+        if ctx.input(|i| i.viewport().close_requested())
+            && self.editor.buffers.list.iter().any(|b| b.modified())
+            && !self.quit_after_close
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.request_quit(ctx);
+        }
         self.menu_bar(ctx);
 
         // Navigator / search / git sidebar. Declared before the status bar so

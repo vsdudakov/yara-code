@@ -178,8 +178,15 @@ pub fn install(release: &Release) -> Result<PathBuf, String> {
         // the old one goes when the process next starts.
         let aside = dir.join(format!("{name}.old"));
         let _ = std::fs::remove_file(&aside);
-        let _ = std::fs::rename(&to, &aside);
-        std::fs::copy(&from, &to).map_err(|e| format!("cannot write {}: {e}", to.display()))?;
+        let moved_aside = std::fs::rename(&to, &aside).is_ok();
+        if let Err(e) = std::fs::copy(&from, &to) {
+            // Put the old binary back: a failed update must not leave the
+            // user with nothing to launch.
+            if moved_aside {
+                let _ = std::fs::rename(&aside, &to);
+            }
+            return Err(format!("cannot write {}: {e}", to.display()));
+        }
         set_executable(&to);
     }
     let _ = std::fs::remove_dir_all(&staging);

@@ -126,20 +126,16 @@ impl Project {
         let Some(root) = self.owner(path) else {
             return path.display().to_string();
         };
-        let rest = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .display()
-            .to_string();
+        let rest = path.strip_prefix(root).unwrap_or(path);
         if !self.is_multi_root() {
-            return rest;
+            return rest.display().to_string();
         }
-        let name = name_of(root);
-        if rest.is_empty() {
-            name
-        } else {
-            format!("{name}/{rest}")
+        if rest.as_os_str().is_empty() {
+            return name_of(root);
         }
+        // Joined rather than formatted with a slash: on Windows the two halves
+        // would otherwise meet as `folder/src\main.rs`.
+        Path::new(&name_of(root)).join(rest).display().to_string()
     }
 }
 

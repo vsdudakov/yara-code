@@ -45,7 +45,8 @@ terminal.
   over SSH; `ycode-gui` is the same editor drawn by the GPU. Same panes, same
   menus, same keys — switch between a remote box and your desktop without
   changing habits.
-- **Three themes, on purpose.** Dark+, Light+ and Monokai ship built in; any
+- **Four themes, on purpose.** Dark Modern (the default), Dark+, Light+ and
+  Monokai ship built in; any
   VS Code theme JSON works if you want another. Syntax highlighting for 75+
   languages through syntect.
 
@@ -92,7 +93,7 @@ cargo build --release --no-default-features --features tui
 | ✏️ **Fix a line, not a project** | Tabs, smart indent with indent guides, folding with sticky scroll, undo/redo over everything (including Replace All), find & replace in the file and across the project, a rendered **markdown preview** in both frontends. |
 | 🖥 **The agent stays in view** | A real login shell on a pseudo-terminal in both frontends — tab completion, full-screen programs, 5000 lines of scrollback. Session tabs say what is running (`yara-code — claude`), and can be renamed and reordered. |
 | 🗂 **Several folders, one window** | "Add Folder to Project" — search, go-to-definition and the navigator treat them as one project. |
-| 🎨 **Themes and syntax** | Three built-in themes; any VS Code color theme JSON; 75 syntect grammars plus bundled TypeScript, TOML, Kotlin, Swift, Dart, Dockerfile, Protobuf and GraphQL. |
+| 🎨 **Themes and syntax** | Four built-in themes (Dark Modern, Dark+, Light+, Monokai); any VS Code color theme JSON; 75 syntect grammars plus bundled TypeScript, TOML, Kotlin, Swift, Dart, Dockerfile, Protobuf and GraphQL. |
 | ⌨️ **Keys you already know** | VS Code bindings, `Ctrl` for `Cmd` in the terminal, every one of them rebindable in a commented `settings.json` that applies the moment it is saved — with a per-project `.ycode/settings.json` on top. |
 
 ## Usage

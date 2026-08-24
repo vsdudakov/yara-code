@@ -22,8 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Both macOS builds run on the Apple Silicon runner: GitHub has
+          # retired the Intel one, and Rust cross-compiles to x86_64 with the
+          # SDK that is already there.
           - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
-          - { os: macos-13, target: x86_64-apple-darwin, archive: tar.gz }
+          - { os: macos-latest, target: x86_64-apple-darwin, archive: tar.gz }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     steps:

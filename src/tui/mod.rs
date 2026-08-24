@@ -23,7 +23,7 @@ use crossterm::terminal::{
 
 /// Sets up the alternate screen, runs the editor, and restores the terminal
 /// even if the app returns an error.
-pub fn run(root: PathBuf) -> io::Result<()> {
+pub fn run(root: Option<PathBuf>) -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(

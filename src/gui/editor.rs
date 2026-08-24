@@ -37,6 +37,10 @@ pub struct Editor {
     pending_select: Option<(usize, usize)>,
 }
 
+/// The tab being dragged along the strip.
+#[derive(Clone, Copy)]
+struct TabDrag(usize);
+
 impl Editor {
     pub fn open(&mut self, path: PathBuf) {
         self.buffers.open(path);
@@ -222,9 +226,11 @@ impl Editor {
         Some((buf.path.clone(), self.cursor.map_or(1, |(l, _)| l)))
     }
 
+    /// The tab strip. Tabs can be dragged onto one another to reorder them.
     pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         let mut close: Option<usize> = None;
         let mut activate: Option<usize> = None;
+        let mut moved: Option<(usize, usize)> = None;
         ui.spacing_mut().item_spacing.x = 1.0;
         ui.horizontal(|ui| {
             for (i, buf) in self.buffers.list.iter().enumerate() {
@@ -237,7 +243,7 @@ impl Editor {
                 let frame = egui::Frame::default()
                     .fill(fill)
                     .inner_margin(egui::Margin::symmetric(10, 7));
-                frame.show(ui, |ui| {
+                let tab = frame.show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let fg = if selected {
                         color(theme.ui.fg)
@@ -246,8 +252,12 @@ impl Editor {
                     };
                     let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
                     let resp = ui
-                        .add(egui::Label::new(title).sense(egui::Sense::click()))
+                        .add(egui::Label::new(title).sense(egui::Sense::click_and_drag()))
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    resp.dnd_set_drag_payload(TabDrag(i));
+                    // Answered below, once the tab's full rect is known.
+                    let dropped = resp.dnd_release_payload::<TabDrag>().map(|src| src.0);
+                    let hovering = resp.dnd_hover_payload::<TabDrag>().is_some();
 
                     // Modified dot / close cross, drawn as shapes so they show
                     // up regardless of font coverage. Hovering the dot turns it
@@ -291,9 +301,29 @@ impl Editor {
                     } else if resp.clicked() {
                         activate = Some(i);
                     }
+                    (dropped, hovering)
                 });
+                // Dropping is answered by the tab's own label — adding a
+                // second widget over the tab would swallow its clicks — but the
+                // mark is painted over the whole tab, which is what reads as
+                // "this tab moves here".
+                let (dropped, hovering) = tab.inner;
+                if hovering {
+                    ui.painter().rect_stroke(
+                        tab.response.rect,
+                        egui::CornerRadius::ZERO,
+                        egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if let Some(src) = dropped {
+                    moved = Some((src, i));
+                }
             }
         });
+        if let Some((from, to)) = moved {
+            self.buffers.reorder(from, to);
+        }
         if let Some(i) = activate {
             self.buffers.active = i;
         }
@@ -317,18 +347,11 @@ impl Editor {
         theme: &Theme,
         indent_config: &Indent,
         goto_modifiers: &[Modifier],
-        empty_hint: &str,
     ) {
         self.refresh_regions();
+        // Nothing open: the app draws its start page instead.
         let Some(buf) = self.buffers.active() else {
             self.cursor = None;
-            ui.centered_and_justified(|ui| {
-                ui.label(
-                    egui::RichText::new(empty_hint)
-                        .color(color(theme.ui.fg_faint))
-                        .size(13.0),
-                );
-            });
             return;
         };
 

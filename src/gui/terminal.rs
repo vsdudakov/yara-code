@@ -10,6 +10,8 @@ use crate::gui::theme::{ansi_color, color, CODE_FONT_SIZE};
 #[derive(Default)]
 pub struct Terminal {
     pub sessions: Terminals,
+    /// Session being renamed from the tab strip, and the name so far.
+    renaming: Option<(usize, String, bool)>,
     /// Whether the grid held keyboard focus last frame; the panel header uses
     /// it to show which pane the keyboard is talking to.
     pub focused: bool,
@@ -17,6 +19,10 @@ pub struct Terminal {
     /// active tab changes.
     focus_pending: bool,
 }
+
+/// The tab being dragged along the strip.
+#[derive(Clone, Copy)]
+struct TabDrag(usize);
 
 /// The small painted marks on the tab strip.
 enum Mark {
@@ -35,15 +41,21 @@ impl Terminal {
         self.focus_pending = true;
     }
 
-    /// The tab strip in the panel header: one numbered tab per shell, a cross
-    /// to close it, and `+` to open another.
+    /// The tab strip in the panel header: one tab per shell — its number or
+    /// the name it was given — a cross to close it, and `+` to open another.
+    /// Tabs can be dragged to reorder and renamed from their context menu.
     pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme, cwd: &Path, ctx: &egui::Context) {
         let mut close: Option<usize> = None;
         let mut activate: Option<usize> = None;
+        let mut moved: Option<(usize, usize)> = None;
+        let mut rename: Option<usize> = None;
         ui.spacing_mut().item_spacing.x = 4.0;
         for i in 0..self.sessions.len() {
+            if self.rename_field(ui, theme, i) {
+                continue;
+            }
             let selected = i == self.sessions.active_index();
-            let mut text = egui::RichText::new((i + 1).to_string())
+            let mut text = egui::RichText::new(self.sessions.name(i))
                 .size(11.0)
                 .color(if selected {
                     color(theme.ui.fg)
@@ -54,11 +66,39 @@ impl Terminal {
                 text = text.strong();
             }
             let resp = ui
-                .add(egui::Label::new(text).sense(egui::Sense::click()))
+                .add(egui::Label::new(text).sense(egui::Sense::click_and_drag()))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
+            // Drag a tab onto another to reorder the strip.
+            resp.dnd_set_drag_payload(TabDrag(i));
+            if let Some(src) = resp.dnd_release_payload::<TabDrag>() {
+                moved = Some((src.0, i));
+            }
+            if resp.dnd_hover_payload::<TabDrag>().is_some() {
+                let rect = resp.rect.expand2(egui::vec2(2.0, 1.0));
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(2),
+                    egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                    egui::StrokeKind::Inside,
+                );
+            }
             if resp.clicked() {
                 activate = Some(i);
             }
+            resp.context_menu(|ui| {
+                if ui.button("Rename Terminal").clicked() {
+                    rename = Some(i);
+                    ui.close_menu();
+                }
+                if self.sessions.is_named(i) && ui.button("Reset Name").clicked() {
+                    self.sessions.rename(i, "");
+                    ui.close_menu();
+                }
+                if ui.button("Close Terminal").clicked() {
+                    close = Some(i);
+                    ui.close_menu();
+                }
+            });
             if mark_button(ui, theme, Mark::Cross, 13.0)
                 .on_hover_text("Close Terminal")
                 .clicked()
@@ -73,13 +113,59 @@ impl Terminal {
         {
             self.open(cwd, ctx);
         }
+        if let Some(i) = rename {
+            self.renaming = Some((i, self.sessions.name(i), true));
+        }
+        if let Some((from, to)) = moved {
+            self.sessions.reorder(from, to);
+        }
         if let Some(i) = activate {
             self.sessions.set_active(i);
             self.focus_pending = true;
         }
         if let Some(i) = close {
             self.sessions.close(i);
+            self.renaming = None;
         }
+    }
+
+    /// The inline name box shown in place of the tab being renamed. Returns
+    /// true when it took this tab's place.
+    fn rename_field(&mut self, ui: &mut egui::Ui, theme: &Theme, index: usize) -> bool {
+        let Some((editing, _, _)) = &self.renaming else {
+            return false;
+        };
+        if *editing != index {
+            return false;
+        }
+        let mut done = false;
+        let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if let Some((_, name, focus)) = &mut self.renaming {
+            let resp = ui.add(
+                egui::TextEdit::singleline(name)
+                    .desired_width(90.0)
+                    .font(egui::TextStyle::Small)
+                    .text_color(color(theme.ui.fg_bright)),
+            );
+            if *focus {
+                resp.request_focus();
+                *focus = false;
+            }
+            if resp.lost_focus() {
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    done = true;
+                } else {
+                    cancel = true;
+                }
+            }
+        }
+        if done {
+            let (i, name, _) = self.renaming.take().unwrap();
+            self.sessions.rename(i, &name);
+        } else if cancel {
+            self.renaming = None;
+        }
+        true
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme, cwd: &Path, ctx: &egui::Context) {

@@ -11,6 +11,10 @@ use crate::gui::theme::color;
 
 pub enum TreeEvent {
     Open(PathBuf),
+    /// "Add Folder to Project" from the navigator's menu.
+    AddFolder,
+    /// "Remove Folder from Project": drops a root, leaving it on disk.
+    RemoveFolder(PathBuf),
     /// User picked "Delete"; the app confirms before touching the disk.
     RequestDelete(PathBuf),
     Moved { from: PathBuf, to: PathBuf },
@@ -50,7 +54,9 @@ struct Editing {
 }
 
 pub struct FileTree {
-    root: PathBuf,
+    /// Project folders, primary first; empty when no folder is open. With more
+    /// than one, each gets a header row of its own.
+    roots: Vec<PathBuf>,
     expanded: HashSet<PathBuf>,
     /// The highlighted row, exactly as in the terminal navigator.
     selected: Option<PathBuf>,
@@ -61,25 +67,54 @@ pub struct FileTree {
 
 impl FileTree {
     pub fn new(root: PathBuf) -> Self {
-        Self {
-            root,
+        Self::with_roots(vec![root])
+    }
+
+    pub fn with_roots(roots: Vec<PathBuf>) -> Self {
+        let mut tree = Self {
+            roots,
             expanded: HashSet::new(),
             selected: None,
             editing: None,
             valid_drop_target: false,
+        };
+        tree.expand_roots();
+        tree
+    }
+
+    /// Replaces the folder list, keeping what is expanded and selected.
+    pub fn set_roots(&mut self, roots: Vec<PathBuf>) {
+        self.roots = roots;
+        self.expand_roots();
+    }
+
+    /// Added folders start open, so a folder is never added to no effect.
+    fn expand_roots(&mut self) {
+        if self.roots.len() > 1 {
+            for root in self.roots.clone() {
+                self.expanded.insert(root);
+            }
         }
+    }
+
+    fn root(&self) -> Option<&Path> {
+        self.roots.first().map(PathBuf::as_path)
     }
 
     /// Expands every ancestor of `path` and highlights it — used when a jump
     /// (search result, go-to-definition) opens a file from elsewhere.
     pub fn reveal(&mut self, path: &Path) {
+        let Some(root) = self.roots.iter().find(|r| path.starts_with(r)).cloned() else {
+            return;
+        };
+        self.expanded.insert(root.clone());
         let mut dir = path.parent();
         while let Some(d) = dir {
-            if !d.starts_with(&self.root) {
+            if !d.starts_with(&root) {
                 break;
             }
             self.expanded.insert(d.to_path_buf());
-            if d == self.root {
+            if d == root {
                 break;
             }
             dir = d.parent();
@@ -93,9 +128,21 @@ impl FileTree {
         theme: &Theme,
         events: &mut Vec<TreeEvent>,
     ) {
-        let root = self.root.clone();
         self.valid_drop_target = false;
-        self.show_dir(ui, theme, &root, 0, events);
+        let roots = self.roots.clone();
+        match roots.len() {
+            0 => {
+                self.empty_state(ui, theme, events);
+                return;
+            }
+            1 => self.show_dir(ui, theme, &roots[0], 0, events),
+            _ => {
+                for root in &roots {
+                    self.show_root(ui, theme, root, events);
+                }
+            }
+        }
+        let root = roots[0].clone();
 
         // Remaining empty space: context menu + drop target for the root.
         let remaining = ui.available_height().max(40.0);
@@ -155,11 +202,13 @@ impl FileTree {
         target: Option<(&Path, bool)>,
         events: &mut Vec<TreeEvent>,
     ) {
-        let dir = match target {
-            Some((path, true)) => path.to_path_buf(),
-            Some((path, false)) => path.parent().unwrap_or(&self.root).to_path_buf(),
-            None => self.root.clone(),
+        let fallback = self.root().map(Path::to_path_buf);
+        let dir = match (target, &fallback) {
+            (Some((path, true)), _) => Some(path.to_path_buf()),
+            (Some((path, false)), _) => path.parent().map(Path::to_path_buf),
+            (None, root) => root.clone(),
         };
+        let is_root = target.is_some_and(|(path, _)| self.roots.iter().any(|r| r == path));
 
         if let Some((path, false)) = target {
             if menu_item(ui, theme, "Open").clicked() {
@@ -169,16 +218,33 @@ impl FileTree {
             ui.separator();
         }
 
-        if menu_item(ui, theme, "New File").clicked() {
-            self.start_editing(Pending::NewFile(dir.clone()), String::new());
-            ui.close_menu();
+        if let Some(dir) = dir {
+            if menu_item(ui, theme, "New File").clicked() {
+                self.start_editing(Pending::NewFile(dir.clone()), String::new());
+                ui.close_menu();
+            }
+            if menu_item(ui, theme, "New Folder").clicked() {
+                self.start_editing(Pending::NewDir(dir), String::new());
+                ui.close_menu();
+            }
+            ui.separator();
         }
-        if menu_item(ui, theme, "New Folder").clicked() {
-            self.start_editing(Pending::NewDir(dir), String::new());
+        if menu_item(ui, theme, "Add Folder to Project...").clicked() {
+            events.push(TreeEvent::AddFolder);
             ui.close_menu();
         }
 
         let Some((path, _)) = target else { return };
+        // A project folder can leave the project; renaming, moving or deleting
+        // one on disk is not what the navigator offers.
+        if is_root {
+            ui.separator();
+            if menu_item(ui, theme, "Remove Folder from Project").clicked() {
+                events.push(TreeEvent::RemoveFolder(path.to_path_buf()));
+                ui.close_menu();
+            }
+            return;
+        }
         ui.separator();
         if menu_item(ui, theme, "Rename").clicked() {
             let name = path
@@ -257,12 +323,17 @@ impl FileTree {
                     // A destination is taken relative to the project root
                     // unless it is absolute; empty means the root itself.
                     let input = editing.name.trim();
-                    let dest = if input.is_empty() {
-                        self.root.clone()
-                    } else if Path::new(input).is_absolute() {
-                        PathBuf::from(input)
+                    let root = self.root().map(Path::to_path_buf);
+                    let dest = if Path::new(input).is_absolute() {
+                        Some(PathBuf::from(input))
+                    } else if input.is_empty() {
+                        root
                     } else {
-                        self.root.join(input)
+                        root.map(|root| root.join(input))
+                    };
+                    let Some(dest) = dest else {
+                        events.push(TreeEvent::Failed("no folder in the project".into()));
+                        return;
                     };
                     if report_move(path, &dest, events) {
                         self.expanded.insert(dest);
@@ -272,6 +343,107 @@ impl FileTree {
         } else if cancel {
             self.editing = None;
         }
+    }
+
+    /// A project folder's own row: its name, and its contents under it. Only
+    /// drawn once a project holds more than one folder.
+    fn show_root(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        root: &Path,
+        events: &mut Vec<TreeEvent>,
+    ) {
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.display().to_string());
+        let is_expanded = self.expanded.contains(root);
+        let (row_rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 24.0),
+            egui::Sense::click(),
+        );
+        let drop_hover = resp.dnd_hover_payload::<PathBuf>().is_some();
+        if drop_hover {
+            self.valid_drop_target = true;
+        }
+        if ui.is_rect_visible(row_rect) {
+            let bg = if drop_hover {
+                Some(color(theme.ui.accent))
+            } else if resp.hovered() {
+                Some(color(theme.ui.hover_bg))
+            } else {
+                None
+            };
+            if let Some(bg) = bg {
+                ui.painter()
+                    .rect_filled(row_rect, egui::CornerRadius::ZERO, bg);
+            }
+            let fg = color(theme.ui.fg_bright);
+            let cy = row_rect.center().y;
+            chevron(
+                ui.painter(),
+                egui::pos2(row_rect.min.x + 13.0, cy),
+                is_expanded,
+                fg,
+            );
+            ui.painter().text(
+                egui::pos2(row_rect.min.x + 24.0, cy),
+                egui::Align2::LEFT_CENTER,
+                name.to_uppercase(),
+                egui::FontId::proportional(11.5),
+                fg,
+            );
+        }
+        if let Some(src) = resp.dnd_release_payload::<PathBuf>() {
+            report_move(&src, root, events);
+        }
+        let root_for_menu = root.to_path_buf();
+        resp.context_menu(|ui| {
+            self.context_menu(ui, theme, Some((&root_for_menu, true)), events);
+        });
+        if resp.clicked() {
+            if is_expanded {
+                self.expanded.remove(root);
+            } else {
+                self.expanded.insert(root.to_path_buf());
+            }
+        }
+        if self.expanded.contains(root) {
+            self.show_dir(ui, theme, root, 1, events);
+        }
+    }
+
+    /// What the navigator shows with no folder open: how to get one.
+    fn empty_state(&mut self, ui: &mut egui::Ui, theme: &Theme, events: &mut Vec<TreeEvent>) {
+        ui.add_space(10.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new("No folder in the project")
+                    .color(color(theme.ui.fg_dim))
+                    .size(12.0),
+            );
+            ui.add_space(8.0);
+            if ui
+                .button(
+                    egui::RichText::new("Add Folder to Project...")
+                        .color(color(theme.ui.fg))
+                        .size(12.0),
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                events.push(TreeEvent::AddFolder);
+            }
+        });
+        let remaining = ui.available_height().max(20.0);
+        let (_, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), remaining),
+            egui::Sense::click(),
+        );
+        resp.context_menu(|ui| {
+            self.context_menu(ui, theme, None, events);
+        });
     }
 
     fn show_dir(

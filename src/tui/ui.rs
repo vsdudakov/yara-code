@@ -6,10 +6,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::core::buffer::relative_path;
+use std::path::Path;
+
+/// Rows the find bar takes: heading, field, heading, field, actions.
+const FIND_ROWS: u16 = 5;
+use crate::core::command::{Command, START_PAGE};
 use crate::core::fold;
 use crate::core::search::Field as SearchField;
-use crate::tui::app::{App, Focus, Prompt, SidebarView, Splitter};
+use crate::tui::app::{App, Focus, Prompt, SidebarView, Splitter, TabStrip};
 use crate::tui::theme::{color, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -84,11 +88,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.layout.h_split = h_split;
 
     // The find bar sits between the tabs and the text, like the window's.
-    let find_rows = if app.find.open {
-        1 + u16::from(app.find.replace_mode)
-    } else {
-        0
-    };
+    // Heading, field, heading, field, actions — the search panel's form.
+    let find_rows = if app.find.open { FIND_ROWS } else { 0 };
     let editor_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(find_rows), Constraint::Min(1)])
@@ -152,7 +153,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.layout.find_prev = Rect::default();
         app.layout.find_next = Rect::default();
         app.layout.find_close = Rect::default();
-        app.layout.find_chevron = Rect::default();
+        app.layout.find_replace_one = Rect::default();
+        app.layout.find_replace_all = Rect::default();
         app.layout.find_case = Rect::default();
         app.layout.find_word = Rect::default();
         app.layout.find_regex = Rect::default();
@@ -330,8 +332,10 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
         Block::default().style(on(theme.ui.fg, theme.ui.sidebar_bg)),
         area,
     );
-    let root = app.root.clone();
-    app.git.tick(&root);
+    // With no folder open there is no repository to report on.
+    if let Some(root) = app.project.root().map(Path::to_path_buf) {
+        app.git.tick(&root);
+    }
 
     let width = area.width as usize;
     let bottom = area.y + area.height;
@@ -566,6 +570,43 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             .then(|| scroll + (y - inner.y) as usize)
     });
 
+    // Nothing in the project yet: say how to put a folder in it, rather than
+    // showing an empty panel.
+    if app.tree.rows().is_empty() {
+        let chord = |command| {
+            app.settings
+                .tui_chord(command)
+                .map(|c| c.to_string())
+                .unwrap_or_default()
+        };
+        let hint = vec![
+            Line::from(Span::styled(
+                pad(" No folder in the project", inner.width as usize),
+                on(theme.ui.fg_dim, theme.ui.sidebar_bg),
+            )),
+            Line::from(Span::styled(
+                pad("", inner.width as usize),
+                on(theme.ui.fg_dim, theme.ui.sidebar_bg),
+            )),
+            Line::from(Span::styled(
+                pad(
+                    &format!(" {}  add a folder", chord(Command::AddFolder)),
+                    inner.width as usize,
+                ),
+                on(theme.ui.fg_faint, theme.ui.sidebar_bg),
+            )),
+            Line::from(Span::styled(
+                pad(
+                    &format!(" {}  open a folder", chord(Command::OpenFolder)),
+                    inner.width as usize,
+                ),
+                on(theme.ui.fg_faint, theme.ui.sidebar_bg),
+            )),
+        ];
+        frame.render_widget(Paragraph::new(hint), inner);
+        return;
+    }
+
     let lines: Vec<Line> = app
         .tree
         .rows()
@@ -606,6 +647,10 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
                 theme.ui.fg_bright
             } else if is_dragged {
                 theme.ui.accent_light
+            } else if row.is_root {
+                // A project folder heads its own subtree; it reads as a title,
+                // not as one more directory.
+                theme.ui.fg_bright
             } else if row.is_dir {
                 theme.ui.fg_dim
             } else {
@@ -626,6 +671,149 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The start page: what fills the editor while nothing is open — the name, the
+/// folder in play, and the keys that are actually bound, in the same groups the
+/// window shows. Groups are packed into as many columns as the pane affords.
+fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme();
+    frame.render_widget(
+        Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
+        area,
+    );
+    if area.width < 24 || area.height < 6 {
+        return;
+    }
+    let chord = |command| app.settings.tui_chord(command).map(|c| c.to_string());
+
+    // One block per group: its heading, then a line per bound key.
+    let mut blocks: Vec<Vec<(String, String)>> = Vec::new();
+    for (name, commands) in START_PAGE {
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for command in *commands {
+            if let Some(chord) = chord(*command) {
+                rows.push((chord, command.label().to_string()));
+            }
+        }
+        if rows.is_empty() {
+            continue;
+        }
+        rows.insert(0, (String::new(), name.to_uppercase()));
+        blocks.push(rows);
+    }
+    if blocks.is_empty() {
+        return;
+    }
+
+    let chord_width = blocks
+        .iter()
+        .flatten()
+        .map(|(chord, _)| chord.chars().count())
+        .max()
+        .unwrap_or(0);
+    let column_width = blocks
+        .iter()
+        .flatten()
+        .map(|(chord, label)| {
+            if chord.is_empty() {
+                label.chars().count()
+            } else {
+                chord_width + 2 + label.chars().count()
+            }
+        })
+        .max()
+        .unwrap_or(10);
+
+    // As many columns as fit, so a short pane spreads sideways instead of
+    // running off the bottom.
+    const GAP: usize = 4;
+    let columns = (((area.width as usize + GAP) / (column_width + GAP)).max(1)).min(blocks.len());
+    let per_column = blocks.len().div_ceil(columns);
+
+    let title = Style::default()
+        .fg(color(theme.ui.accent_light))
+        .bg(color(theme.ui.editor_bg))
+        .add_modifier(Modifier::BOLD);
+    let group = Style::default()
+        .fg(color(theme.ui.fg_dim))
+        .bg(color(theme.ui.editor_bg))
+        .add_modifier(Modifier::BOLD);
+    let key = on(theme.ui.fg_bright, theme.ui.editor_bg);
+    let plain = on(theme.ui.fg_faint, theme.ui.editor_bg);
+
+    // Each column is a list of styled cells; columns are then zipped into rows.
+    let mut grid: Vec<Vec<Vec<Span>>> = Vec::new();
+    for chunk in blocks.chunks(per_column) {
+        let mut cells: Vec<Vec<Span>> = Vec::new();
+        for (i, rows) in chunk.iter().enumerate() {
+            if i > 0 {
+                cells.push(Vec::new());
+            }
+            for (chord, label) in rows {
+                if chord.is_empty() {
+                    cells.push(vec![Span::styled(label.clone(), group)]);
+                } else {
+                    cells.push(vec![
+                        Span::styled(format!("{chord:<chord_width$}  "), key),
+                        Span::styled(label.clone(), plain),
+                    ]);
+                }
+            }
+        }
+        grid.push(cells);
+    }
+    let body_height = grid.iter().map(Vec::len).max().unwrap_or(0);
+
+    let block_width = columns * column_width + (columns - 1) * GAP;
+    let left = " ".repeat(((area.width as usize).saturating_sub(block_width)) / 2);
+    let mut lines: Vec<Line> = Vec::new();
+    let header = [
+        (
+            match app.project.root() {
+                Some(root) => root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| root.display().to_string()),
+                None => "no folder in the project".to_string(),
+            },
+            plain,
+        ),
+        (String::new(), plain),
+    ];
+    let head_room = area.height as usize;
+    if head_room > body_height + 4 {
+        lines.push(Line::from(vec![
+            Span::styled(left.clone(), plain),
+            Span::styled("YARA", title),
+        ]));
+        for (text, style) in header {
+            lines.push(Line::from(vec![
+                Span::styled(left.clone(), plain),
+                Span::styled(text, style),
+            ]));
+        }
+    }
+    for row in 0..body_height {
+        let mut spans = vec![Span::styled(left.clone(), plain)];
+        for (i, column) in grid.iter().enumerate() {
+            let cell = column.get(row).cloned().unwrap_or_default();
+            let used: usize = cell.iter().map(|s| s.content.chars().count()).sum();
+            spans.extend(cell);
+            let tail = if i + 1 == grid.len() {
+                0
+            } else {
+                column_width + GAP - used.min(column_width + GAP)
+            };
+            spans.push(Span::styled(" ".repeat(tail), plain));
+        }
+        lines.push(Line::from(spans));
+    }
+    // Sit a little above center, the way the window's start page does.
+    let top = (area.height as usize).saturating_sub(lines.len()) / 3;
+    let mut out: Vec<Line> = vec![Line::from(""); top];
+    out.extend(lines);
+    frame.render_widget(Paragraph::new(out), area);
 }
 
 fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -738,15 +926,9 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                // A lit bar marks the field the keyboard is in.
-                Span::styled(
-                    " ",
-                    if focused {
-                        on(theme.ui.editor_bg, theme.ui.accent_light)
-                    } else {
-                        on(theme.ui.fg_faint, theme.ui.editor_bg)
-                    },
-                ),
+                // Just padding: the lit heading above is what marks the field
+                // the keyboard is in.
+                Span::styled(" ", on(theme.ui.fg_faint, theme.ui.editor_bg)),
                 Span::styled(pad(&clip(shown, inner), inner), text_style),
             ])),
             at,
@@ -852,7 +1034,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut row_map: Vec<Option<usize>> = Vec::new();
     let mut flat_index = 0usize;
     for file in &app.search.results {
-        let rel = relative_path(&file.path, &app.root);
+        let rel = app.project.display(&file.path);
         // File heading with the same disclosure triangle the window shows.
         let heading = format!("{} {}", app.icons.dir_open, trim_front(&rel, width.saturating_sub(2)));
         lines.push(Line::from(Span::styled(
@@ -922,14 +1104,39 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The find-in-file bar: query, option toggles, the match counter with arrows
 /// beside it, and a close button — plus a replace row when it is open. Every
 /// piece is clickable, so its hit boxes are recorded as it is laid out.
+/// Find in this file, drawn as the project search panel's form: a lit heading
+/// over each inset field, both fields always present, and the counter and the
+/// actions on one line under them.
 fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme().clone();
     let width = area.width as usize;
     let focused = app.focus == Focus::Find;
-    let in_query = !(app.find.replace_mode && app.find.in_replace_field);
-
+    let in_query = !app.find.in_replace_field;
     let plain = on(theme.ui.fg_faint, theme.ui.status_bg);
-    let toggle = |enabled: bool| {
+
+    frame.render_widget(
+        Block::default().style(on(theme.ui.fg, theme.ui.status_bg)),
+        area,
+    );
+    let row = |y: u16| Rect {
+        y,
+        height: 1,
+        ..area
+    };
+    let mut y = area.y;
+
+    // Heading row: FIND on the left, the option toggles at the right edge.
+    let heading_style = |active: bool| {
+        if focused && active {
+            Style::default()
+                .fg(color(theme.ui.accent_light))
+                .bg(color(theme.ui.status_bg))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            on(theme.ui.fg_faint, theme.ui.status_bg)
+        }
+    };
+    let toggle_style = |enabled: bool| {
         if enabled {
             Style::default()
                 .fg(color(theme.ui.fg_bright))
@@ -938,39 +1145,101 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
             on(theme.ui.fg_dim, theme.ui.status_bg)
         }
     };
-    let field_style = |active: bool| {
-        if focused && active {
-            Style::default()
-                .fg(color(theme.ui.fg_bright))
-                .bg(color(theme.ui.hover_bg))
+    const LABEL: &str = "FIND";
+    let toggles_width = 2 + 1 + 2 + 1 + 2 + 1;
+    let gap = width.saturating_sub(1 + LABEL.len() + toggles_width);
+    let toggles_x = area.x + (1 + LABEL.len() + gap) as u16;
+    app.layout.find_case = Rect {
+        x: toggles_x,
+        y,
+        width: 2,
+        height: 1,
+    };
+    app.layout.find_word = Rect {
+        x: toggles_x + 3,
+        ..app.layout.find_case
+    };
+    app.layout.find_regex = Rect {
+        x: toggles_x + 6,
+        ..app.layout.find_case
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", plain),
+            Span::styled(LABEL, heading_style(in_query)),
+            Span::styled(pad("", gap), plain),
+            Span::styled("Aa", toggle_style(app.find.case_sensitive)),
+            Span::styled(" ", plain),
+            Span::styled("ab", toggle_style(app.find.whole_word)),
+            Span::styled(" ", plain),
+            Span::styled(".*", toggle_style(app.find.regex)),
+            Span::styled(" ", plain),
+        ])),
+        row(y),
+    );
+    y += 1;
+
+    // Inset fields on the editor background, exactly as in the search panel.
+    let inset = |y: u16| Rect {
+        x: area.x + 1,
+        y,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    let ellipsis = app.icons.ellipsis;
+    let draw_field = |frame: &mut Frame, text: &str, active: bool, at: Rect| {
+        let empty = text.is_empty();
+        let shown = if empty { ellipsis } else { text };
+        let inner = at.width.saturating_sub(1) as usize;
+        let text_style = if empty {
+            on(theme.ui.fg_faint, theme.ui.editor_bg)
+        } else if focused && active {
+            on(theme.ui.fg_bright, theme.ui.editor_bg)
         } else {
-            on(theme.ui.fg, theme.ui.status_bg)
-        }
+            on(theme.ui.fg, theme.ui.editor_bg)
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(" ", on(theme.ui.fg_faint, theme.ui.editor_bg)),
+                Span::styled(pad(&clip(shown, inner), inner), text_style),
+            ])),
+            at,
+        );
     };
 
+    let query_area = inset(y);
+    app.layout.find_query = query_area;
+    draw_field(frame, &app.find.query, in_query, query_area);
+    y += 1;
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" ", plain),
+            Span::styled("REPLACE", heading_style(!in_query)),
+            Span::styled(pad("", width.saturating_sub(8)), plain),
+        ])),
+        row(y),
+    );
+    y += 1;
+    let replace_area = inset(y);
+    app.layout.find_replace = replace_area;
+    draw_field(frame, &app.find.replace, !in_query, replace_area);
+    y += 1;
+
+    // Counter on the left, the actions on the right — the panel's summary row.
     let summary = app.find.summary();
     let tone = if app.find.error.is_some() {
         theme.ui.danger
     } else {
         theme.ui.fg_faint
     };
-
-    // Everything right of the query field, measured so the field can take the
-    // rest of the row.
-    let tail_width = 2 + 2 + 1 + 2 + 1 + 2 + 3 + summary.chars().count() + 2 + 1 + 1 + 2 + 1 + 1;
-    let chevron = if app.find.replace_mode {
-        app.icons.dir_open
-    } else {
-        app.icons.dir_closed
-    };
-    let query_width = width.saturating_sub(3 + tail_width).max(6);
-
+    let action_row = row(y);
     let mut spans: Vec<Span> = Vec::new();
     let mut x = area.x;
     let place = |spans: &mut Vec<Span>, x: &mut u16, text: String, style: Style| -> Rect {
         let rect = Rect {
             x: *x,
-            y: area.y,
+            y: action_row.y,
             width: text.chars().count() as u16,
             height: 1,
         };
@@ -978,84 +1247,25 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(text, style));
         rect
     };
-
+    let actions = ["<", ">", "Replace", "Replace All", "×"];
+    let actions_width: usize = actions.iter().map(|a| a.chars().count() + 2).sum();
+    let left = format!(" {}", clip(&summary, width.saturating_sub(actions_width + 2)));
+    let lead = width.saturating_sub(left.chars().count() + actions_width);
+    place(&mut spans, &mut x, left, on(tone, theme.ui.status_bg));
+    place(&mut spans, &mut x, pad("", lead), plain);
+    let action = on(theme.ui.fg, theme.ui.status_bg);
     place(&mut spans, &mut x, " ".into(), plain);
-    app.layout.find_chevron = place(&mut spans, &mut x, chevron.to_string(), plain);
-    place(&mut spans, &mut x, " ".into(), plain);
-    let query = if app.find.query.is_empty() {
-        "Find".to_string()
-    } else {
-        clip(&app.find.query, query_width)
-    };
-    app.layout.find_query = place(
-        &mut spans,
-        &mut x,
-        pad(&query, query_width),
-        field_style(in_query),
-    );
+    app.layout.find_prev = place(&mut spans, &mut x, "<".into(), action);
     place(&mut spans, &mut x, "  ".into(), plain);
-    app.layout.find_case = place(
-        &mut spans,
-        &mut x,
-        "Aa".into(),
-        toggle(app.find.case_sensitive),
-    );
-    place(&mut spans, &mut x, " ".into(), plain);
-    app.layout.find_word = place(&mut spans, &mut x, "ab".into(), toggle(app.find.whole_word));
-    place(&mut spans, &mut x, " ".into(), plain);
-    app.layout.find_regex = place(&mut spans, &mut x, ".*".into(), toggle(app.find.regex));
-    place(
-        &mut spans,
-        &mut x,
-        format!("   {summary}  "),
-        on(tone, theme.ui.status_bg),
-    );
-    let arrow = on(theme.ui.fg, theme.ui.status_bg);
-    app.layout.find_prev = place(&mut spans, &mut x, "<".into(), arrow);
-    place(&mut spans, &mut x, " ".into(), plain);
-    app.layout.find_next = place(&mut spans, &mut x, ">".into(), arrow);
+    app.layout.find_next = place(&mut spans, &mut x, ">".into(), action);
     place(&mut spans, &mut x, "  ".into(), plain);
-    app.layout.find_close = place(&mut spans, &mut x, "x".into(), arrow);
-    let rest = (area.x + area.width).saturating_sub(x) as usize;
-    place(&mut spans, &mut x, " ".repeat(rest), plain);
-
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)),
-        Rect { height: 1, ..area },
-    );
-
-    if app.find.replace_mode && area.height > 1 {
-        let replace = if app.find.replace.is_empty() {
-            "Replace".to_string()
-        } else {
-            app.find.replace.clone()
-        };
-        let row = Rect {
-            y: area.y + 1,
-            height: 1,
-            ..area
-        };
-        app.layout.find_replace = Rect {
-            x: area.x + 3,
-            width: area.width.saturating_sub(3),
-            ..row
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" = ", plain),
-                Span::styled(
-                    pad(
-                        &clip(&replace, width.saturating_sub(3)),
-                        width.saturating_sub(3),
-                    ),
-                    field_style(!in_query),
-                ),
-            ])),
-            row,
-        );
-    } else {
-        app.layout.find_replace = Rect::default();
-    }
+    app.layout.find_replace_one = place(&mut spans, &mut x, "Replace".into(), action);
+    place(&mut spans, &mut x, "  ".into(), plain);
+    app.layout.find_replace_all = place(&mut spans, &mut x, "Replace All".into(), action);
+    place(&mut spans, &mut x, "  ".into(), plain);
+    app.layout.find_close = place(&mut spans, &mut x, "×".into(), action);
+    place(&mut spans, &mut x, " ".into(), plain);
+    frame.render_widget(Paragraph::new(Line::from(spans)), action_row);
 }
 
 fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
@@ -1070,9 +1280,15 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
     let mut tab_spans: Vec<(u16, u16, usize, bool)> = Vec::new();
     let mut x = tab_area.x;
+    let drop_on = match app.tab_drag {
+        Some((TabStrip::Editor, _)) => app.tab_drag_over,
+        _ => None,
+    };
     for (i, buf) in app.buffers.list.iter().enumerate() {
         let selected = i == app.buffers.active;
-        let style = if selected {
+        let style = if drop_on == Some(i) {
+            on(theme.ui.fg_bright, theme.ui.accent)
+        } else if selected {
             Style::default()
                 .fg(color(theme.ui.fg_bright))
                 .bg(color(theme.ui.tab_active_bg))
@@ -1080,7 +1296,9 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
         } else {
             on(theme.ui.fg_dim, theme.ui.tab_inactive_bg)
         };
-        let bg = if selected {
+        let bg = if drop_on == Some(i) {
+            theme.ui.accent
+        } else if selected {
             theme.ui.tab_active_bg
         } else {
             theme.ui.tab_inactive_bg
@@ -1128,30 +1346,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
     let text_area = area;
     app.layout.editor = text_area;
     if app.buffers.is_empty() {
-        // Centered hint, the same one the window shows in an empty editor,
-        // trimmed to whole parts so a narrow pane never cuts a word.
-        let available = text_area.width.saturating_sub(2) as usize;
-        let parts = app.empty_hint_parts();
-        let mut hint = String::new();
-        for part in &parts {
-            let candidate = if hint.is_empty() {
-                part.clone()
-            } else {
-                format!("{hint}   ·   {part}")
-            };
-            if candidate.chars().count() > available {
-                break;
-            }
-            hint = candidate;
-        }
-        let hint = clip(&hint, available);
-        let pad_left = (text_area.width as usize).saturating_sub(hint.chars().count()) / 2;
-        let mut lines = vec![Line::from(""); (text_area.height / 2) as usize];
-        lines.push(Line::from(Span::styled(
-            format!("{}{hint}", " ".repeat(pad_left)),
-            on(theme.ui.fg_faint, theme.ui.editor_bg),
-        )));
-        frame.render_widget(Paragraph::new(lines), text_area);
+        draw_start_page(frame, app, text_area);
         return;
     }
 
@@ -1379,7 +1574,7 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Spawn the first shell before the header is drawn, so the tab strip can
     // already list it.
-    let cwd = app.root.clone();
+    let cwd = app.project.root_or_cwd();
     app.shell.ensure(&cwd);
 
     // Panel header: the label, one numbered tab per session with a close
@@ -1400,22 +1595,28 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
     ));
     x += 10;
     let active = app.shell.sessions.active_index();
+    let drop_on = match app.tab_drag {
+        Some((TabStrip::Terminal, _)) => app.tab_drag_over,
+        _ => None,
+    };
     for i in 0..app.shell.sessions.len() {
-        let label = format!(" {} ", i + 1);
+        let label = format!(" {} ", app.shell.sessions.name(i));
         let width = label.chars().count() as u16;
-        spans.push(Span::styled(
-            label,
-            if i == active {
-                on(theme.ui.fg, theme.ui.tab_active_bg)
-            } else {
-                on(theme.ui.fg_dim, theme.ui.status_bg)
-            },
-        ));
+        let tab_style = if drop_on == Some(i) {
+            on(theme.ui.fg_bright, theme.ui.accent)
+        } else if i == active {
+            on(theme.ui.fg, theme.ui.tab_active_bg)
+        } else {
+            on(theme.ui.fg_dim, theme.ui.status_bg)
+        };
+        spans.push(Span::styled(label, tab_style));
         tabs.push((x, x + width, i, false));
         x += width;
         spans.push(Span::styled(
             "× ",
-            if i == active {
+            if drop_on == Some(i) {
+                on(theme.ui.fg_bright, theme.ui.accent)
+            } else if i == active {
                 on(theme.ui.fg_dim, theme.ui.tab_active_bg)
             } else {
                 on(theme.ui.fg_faint, theme.ui.status_bg)
@@ -1545,7 +1746,7 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut left = match app.buffers.active() {
         Some(buf) => {
-            let mut text = relative_path(&buf.path, &app.root);
+            let mut text = app.project.display(&buf.path);
             if buf.modified() {
                 text.push_str("  \u{25cf}");
             }
@@ -1643,12 +1844,30 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             })
             .collect(),
+        Prompt::Browse { dir, entries, .. } => {
+            let mut list: Vec<String> = Vec::new();
+            if dir.parent().is_some() {
+                list.push("..".to_string());
+            }
+            list.extend(entries.iter().map(|(path, is_dir)| {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if *is_dir {
+                    format!("{name}/")
+                } else {
+                    name
+                }
+            }));
+            list
+        }
         Prompt::Goto { candidates, .. } => candidates
             .iter()
             .map(|c| {
                 format!(
                     "{}:{}  {}",
-                    relative_path(&c.path, &app.root),
+                    app.project.display(&c.path),
                     c.line,
                     c.text
                 )

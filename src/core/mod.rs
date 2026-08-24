@@ -8,6 +8,7 @@ pub mod fs_ops;
 pub mod git;
 pub mod glob;
 pub mod indent;
+pub mod project;
 
 #[cfg(feature = "pty")]
 pub mod pty;
@@ -18,9 +19,9 @@ pub mod theme;
 
 use std::path::PathBuf;
 
-/// Resolves the project root a frontend was launched with, defaulting to the
-/// working directory.
-pub fn project_root(arg: Option<PathBuf>) -> PathBuf {
-    let root = arg.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    root.canonicalize().unwrap_or(root)
+/// Resolves the project root a frontend was launched with. Without a path
+/// argument the editor opens with no project at all, and the user picks a
+/// folder from the File menu.
+pub fn project_root(arg: Option<PathBuf>) -> Option<PathBuf> {
+    arg.map(|root| root.canonicalize().unwrap_or(root))
 }

@@ -13,6 +13,7 @@ pub enum Command {
     NewFile,
     OpenFile,
     OpenFolder,
+    AddFolder,
     OpenRecent,
     Save,
     SaveAs,
@@ -52,6 +53,7 @@ impl Command {
             Self::NewFile => "new_file",
             Self::OpenFile => "open_file",
             Self::OpenFolder => "open_folder",
+            Self::AddFolder => "add_folder",
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
             Self::SaveAs => "save_as",
@@ -95,6 +97,7 @@ impl Command {
             Self::NewFile => "New File...",
             Self::OpenFile => "Open File...",
             Self::OpenFolder => "Open Folder...",
+            Self::AddFolder => "Add Folder to Project...",
             Self::OpenRecent => "Open Recent...",
             Self::Save => "Save",
             Self::SaveAs => "Save As...",
@@ -133,6 +136,7 @@ pub const ALL: &[Command] = &[
     Command::NewFile,
     Command::OpenFile,
     Command::OpenFolder,
+    Command::AddFolder,
     Command::OpenRecent,
     Command::Save,
     Command::SaveAs,
@@ -171,6 +175,7 @@ pub const FILE_MENU: &[Option<Command>] = &[
     None,
     Some(Command::OpenFile),
     Some(Command::OpenFolder),
+    Some(Command::AddFolder),
     Some(Command::OpenRecent),
     None,
     Some(Command::Save),
@@ -181,6 +186,43 @@ pub const FILE_MENU: &[Option<Command>] = &[
     None,
     Some(Command::CloseEditor),
     Some(Command::Quit),
+];
+
+/// The start page's key list: what to reach for first, in groups. Both
+/// frontends draw the same groups, each with the chord actually bound.
+pub const START_PAGE: &[(&str, &[Command])] = &[
+    (
+        "Project",
+        &[
+            Command::OpenFolder,
+            Command::AddFolder,
+            Command::OpenRecent,
+            Command::OpenFile,
+            Command::NewFile,
+        ],
+    ),
+    (
+        "Edit",
+        &[
+            Command::Save,
+            Command::SaveAll,
+            Command::FindInFile,
+            Command::CloseEditor,
+        ],
+    ),
+    (
+        "Panels",
+        &[
+            Command::ToggleSidebar,
+            Command::FocusSearch,
+            Command::FocusGit,
+            Command::ToggleTerminal,
+        ],
+    ),
+    (
+        "More",
+        &[Command::ThemePicker, Command::Settings, Command::Help],
+    ),
 ];
 
 // ---------------------------------------------------------------------------

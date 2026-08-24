@@ -19,7 +19,6 @@ pub struct Find {
     pub open: bool,
     pub query: String,
     pub replace: String,
-    pub replace_mode: bool,
     pub regex: bool,
     pub case_sensitive: bool,
     pub whole_word: bool,

@@ -14,10 +14,10 @@ smart indentation, syntax highlighting and themes. Only rendering and input diff
 ## Build & run
 
 ```bash
-cargo run --release --bin yara            # GPU window, current directory
+cargo run --release --bin yara            # GPU window, no folder open
 cargo run --release --bin yara ~/project
 
-cargo run --release --bin yara-tui            # terminal UI
+cargo run --release --bin yara-tui            # terminal UI, no folder open
 cargo run --release --bin yara-tui ~/project
 ```
 
@@ -36,8 +36,12 @@ The GPU frontend is likewise buildable alone with `--features gui`.
 ## Features
 
 - **Navigator** — file tree with new file / new folder / rename / delete, and
-  moving entries (drag-and-drop in the GUI, `m` in the TUI).
-- **Tabs** — multiple open buffers, unsaved-change markers.
+  moving entries (drag-and-drop in the GUI, `m` in the TUI). Several project
+  folders are shown side by side, each heading its own subtree.
+- **Tabs** — multiple open buffers, unsaved-change markers, dragged along the
+  strip to reorder in both frontends.
+- **Start page** — with nothing open, the editor shows the folder in play and
+  the keys actually bound, grouped, in both frontends.
 - **Syntax highlighting** — 75 syntect grammars, plus bundled ones for
   TypeScript/TSX, TOML, Kotlin, Swift, Dart, Dockerfile, Protobuf and GraphQL,
   plus an alias table pointing the remaining common extensions at their closest
@@ -56,6 +60,10 @@ The GPU frontend is likewise buildable alone with `--features gui`.
   after `:` (Python, YAML) or `{ ( [`, dedents after `return`/`pass`/`break`/
   `continue`/`raise`, and splits bracket pairs onto their own lines. The indent
   unit (tabs, 2/4/8 spaces) is inferred from the file being edited.
+- **Find in file** — `Ctrl+F` opens the same form the project search uses: a lit
+  `FIND` / `REPLACE` heading over each field, both always shown, `…` for an empty
+  one, the option toggles at the right edge, and the counter with Replace /
+  Replace All under them. `Tab` switches field.
 - **Project search** — live, case-insensitive, grouped by file, click/Enter to
   jump, with an **exclude box** above the query taking comma-separated globs in
   VS Code's spelling: `target, *.lock, **/node_modules, src/generated`. A bare
@@ -75,7 +83,9 @@ The GPU frontend is likewise buildable alone with `--features gui`.
   scrollback (mouse wheel). The frontends differ only in how they paint the
   grid. In the terminal frontend, keys go to the shell while the panel has
   focus — only Toggle Terminal and Quit stay reserved — so leave the panel with
-  its toggle or by clicking another pane.
+  its toggle or by clicking another pane. Sessions carry tabs of their own:
+  right-click a tab to rename it, drag it to reorder.
+- **Project folders** — one window can hold several folders; see below.
 
 ## Settings
 
@@ -129,13 +139,35 @@ and it appears in the picker. The loader reads the `colors` map (chrome and the
 16 ANSI terminal colors) and `tokenColors` (syntax); anything the file omits
 falls back to the built-in Dark+ or Light+ value, per the theme's `type`.
 
+## Project folders
+
+A window opens on the folders you give it. Launched with a path, that path is
+the project; launched with none, it opens empty and the start page says how to
+put a folder in it.
+
+**Add Folder to Project…** puts more folders beside the first. Each one heads
+its own subtree in the navigator, search and go-to-definition cover all of them,
+and paths are shown with the folder's name in front so two files called the same
+thing never read alike. Overlapping folders are refused — one inside another
+would list and search the same files twice. Git and the terminal's working
+directory stay with the first folder.
+
+**Remove Folder from Project** (right-click a folder's row) drops one again,
+leaving it on disk; removing the last one puts the window back to empty.
+
 ## File menu
 
 Both frontends carry the same **File** menu in a top bar, after the YARA
 label — click it, or press `Ctrl+X` in the terminal. Entries show their current chord, read from settings:
 
-New File… · Open File… · Open Folder… · Open Recent… · Save · Save As… ·
-Save All · Settings · Close Editor · Quit
+New File… · Open File… · Open Folder… · Add Folder to Project… · Open Recent… ·
+Save · Save As… · Save All · Settings · Close Editor · Quit
+
+In the window, **New File…**, **Open File…**, **Open Folder…**, **Add Folder to
+Project…** and **Save As…** open the system dialog — Finder on macOS, Explorer
+on Windows. The terminal frontend has no system dialog to call, so it opens a
+file browser of its own: `→` walks into a folder, `←` back out, `⏎` picks what
+the cursor is on, and `Tab` switches to typing the path instead.
 
 ## Keys
 
@@ -145,7 +177,8 @@ Defaults; all of them are rebindable in `settings.json`.
 | --- | --- | --- |
 | Save | `Cmd+S` | `Ctrl+S` |
 | Save As… / Save All | `Cmd+Shift+S` / `Cmd+Alt+S` | `Ctrl+Shift+S` / `Ctrl+A` |
-| New file / Open file / Open folder | `Cmd+N` / `Cmd+O` / `Cmd+Shift+O` | `Ctrl+N` / `Ctrl+O` / `Ctrl+Shift+O` |
+| New file / Open file / Open folder | `Cmd+N` / `Cmd+O` / `Cmd+Shift+O` | `Ctrl+N` / `Ctrl+O` / `Alt+O` |
+| Add folder to project | `Cmd+Shift+A` | `Alt+P` |
 | Open recent | `Cmd+Alt+O` | `Ctrl+R` |
 | Settings | `Cmd+,` | `Ctrl+P` |
 | Toggle sidebar / terminal | `Cmd+B` / `Cmd+J` | `Ctrl+B` / `Ctrl+J` |
@@ -178,7 +211,7 @@ being dragged.
 
 The terminal frontend mirrors the window's layout throughout: a top bar with the
 YARA label and the File menu separated by a rule, the sidebar down the left, the
-terminal under the editor only, a centered hint in an empty editor, a `TERMINAL`
+terminal under the editor only, the same start page in an empty editor, a `TERMINAL`
 panel header that brightens when the panel has the keyboard, and a status bar
 carrying just the file, cursor position, language and theme. Key bindings
 live in an overlay (`Ctrl+H`), not along the bottom edge.
@@ -195,11 +228,14 @@ The terminal frontend is fully mouse-driven, mirroring the GPU window:
   because some terminals grab one of them: macOS Terminal turns Ctrl+click into
   a right click, so use Alt+click there.
 - **Right click** — context menu on the row under the pointer: Open, New File,
-  New Folder, Rename, Move To..., Delete. `Ctrl+K` opens the same menu from the
-  keyboard; arrows and Enter drive it, Esc or a click outside dismisses it.
+  New Folder, Rename, Move To..., Delete, Add Folder to Project. On a project
+  folder's own row it offers Remove Folder from Project instead of the on-disk
+  operations. `Ctrl+K` opens the same menu from the keyboard; arrows and Enter
+  drive it, Esc or a click outside dismisses it. On a **terminal tab**, the right
+  button renames the session.
 - **Drag and drop** — press a navigator row and drag it onto a folder to move it;
   the target folder highlights, and dropping on empty space moves to the project
-  root.
+  root. Editor tabs and terminal tabs drag along their own strip to reorder.
 - **Hover** — rows and tabs light up under the pointer.
 - **Wheel** — scrolls whichever pane is under the pointer.
 

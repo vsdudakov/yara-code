@@ -1,7 +1,7 @@
 //! TUI state and event loop.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,6 +21,7 @@ use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
 use crate::core::git::GitState;
 use crate::core::indent;
+use crate::core::project::Project;
 use crate::core::settings::{Modifier, Settings};
 use crate::core::find::Find;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
@@ -57,6 +58,22 @@ pub enum SidebarView {
     Git,
 }
 
+/// What a folder browser is being opened for.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pick {
+    OpenFile,
+    OpenFolder,
+    AddFolder,
+}
+
+/// Which strip a dragged tab came from — editor tabs and terminal tabs move
+/// within their own strip only.
+#[derive(Clone, Copy, PartialEq)]
+pub enum TabStrip {
+    Editor,
+    Terminal,
+}
+
 /// A modal question or single-line input laid over the layout.
 pub enum Prompt {
     NewFile(PathBuf),
@@ -70,7 +87,19 @@ pub enum Prompt {
     GitWorktree,
     OpenPath,
     OpenFolder,
+    /// Typed-path counterpart of the browser's "add folder".
+    AddFolderPath,
+    /// Renaming terminal session `index`, from its tab's right-click.
+    RenameTerminal(usize),
     SaveAs,
+    /// The built-in file browser: the terminal frontend's stand-in for the
+    /// window's native Open dialog.
+    Browse {
+        pick: Pick,
+        dir: PathBuf,
+        /// What the browser lists: folders, plus files when picking a file.
+        entries: Vec<(PathBuf, bool)>,
+    },
     Themes,
     Recent,
     Help(Vec<String>),
@@ -96,6 +125,16 @@ impl Prompt {
             Self::GitWorktree => "Worktree".to_string(),
             Self::OpenPath => "Open file (path relative to the project)".to_string(),
             Self::OpenFolder => "Open folder as project".to_string(),
+            Self::AddFolderPath => "Add folder to project (path)".to_string(),
+            Self::RenameTerminal(index) => format!("Rename terminal {}", index + 1),
+            Self::Browse { pick, dir, .. } => {
+                let what = match pick {
+                    Pick::OpenFile => "Open file",
+                    Pick::OpenFolder => "Open folder as project",
+                    Pick::AddFolder => "Add folder to project",
+                };
+                format!("{what} — {}  (→ enter · ← up · ⏎ pick · tab type)", short(dir))
+            }
             Self::SaveAs => "Save as (path relative to the project)".to_string(),
             Self::Themes => "Color theme".to_string(),
             Self::Recent => "Recent projects".to_string(),
@@ -126,6 +165,8 @@ impl Prompt {
                 | Self::MoveTo(_)
                 | Self::OpenPath
                 | Self::OpenFolder
+                | Self::AddFolderPath
+                | Self::RenameTerminal(_)
                 | Self::SaveAs
         )
     }
@@ -138,9 +179,21 @@ impl Prompt {
             Self::Goto { candidates, .. } => candidates.len(),
             Self::GitRepo => repos,
             Self::GitWorktree => worktrees,
+            Self::Browse { dir, entries, .. } => {
+                entries.len() + usize::from(dir.parent().is_some())
+            }
             _ => 0,
         }
     }
+}
+
+/// What the file browser lists in `dir`: folders always, files only when a
+/// file is what is being picked.
+fn browse_entries(dir: &Path, pick: Pick) -> Vec<(PathBuf, bool)> {
+    fs_ops::list_dir(dir)
+        .into_iter()
+        .filter(|(_, is_dir)| *is_dir || pick == Pick::OpenFile)
+        .collect()
 }
 
 /// Translates a crossterm key event into a core chord, so the settings map can
@@ -191,7 +244,8 @@ pub struct Layout {
     pub sidebar_header: Rect,
     pub tree: Rect,
     /// Find bar hit boxes, so the whole strip works with the mouse.
-    pub find_chevron: Rect,
+    pub find_replace_one: Rect,
+    pub find_replace_all: Rect,
     pub find_query: Rect,
     pub find_case: Rect,
     pub find_word: Rect,
@@ -269,7 +323,7 @@ pub struct EditState {
 }
 
 pub struct App {
-    pub root: PathBuf,
+    pub project: Project,
     pub tree: Tree,
     pub buffers: Buffers,
     pub edit: Vec<EditState>,
@@ -317,6 +371,9 @@ pub struct App {
     /// Row being dragged in the navigator, once the pointer has actually moved.
     pub drag: Option<PathBuf>,
     pub drag_over: Option<PathBuf>,
+    /// A tab being dragged along its strip, and the tab it is over.
+    pub tab_drag: Option<(TabStrip, usize)>,
+    pub tab_drag_over: Option<usize>,
     /// Navigator row the left button went down on, if any. The click only acts
     /// on release, so a press that turns into a drag doesn't also open or
     /// expand the row.
@@ -330,11 +387,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: Option<PathBuf>) -> Self {
         let themes = core_theme::load_all();
         let (mut settings, settings_error) = Settings::load();
-        settings.push_recent(&root);
-        let _ = settings.save();
+        if let Some(root) = &root {
+            settings.push_recent(root);
+            let _ = settings.save();
+        }
         let theme_index = themes
             .iter()
             .position(|t| t.name == settings.theme)
@@ -342,8 +401,8 @@ impl App {
         let syntax = Syntax::new(themes.get(theme_index).unwrap_or(&Theme::default()));
         let shell_dirty = Arc::new(AtomicBool::new(false));
         let mut app = Self {
-            tree: Tree::new(root.clone()),
-            root,
+            tree: Tree::with_roots(root.iter().cloned().collect()),
+            project: Project::opened(root),
             buffers: Buffers::default(),
             edit: Vec::new(),
             search: Search::default(),
@@ -379,6 +438,8 @@ impl App {
             link: None,
             drag: None,
             drag_over: None,
+            tab_drag: None,
+            tab_drag_over: None,
             press: None,
             quit: false,
             highlight: Vec::new(),
@@ -418,7 +479,7 @@ impl App {
                         Focus::Editor => self.paste_text(&text),
                         Focus::Search => {
                             self.search.input_mut().push_str(&text);
-                            self.search.run(&self.root);
+                            self.search.run(self.project.roots());
                         }
                         Focus::Find => self.find.query.push_str(&text),
                         Focus::Tree | Focus::Git => {}
@@ -910,10 +971,10 @@ impl App {
     }
 
     fn goto_word(&mut self, word: String, current: PathBuf) {
-        let mut candidates = search::find_definitions(&self.root, &word);
+        let mut candidates = search::find_definitions(self.project.roots(), &word);
         let is_definition = !candidates.is_empty();
         if !is_definition {
-            candidates = search::find_references(&self.root, &word, 100);
+            candidates = search::find_references(self.project.roots(), &word, 100);
         }
         candidates.sort_by_key(|c| (c.path != current, c.path.clone(), c.line));
         match candidates.len() {
@@ -972,6 +1033,7 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll_at(x, y, -3),
             MouseEventKind::Down(MouseButton::Right) => self.right_click(x, y),
             MouseEventKind::Down(MouseButton::Left) => {
+                self.tab_drag = self.tab_at(x, y);
                 if hits(self.layout.v_split, x, y) {
                     self.resizing = Some(Splitter::Sidebar);
                 } else if hits(self.layout.h_split, x, y) {
@@ -987,6 +1049,15 @@ impl App {
                 self.extend_selection_to(x, y);
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Tabs move within their own strip; the highlight follows the
+                // pointer while the button is down.
+                if let Some((strip, from)) = self.tab_drag {
+                    self.tab_drag_over = match self.tab_at(x, y) {
+                        Some((over_strip, to)) if over_strip == strip && to != from => Some(to),
+                        _ => None,
+                    };
+                    return;
+                }
                 // A press on a row only becomes a drag once the pointer leaves
                 // it, so ordinary clicks aren't treated as moves.
                 if self.drag.is_none() {
@@ -1000,6 +1071,17 @@ impl App {
                 self.drag_over = self.drop_target_at(x, y);
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if let (Some((strip, from)), Some(to)) = (self.tab_drag.take(), self.tab_drag_over.take())
+                {
+                    match strip {
+                        TabStrip::Editor => self.buffers.reorder(from, to),
+                        TabStrip::Terminal => self.shell.sessions.reorder(from, to),
+                    }
+                    self.press = None;
+                    return;
+                }
+                self.tab_drag = None;
+                self.tab_drag_over = None;
                 if self.selecting {
                     self.selecting = false;
                     // A click without movement leaves no selection behind.
@@ -1139,10 +1221,6 @@ impl App {
         // The find bar is fully clickable: fields, option toggles and the
         // arrows beside the match counter.
         if self.find.open {
-            if hits(self.layout.find_chevron, x, y) {
-                self.find.replace_mode = !self.find.replace_mode;
-                return;
-            }
             if hits(self.layout.find_query, x, y) {
                 self.focus = Focus::Find;
                 self.find.in_replace_field = false;
@@ -1166,6 +1244,14 @@ impl App {
             if hits(self.layout.find_regex, x, y) {
                 self.find.regex = !self.find.regex;
                 self.refresh_find();
+                return;
+            }
+            if hits(self.layout.find_replace_one, x, y) {
+                self.find_replace_current();
+                return;
+            }
+            if hits(self.layout.find_replace_all, x, y) {
+                self.find_replace_all();
                 return;
             }
             if hits(self.layout.find_prev, x, y) {
@@ -1293,7 +1379,7 @@ impl App {
             return;
         }
         if hits(self.layout.shell_new, x, y) {
-            let root = self.root.clone();
+            let root = self.project.root_or_cwd();
             self.shell.open(&root);
             self.focus = Focus::Shell;
             return;
@@ -1365,20 +1451,58 @@ impl App {
         if self.prompt.is_some() {
             return;
         }
+        // A terminal tab's right button renames the session.
+        if let Some((TabStrip::Terminal, index)) = self.tab_at(x, y) {
+            self.focus = Focus::Shell;
+            self.shell.sessions.set_active(index);
+            self.prompt_input = if self.shell.sessions.is_named(index) {
+                self.shell.sessions.name(index)
+            } else {
+                String::new()
+            };
+            self.prompt = Some(Prompt::RenameTerminal(index));
+            return;
+        }
         if let Some(index) = self.tree_row_at(x, y) {
             self.focus = Focus::Tree;
             self.tree.selected = index;
             let row = &self.tree.rows()[index];
             let (path, is_dir) = (row.path.clone(), row.is_dir);
+            let is_root = self.project.is_root(&path);
             let dir = if is_dir {
                 path.clone()
             } else {
-                path.parent().unwrap_or(&self.root).to_path_buf()
+                path.parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| self.project.root_or_cwd())
             };
-            self.menu = Some(Menu::for_row(Some(path), is_dir, dir, x, y));
+            self.menu = Some(Menu::for_row(Some(path), is_dir, is_root, Some(dir), x, y));
         } else if hits(self.layout.tree, x, y) || hits(self.layout.sidebar, x, y) {
-            self.menu = Some(Menu::for_row(None, true, self.root.clone(), x, y));
+            let root = self.project.root().map(Path::to_path_buf);
+            self.menu = Some(Menu::for_row(None, true, false, root, x, y));
         }
+    }
+
+    /// The tab under the pointer, if the point is on a tab's label rather than
+    /// its close mark.
+    fn tab_at(&self, x: u16, y: u16) -> Option<(TabStrip, usize)> {
+        if hits(self.layout.tabs, x, y) {
+            return self
+                .layout
+                .tab_spans
+                .iter()
+                .find(|(start, end, _, is_close)| !is_close && x >= *start && x < *end)
+                .map(|(_, _, index, _)| (TabStrip::Editor, *index));
+        }
+        if y == self.layout.shell.y && hits(self.layout.shell, x, y) {
+            return self
+                .layout
+                .shell_tabs
+                .iter()
+                .find(|(start, end, _, is_close)| !is_close && x >= *start && x < *end)
+                .map(|(_, _, index, _)| (TabStrip::Terminal, *index));
+        }
+        None
     }
 
     /// The folder a drop at this point would land in: the folder row under the
@@ -1390,10 +1514,15 @@ impl App {
                 Some(if row.is_dir {
                     row.path.clone()
                 } else {
-                    row.path.parent().unwrap_or(&self.root).to_path_buf()
+                    row.path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| self.project.root_or_cwd())
                 })
             }
-            None => hits(self.layout.tree, x, y).then(|| self.root.clone()),
+            None => hits(self.layout.tree, x, y)
+                .then(|| self.project.root().map(Path::to_path_buf))
+                .flatten(),
         }
     }
 
@@ -1465,7 +1594,67 @@ impl App {
                     self.prompt = Some(Prompt::ConfirmDelete(path));
                 }
             }
+            MenuItem::RemoveFolder => {
+                if let Some(path) = menu.target {
+                    self.remove_folder(&path);
+                }
+            }
             MenuItem::Command(command) => self.execute(command),
+        }
+    }
+
+    // ----- project folders -------------------------------------------------
+
+    /// Opens the built-in browser — the terminal frontend's stand-in for the
+    /// window's native Open dialog.
+    fn browse(&mut self, pick: Pick) {
+        let dir = self.project.root_or_cwd();
+        self.prompt_input.clear();
+        self.prompt_selected = 0;
+        self.prompt = Some(Prompt::Browse {
+            entries: browse_entries(&dir, pick),
+            dir,
+            pick,
+        });
+    }
+
+    /// Moves the browser to another directory, keeping the cursor at the top.
+    fn browse_to(&mut self, dir: PathBuf) {
+        let Some(Prompt::Browse { pick, .. }) = self.prompt.as_ref() else {
+            return;
+        };
+        let pick = *pick;
+        self.prompt_selected = 0;
+        self.prompt = Some(Prompt::Browse {
+            entries: browse_entries(&dir, pick),
+            dir,
+            pick,
+        });
+    }
+
+    fn add_folder(&mut self, path: PathBuf) {
+        match self.project.add(path) {
+            Ok(added) => {
+                self.tree.set_roots(self.project.roots().to_vec());
+                self.tree.reveal(&added);
+                self.settings.push_recent(&added);
+                let _ = self.settings.save();
+                self.search.run(self.project.roots());
+                self.focus = Focus::Tree;
+                self.status = format!("added {}", added.display());
+            }
+            Err(message) => self.status = message,
+        }
+    }
+
+    fn remove_folder(&mut self, path: &Path) {
+        match self.project.remove(path) {
+            Ok(()) => {
+                self.tree.set_roots(self.project.roots().to_vec());
+                self.search.run(self.project.roots());
+                self.status = format!("removed {} from the project", path.display());
+            }
+            Err(message) => self.status = message,
         }
     }
 
@@ -1509,18 +1698,16 @@ impl App {
     /// click in the top bar.
     pub fn execute(&mut self, command: Command) {
         match command {
-            Command::NewFile => {
-                self.prompt_input.clear();
-                self.prompt = Some(Prompt::NewFile(self.tree.target_dir()));
-            }
-            Command::OpenFile => {
-                self.prompt_input.clear();
-                self.prompt = Some(Prompt::OpenPath);
-            }
-            Command::OpenFolder => {
-                self.prompt_input.clear();
-                self.prompt = Some(Prompt::OpenFolder);
-            }
+            Command::NewFile => match self.tree.target_dir() {
+                Some(dir) => {
+                    self.prompt_input.clear();
+                    self.prompt = Some(Prompt::NewFile(dir));
+                }
+                None => self.status = "no folder in the project yet".into(),
+            },
+            Command::AddFolder => self.browse(Pick::AddFolder),
+            Command::OpenFile => self.browse(Pick::OpenFile),
+            Command::OpenFolder => self.browse(Pick::OpenFolder),
             Command::OpenRecent => {
                 if self.settings.recent_projects.is_empty() {
                     self.status = "no recent projects yet".into();
@@ -1575,7 +1762,7 @@ impl App {
             }
             Command::NewTerminal => {
                 self.show_shell = true;
-                let root = self.root.clone();
+                let root = self.project.root_or_cwd();
                 self.shell.open(&root);
                 self.focus = Focus::Shell;
             }
@@ -1715,15 +1902,14 @@ impl App {
         if path.is_absolute() {
             path
         } else {
-            self.root.join(path)
+            self.project.root_or_cwd().join(path)
         }
     }
 
     /// Switches the project to another folder, keeping open buffers.
     fn set_root(&mut self, root: PathBuf) {
-        let root = root.canonicalize().unwrap_or(root);
-        self.root = root.clone();
-        self.tree = Tree::new(root.clone());
+        let root = self.project.set_root(root);
+        self.tree.set_roots(self.project.roots().to_vec());
         self.search = Search::default();
         self.settings.push_recent(&root);
         let _ = self.settings.save();
@@ -1775,25 +1961,6 @@ impl App {
         entries.push(format!("{:<16}{}", "Right click", "Context menu"));
         entries.push(format!("{:<16}{}", "Drag a row", "Move file or folder"));
         entries
-    }
-
-    /// Hint parts for the empty editor. The caller joins as many as fit, so a
-    /// narrow pane degrades gracefully instead of being cut mid-word.
-    pub fn empty_hint_parts(&self) -> Vec<String> {
-        let chord = |command| {
-            self.settings
-                .tui_chord(command)
-                .map(|c| c.to_string())
-                .unwrap_or_default()
-        };
-        vec![
-            "Open a file from the navigator".to_string(),
-            format!("{} save", chord(Command::Save)),
-            format!("{} terminal", chord(Command::ToggleTerminal)),
-            format!("{} sidebar", chord(Command::ToggleSidebar)),
-            format!("{} search", chord(Command::FocusSearch)),
-            format!("{} keys", chord(Command::Help)),
-        ]
     }
 
     pub fn open_file_menu(&mut self) {
@@ -1856,13 +2023,12 @@ impl App {
                     self.open(path);
                 }
             }
-            KeyCode::Char('a') => {
-                self.prompt_input.clear();
-                self.prompt = Some(Prompt::NewFile(self.tree.target_dir()));
-            }
+            KeyCode::Char('a') => self.execute(Command::NewFile),
             KeyCode::Char('A') => {
-                self.prompt_input.clear();
-                self.prompt = Some(Prompt::NewDir(self.tree.target_dir()));
+                if let Some(dir) = self.tree.target_dir() {
+                    self.prompt_input.clear();
+                    self.prompt = Some(Prompt::NewDir(dir));
+                }
             }
             KeyCode::Char('r') => {
                 if let Some(path) = self.tree.selected_path().map(|p| p.to_path_buf()) {
@@ -1986,13 +2152,12 @@ impl App {
             Some(6..=7) => self.search.regex = !self.search.regex,
             _ => return,
         }
-        self.search.run(&self.root);
+        self.search.run(self.project.roots());
     }
 
     /// Rewrites every match in the project, then refreshes open buffers.
     fn replace_all_in_project(&mut self) {
-        let root = self.root.clone();
-        match self.search.replace_all(&root) {
+        match self.search.replace_all(self.project.roots()) {
             Ok((count, files)) => {
                 for buf in &mut self.buffers.list {
                     if buf.modified() {
@@ -2086,20 +2251,14 @@ impl App {
             // In the replace field Enter applies the replacement and moves on,
             // and Alt+Enter replaces every match at once.
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => self.find_replace_all(),
-            KeyCode::Enter if self.find.replace_mode && self.find.in_replace_field => {
-                self.find_replace_current()
-            }
+            KeyCode::Enter if self.find.in_replace_field => self.find_replace_current(),
             KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => self.find_step(-1),
             KeyCode::Enter => self.find_step(1),
-            KeyCode::Tab => {
-                if self.find.replace_mode {
-                    self.find.in_replace_field = !self.find.in_replace_field;
-                }
-            }
+            KeyCode::Tab => self.find.in_replace_field = !self.find.in_replace_field,
             KeyCode::Down => self.find_step(1),
             KeyCode::Up => self.find_step(-1),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.find.replace_mode && self.find.in_replace_field {
+                if self.find.in_replace_field {
                     self.find.replace.push(c);
                 } else {
                     self.find.query.push(c);
@@ -2107,7 +2266,7 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                if self.find.replace_mode && self.find.in_replace_field {
+                if self.find.in_replace_field {
                     self.find.replace.pop();
                 } else {
                     self.find.query.pop();
@@ -2129,12 +2288,12 @@ impl App {
         match key.code {
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.input_mut().push(c);
-                self.search.run_if_changed(&self.root);
+                self.search.run_if_changed(self.project.roots());
                 self.search_selected = 0;
             }
             KeyCode::Backspace => {
                 self.search.input_mut().pop();
-                self.search.run_if_changed(&self.root);
+                self.search.run_if_changed(self.project.roots());
                 self.search_selected = 0;
             }
             KeyCode::Down => self.search_selected += 1,
@@ -2181,18 +2340,27 @@ impl App {
     /// Opens the context menu from the keyboard, on the selected row.
     fn open_menu_on_selection(&mut self) {
         let (target, is_dir, dir) = match self.tree.rows().get(self.tree.selected) {
-            Some(row) if row.is_dir => (Some(row.path.clone()), true, row.path.clone()),
+            Some(row) if row.is_dir => (Some(row.path.clone()), true, Some(row.path.clone())),
             Some(row) => (
                 Some(row.path.clone()),
                 false,
-                row.path.parent().unwrap_or(&self.root).to_path_buf(),
+                Some(
+                    row.path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| self.project.root_or_cwd()),
+                ),
             ),
-            None => (None, true, self.root.clone()),
+            None => (None, true, self.project.root().map(Path::to_path_buf)),
         };
+        let is_root = target
+            .as_deref()
+            .is_some_and(|path| self.project.is_root(path));
         let y = self.layout.tree.y + (self.tree.selected.saturating_sub(self.tree.scroll)) as u16;
         self.menu = Some(Menu::for_row(
             target,
             is_dir,
+            is_root,
             dir,
             self.layout.tree.x + 2,
             y,
@@ -2256,6 +2424,57 @@ impl App {
             }
         }
 
+        // The file browser drives itself: arrows walk the filesystem, Enter
+        // picks what the cursor is on.
+        if let Prompt::Browse { dir, entries, .. } = prompt {
+            let up = dir.parent().map(Path::to_path_buf);
+            let row = self.prompt_selected;
+            let entry = match &up {
+                Some(_) if row == 0 => None,
+                Some(_) => entries.get(row - 1).cloned(),
+                None => entries.get(row).cloned(),
+            };
+            let len = entries.len() + usize::from(up.is_some());
+            match key.code {
+                KeyCode::Down => {
+                    if len > 0 {
+                        self.prompt_selected = (self.prompt_selected + 1).min(len - 1);
+                    }
+                }
+                KeyCode::Up => self.prompt_selected = self.prompt_selected.saturating_sub(1),
+                KeyCode::Left | KeyCode::Backspace => {
+                    if let Some(up) = up {
+                        self.browse_to(up);
+                    }
+                }
+                KeyCode::Right => match (entry, up) {
+                    (Some((path, true)), _) => self.browse_to(path),
+                    // The ".." row leads out of the directory either way.
+                    (None, Some(up)) => self.browse_to(up),
+                    _ => {}
+                },
+                KeyCode::Enter => self.confirm_prompt(),
+                // Typing a path is often quicker than walking to it.
+                KeyCode::Tab => {
+                    let typed = match prompt {
+                        Prompt::Browse {
+                            pick: Pick::OpenFile,
+                            ..
+                        } => Prompt::OpenPath,
+                        Prompt::Browse {
+                            pick: Pick::OpenFolder,
+                            ..
+                        } => Prompt::OpenFolder,
+                        _ => Prompt::AddFolderPath,
+                    };
+                    self.prompt_input.clear();
+                    self.prompt = Some(typed);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Selection prompts.
         if !prompt.is_input() {
             let len = prompt.list_len(
@@ -2312,6 +2531,35 @@ impl App {
                 }
                 Err(e) => self.status = format!("create failed: {e}"),
             },
+            Prompt::Browse { pick, dir, entries } => {
+                let up = dir.parent().map(Path::to_path_buf);
+                let row = self.prompt_selected;
+                let entry = match &up {
+                    Some(_) if row == 0 => None,
+                    Some(_) => entries.get(row - 1).cloned(),
+                    None => entries.get(row).cloned(),
+                };
+                match entry {
+                    // The ".." row only ever navigates.
+                    None => {
+                        self.prompt = Some(Prompt::Browse { pick, dir, entries });
+                        if let Some(up) = up {
+                            self.browse_to(up);
+                        }
+                    }
+                    Some((path, true)) => match pick {
+                        // A folder is the answer for the folder pickers; for a
+                        // file pick, Enter walks into it.
+                        Pick::OpenFolder => self.set_root(path),
+                        Pick::AddFolder => self.add_folder(path),
+                        Pick::OpenFile => {
+                            self.prompt = Some(Prompt::Browse { pick, dir, entries });
+                            self.browse_to(path);
+                        }
+                    },
+                    Some((path, false)) => self.open(path),
+                }
+            }
             Prompt::Rename(path) => match fs_ops::rename(&path, &input) {
                 Ok(to) => {
                     self.buffers.retarget(&path, &to);
@@ -2323,7 +2571,7 @@ impl App {
                 let dest = if input.starts_with('/') {
                     PathBuf::from(&input)
                 } else {
-                    self.root.join(&input)
+                    self.project.root_or_cwd().join(&input)
                 };
                 match fs_ops::move_into(&path, &dest) {
                     Ok(to) => {
@@ -2374,6 +2622,11 @@ impl App {
                 } else {
                     self.status = format!("not a folder: {}", path.display());
                 }
+            }
+            Prompt::RenameTerminal(index) => self.shell.sessions.rename(index, &input),
+            Prompt::AddFolderPath => {
+                let path = self.resolve(&input);
+                self.add_folder(path);
             }
             Prompt::SaveAs => {
                 let path = self.resolve(&input);

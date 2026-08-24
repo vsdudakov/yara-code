@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::core::buffer::relative_path;
-use crate::core::command::{Command, FILE_MENU};
+use crate::core::command::{Command, FILE_MENU, START_PAGE};
 use crate::core::fs_ops;
+/// Placeholder for an empty input; the heading above already names the field.
+const FIELD_HINT: &str = "…";
+use crate::core::project::Project;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
 use crate::core::settings::Settings;
 use crate::core::theme::{self as core_theme, Theme};
@@ -28,7 +30,7 @@ struct GotoPicker {
 }
 
 pub struct App {
-    root: PathBuf,
+    project: Project,
     tree: FileTree,
     editor: Editor,
     terminal: Terminal,
@@ -47,18 +49,18 @@ pub struct App {
     /// Last file-operation error, shown in the status bar.
     status: Option<String>,
     settings: Settings,
-    /// Open text prompt (Open File..., Open Folder..., Save As...).
-    text_prompt: Option<(Command, String, bool)>,
     show_recent: bool,
     recent_selected: usize,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, root: PathBuf) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, root: Option<PathBuf>) -> Self {
         let themes = core_theme::load_all();
         let (mut settings, settings_error) = Settings::load();
-        settings.push_recent(&root);
-        let _ = settings.save();
+        if let Some(root) = &root {
+            settings.push_recent(root);
+            let _ = settings.save();
+        }
         let theme_index = themes
             .iter()
             .position(|t| t.name == settings.theme)
@@ -67,8 +69,8 @@ impl App {
         crate::gui::theme::apply(&cc.egui_ctx, &theme);
         highlight::set_theme(&theme);
         Self {
-            tree: FileTree::new(root.clone()),
-            root,
+            tree: FileTree::with_roots(root.iter().cloned().collect()),
+            project: Project::opened(root),
             editor: Editor::default(),
             terminal: Terminal::default(),
             show_terminal: settings.show_terminal,
@@ -84,7 +86,6 @@ impl App {
             show_theme_picker: false,
             status: settings_error,
             settings,
-            text_prompt: None,
             show_recent: false,
             recent_selected: 0,
         }
@@ -108,12 +109,33 @@ impl App {
     fn execute(&mut self, ctx: &egui::Context, command: Command) {
         self.status = None;
         match command {
-            Command::NewFile | Command::OpenFile | Command::OpenFolder | Command::SaveAs => {
+            Command::OpenFile => {
+                if let Some(path) = self.pick_file("Open File") {
+                    self.open_path(path);
+                }
+            }
+            Command::OpenFolder => {
+                if let Some(path) = self.pick_folder("Open Folder as Project") {
+                    self.set_root(path);
+                }
+            }
+            Command::AddFolder => {
+                if let Some(path) = self.pick_folder("Add Folder to Project") {
+                    self.add_folder(path);
+                }
+            }
+            Command::NewFile | Command::SaveAs => {
                 if command == Command::SaveAs && self.editor.buffers.is_empty() {
                     self.status = Some("nothing to save".into());
                     return;
                 }
-                self.text_prompt = Some((command, String::new(), true));
+                let new_file = command == Command::NewFile;
+                let title = if new_file { "New File" } else { "Save As" };
+                match self.pick_save_path(title, !new_file) {
+                    Some(path) if new_file => self.create_file(path),
+                    Some(path) => self.save_as(path),
+                    None => {}
+                }
             }
             Command::OpenRecent => {
                 if self.settings.recent_projects.is_empty() {
@@ -161,7 +183,7 @@ impl App {
             Command::ToggleTerminal => self.show_terminal = !self.show_terminal,
             Command::NewTerminal => {
                 self.show_terminal = true;
-                self.terminal.open(&self.root, ctx);
+                self.terminal.open(&self.project.root_or_cwd(), ctx);
             }
             Command::CloseTerminal => {
                 self.terminal.sessions.close_active();
@@ -250,50 +272,198 @@ impl App {
         self.status = Some(error.unwrap_or_else(|| "settings applied".to_string()));
     }
 
-    /// The empty-editor hint, built from the bindings actually in effect.
-    fn empty_hint(&self) -> String {
-        let chord = |command| {
-            self.settings
-                .gui_chord(command)
-                .map(|c| c.to_string())
-                .unwrap_or_default()
+    /// The start page: what fills the editor while nothing is open — the
+    /// name, the folder in play, and the keys that are actually bound.
+    fn start_page(&self, ui: &mut egui::Ui, theme: &Theme) {
+        let chord = |command| self.settings.gui_chord(command).map(|c| c.to_string());
+        let project = match self.project.root() {
+            Some(root) => Project::name_of(root),
+            None => "no folder in the project".to_string(),
         };
-        format!(
-            "Open a file from the navigator   ·   {} save   ·   {} terminal   ·   {} sidebar   ·   {} search",
-            chord(Command::Save),
-            chord(Command::ToggleTerminal),
-            chord(Command::ToggleSidebar),
-            chord(Command::FocusSearch),
-        )
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() * 0.12).min(80.0));
+            ui.label(
+                egui::RichText::new("YARA")
+                    .color(color(theme.ui.accent_light))
+                    .size(30.0)
+                    .strong(),
+            );
+            ui.label(
+                egui::RichText::new(project)
+                    .color(color(theme.ui.fg_faint))
+                    .size(12.0),
+            );
+            ui.add_space(22.0);
+
+            // Groups side by side, each a two-column key/label grid, so the
+            // whole thing reads as one list rather than a wall of text.
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 34.0;
+                for (name, commands) in START_PAGE {
+                    let entries: Vec<(String, &'static str)> = commands
+                        .iter()
+                        .filter_map(|command| Some((chord(*command)?, command.label())))
+                        .collect();
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(name.to_uppercase())
+                                .color(color(theme.ui.fg_dim))
+                                .size(10.0)
+                                .strong(),
+                        );
+                        ui.add_space(6.0);
+                        egui::Grid::new(("start_page", name))
+                            .num_columns(2)
+                            .spacing(egui::vec2(14.0, 5.0))
+                            .show(ui, |ui| {
+                                for (chord, label) in entries {
+                                    ui.label(
+                                        egui::RichText::new(chord)
+                                            .color(color(theme.ui.fg_bright))
+                                            .size(11.5)
+                                            .monospace(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .color(color(theme.ui.fg_faint))
+                                            .size(11.5),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                }
+            });
+        });
     }
 
-    /// Interprets typed input as a path: absolute, `~`-relative, or relative to
-    /// the project root.
-    fn resolve(&self, input: &str) -> PathBuf {
-        let input = input.trim();
-        if let Some(rest) = input.strip_prefix("~/") {
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(rest);
-            }
+    // ----- native dialogs --------------------------------------------------
+
+    /// Where a dialog should start: the folder the navigator is pointing at,
+    /// falling back to the working directory when no folder is open.
+    fn dialog_dir(&self) -> PathBuf {
+        self.project.root_or_cwd()
+    }
+
+    fn pick_file(&self, title: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .set_directory(self.dialog_dir())
+            .pick_file()
+    }
+
+    fn pick_folder(&self, title: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .set_directory(self.dialog_dir())
+            .pick_folder()
+    }
+
+    /// The system's Save panel: used for both "Save As" and "New File", which
+    /// differ only in what is written to the chosen path. Save As starts on the
+    /// current file's name; a new file starts on a blank one.
+    fn pick_save_path(&self, title: &str, suggest_current: bool) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(title)
+            .set_directory(self.dialog_dir());
+        let current = self
+            .editor
+            .buffers
+            .active()
+            .and_then(|buf| buf.path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        if let Some(name) = current.filter(|_| suggest_current) {
+            dialog = dialog.set_file_name(name);
         }
-        let path = PathBuf::from(input);
-        if path.is_absolute() {
-            path
+        dialog.save_file()
+    }
+
+    // ----- what the dialogs feed -------------------------------------------
+
+    fn open_path(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            self.set_root(path);
+        } else if path.is_file() {
+            self.tree.reveal(&path);
+            self.editor.open(path);
         } else {
-            self.root.join(path)
+            self.status = Some(format!("no such file: {}", path.display()));
         }
     }
+
+    fn create_file(&mut self, path: PathBuf) {
+        let (dir, name) = match path.parent().zip(path.file_name()) {
+            Some((dir, name)) => (dir.to_path_buf(), name.to_string_lossy().into_owned()),
+            None => (self.project.root_or_cwd(), path.display().to_string()),
+        };
+        // The Save panel offers to replace an existing file; opening it is the
+        // only sane reading of "new file" on a path that already exists.
+        if path.is_file() {
+            self.tree.reveal(&path);
+            self.editor.open(path);
+            return;
+        }
+        match fs_ops::create_file(&dir, &name) {
+            Ok(created) => {
+                self.tree.reveal(&created);
+                self.editor.open(created);
+            }
+            Err(e) => self.status = Some(format!("create failed: {e}")),
+        }
+    }
+
+    fn save_as(&mut self, path: PathBuf) {
+        if let Some(buf) = self.editor.buffers.active_mut() {
+            buf.path = path.clone();
+            buf.extension = path
+                .extension()
+                .map(|e| e.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
+        if self.editor.buffers.save_active() {
+            self.status = Some(format!("saved as {}", self.project.display(&path)));
+            self.tree.reveal(&path);
+        } else {
+            self.status = Some(format!("could not write {}", path.display()));
+        }
+    }
+
+    // ----- project folders -------------------------------------------------
 
     fn set_root(&mut self, root: PathBuf) {
-        let root = root.canonicalize().unwrap_or(root);
-        self.tree = FileTree::new(root.clone());
+        let root = self.project.set_root(root);
+        self.tree.set_roots(self.project.roots().to_vec());
         self.search = Search::default();
         self.terminal.sessions.clear();
         self.settings.push_recent(&root);
         let _ = self.settings.save();
-        self.root = root;
     }
 
+    fn add_folder(&mut self, path: PathBuf) {
+        match self.project.add(path) {
+            Ok(added) => {
+                self.tree.set_roots(self.project.roots().to_vec());
+                self.tree.reveal(&added);
+                self.settings.push_recent(&added);
+                let _ = self.settings.save();
+                self.search.run(self.project.roots());
+            }
+            Err(message) => self.status = Some(message),
+        }
+    }
+
+    fn remove_folder(&mut self, path: &Path) {
+        match self.project.remove(path) {
+            Ok(()) => {
+                self.tree.set_roots(self.project.roots().to_vec());
+                self.search.run(self.project.roots());
+            }
+            Err(message) => self.status = Some(message),
+        }
+    }
 
     fn jump_to(&mut self, path: PathBuf, line: usize) {
         if let Some(loc) = self.editor.location() {
@@ -322,6 +492,12 @@ impl App {
                     self.status = None;
                 }
                 TreeEvent::Failed(message) => self.status = Some(message),
+                TreeEvent::AddFolder => {
+                    if let Some(path) = self.pick_folder("Add Folder to Project") {
+                        self.add_folder(path);
+                    }
+                }
+                TreeEvent::RemoveFolder(path) => self.remove_folder(&path),
             }
         }
     }
@@ -331,10 +507,10 @@ impl App {
             return;
         };
         let current = self.editor.location().map(|(p, _)| p);
-        let mut candidates = search::find_definitions(&self.root, &word);
+        let mut candidates = search::find_definitions(self.project.roots(), &word);
         let is_definition = !candidates.is_empty();
         if !is_definition {
-            candidates = search::find_references(&self.root, &word, 100);
+            candidates = search::find_references(self.project.roots(), &word, 100);
         }
         candidates.sort_by_key(|c| (Some(&c.path) != current.as_ref(), c.path.clone(), c.line));
         match candidates.len() {
@@ -385,7 +561,7 @@ impl App {
                         ..Default::default()
                     };
                     job.append(
-                        &format!("{}:{}  ", relative_path(&c.path, &self.root), c.line),
+                        &format!("{}:{}  ", self.project.display(&c.path), c.line),
                         0.0,
                         fmt(color(theme.ui.accent_light)),
                     );
@@ -507,121 +683,6 @@ impl App {
             });
         if let Some(command) = chosen {
             self.execute(ctx, command);
-        }
-    }
-
-    /// Text prompts for Open File..., Open Folder..., New File... and Save As...
-    fn text_prompt_modal(&mut self, ctx: &egui::Context) {
-        let Some((command, _, _)) = &self.text_prompt else {
-            return;
-        };
-        let command = *command;
-        let theme = self.theme().clone();
-        let title = match command {
-            Command::NewFile => "New file (path relative to the project)",
-            Command::OpenFile => "Open file (path relative to the project)",
-            Command::OpenFolder => "Open folder as project",
-            _ => "Save as (path relative to the project)",
-        };
-        let mut submit = false;
-        let mut cancel = false;
-        egui::Modal::new(egui::Id::new("text_prompt")).show(ctx, |ui| {
-            ui.set_width(460.0);
-            ui.label(
-                egui::RichText::new(title)
-                    .color(color(theme.ui.fg))
-                    .size(13.5),
-            );
-            ui.add_space(6.0);
-            let Some((_, input, focus)) = &mut self.text_prompt else {
-                return;
-            };
-            let resp = ui.add(
-                egui::TextEdit::singleline(input)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            );
-            if *focus {
-                resp.request_focus();
-                *focus = false;
-            }
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                submit = true;
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .button(egui::RichText::new("Cancel").color(color(theme.ui.fg)))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    cancel = true;
-                }
-                if ui
-                    .button(egui::RichText::new("OK").color(color(theme.ui.fg)))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    submit = true;
-                }
-            });
-        });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
-        }
-        if cancel {
-            self.text_prompt = None;
-            return;
-        }
-        if !submit {
-            return;
-        }
-        let (_, input, _) = self.text_prompt.take().unwrap();
-        let path = self.resolve(&input);
-        match command {
-            Command::NewFile => {
-                let (dir, name) = match path.parent().zip(path.file_name()) {
-                    Some((dir, name)) => (dir.to_path_buf(), name.to_string_lossy().into_owned()),
-                    None => (self.root.clone(), input.clone()),
-                };
-                match fs_ops::create_file(&dir, &name) {
-                    Ok(created) => self.editor.open(created),
-                    Err(e) => self.status = Some(format!("create failed: {e}")),
-                }
-            }
-            Command::OpenFile => {
-                if path.is_dir() {
-                    self.set_root(path);
-                } else if path.is_file() {
-                    self.editor.open(path);
-                } else {
-                    self.status = Some(format!("no such file: {}", path.display()));
-                }
-            }
-            Command::OpenFolder => {
-                if path.is_dir() {
-                    self.set_root(path);
-                } else {
-                    self.status = Some(format!("not a folder: {}", path.display()));
-                }
-            }
-            _ => {
-                if input.trim().is_empty() {
-                    return;
-                }
-                if let Some(buf) = self.editor.buffers.active_mut() {
-                    buf.path = path.clone();
-                    buf.extension = path
-                        .extension()
-                        .map(|e| e.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                }
-                if self.editor.buffers.save_active() {
-                    self.status = Some(format!("saved as {}", relative_path(&path, &self.root)));
-                } else {
-                    self.status = Some(format!("could not write {}", path.display()));
-                }
-            }
         }
     }
 
@@ -956,12 +1017,12 @@ impl App {
             });
 
         if rerun {
-            self.search.run(&self.root);
+            self.search.run(self.project.roots());
         } else {
-            self.search.run_if_changed(&self.root);
+            self.search.run_if_changed(self.project.roots());
         }
         if replace_all {
-            match self.search.replace_all(&self.root) {
+            match self.search.replace_all(self.project.roots()) {
                 Ok((count, files)) => {
                     self.reload_unmodified();
                     self.status = Some(format!("replaced {count} occurrence(s) in {files} file(s)"));
@@ -976,7 +1037,7 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for file in &self.search.results {
-                    let rel = relative_path(&file.path, &self.root);
+                    let rel = self.project.display(&file.path);
                     egui::CollapsingHeader::new(
                         egui::RichText::new(rel).color(color(theme.ui.fg)).size(12.5),
                     )
@@ -1045,6 +1106,9 @@ impl App {
     }
 
     /// The find bar above the editor, opened with Cmd+F.
+    /// Find in this file, drawn as the project search panel's form: a lit
+    /// heading over each field, both fields always present, and the counter and
+    /// the actions on one line under them.
     fn find_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         if !self.editor.find.open {
             return;
@@ -1053,57 +1117,86 @@ impl App {
         let mut step = 0isize;
         let mut replace_one = false;
         let mut replace_all = false;
+        let query_id = egui::Id::new("find_query");
+        let replace_id = egui::Id::new("find_replace");
 
         egui::Frame::default()
             .fill(color(theme.ui.status_bg))
-            .inner_margin(egui::Margin::symmetric(8, 6))
+            .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                ui.horizontal(|ui| {
-                    if disclosure_button(ui, theme, self.editor.find.replace_mode)
-                        .on_hover_text("Toggle Replace")
-                        .clicked()
-                    {
-                        self.editor.find.replace_mode = !self.editor.find.replace_mode;
-                    }
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.editor.find.query)
-                            .desired_width(260.0)
-                            .hint_text("Find")
-                            .font(egui::TextStyle::Body),
+                let heading = |ui: &mut egui::Ui, text: &str, focused: bool| {
+                    ui.label(
+                        egui::RichText::new(text).size(10.0).color(if focused {
+                            color(theme.ui.accent_light)
+                        } else {
+                            color(theme.ui.fg_faint)
+                        }),
                     );
-                    if std::mem::take(&mut self.editor.find.focus_pending) {
-                        resp.request_focus();
-                    }
-                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        step = 1;
-                        self.editor.find.focus_pending = true;
-                    }
+                };
 
-                    let toggle = |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
-                        let text = egui::RichText::new(label)
-                            .color(if *on {
-                                color(theme.ui.fg_bright)
-                            } else {
-                                color(theme.ui.fg_faint)
-                            })
-                            .size(11.0);
-                        if ui
-                            .add(egui::Button::new(text).fill(if *on {
-                                color(theme.ui.selected_bg)
-                            } else {
-                                egui::Color32::TRANSPARENT
-                            }))
-                            .on_hover_text(hint)
-                            .clicked()
-                        {
-                            *on = !*on;
-                        }
-                    };
-                    toggle(ui, &mut self.editor.find.case_sensitive, "Aa", "Match Case");
-                    toggle(ui, &mut self.editor.find.whole_word, "ab", "Match Whole Word");
-                    toggle(ui, &mut self.editor.find.regex, ".*", "Use Regular Expression");
+                // Heading row: FIND on the left, the option toggles at the
+                // right edge — the search panel's arrangement.
+                ui.horizontal(|ui| {
+                    heading(ui, "FIND", ui.memory(|m| m.has_focus(query_id)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let toggle =
+                            |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
+                                let text = egui::RichText::new(label)
+                                    .color(if *on {
+                                        color(theme.ui.fg_bright)
+                                    } else {
+                                        color(theme.ui.fg_faint)
+                                    })
+                                    .size(11.0);
+                                let button = egui::Button::new(text).frame(true).fill(if *on {
+                                    color(theme.ui.selected_bg)
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                });
+                                if ui
+                                    .add(button)
+                                    .on_hover_text(hint)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    *on = !*on;
+                                }
+                            };
+                        toggle(ui, &mut self.editor.find.regex, ".*", "Use Regular Expression");
+                        toggle(ui, &mut self.editor.find.whole_word, "ab", "Match Whole Word");
+                        toggle(ui, &mut self.editor.find.case_sensitive, "Aa", "Match Case");
+                    });
+                });
 
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.editor.find.query)
+                        .id(query_id)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(FIELD_HINT)
+                        .font(egui::TextStyle::Body),
+                );
+                if std::mem::take(&mut self.editor.find.focus_pending) {
+                    resp.request_focus();
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    step = 1;
+                    self.editor.find.focus_pending = true;
+                }
+
+                // A gap between each label-and-field pair, as in the panel.
+                ui.add_space(6.0);
+                heading(ui, "REPLACE", ui.memory(|m| m.has_focus(replace_id)));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.editor.find.replace)
+                        .id(replace_id)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(FIELD_HINT)
+                        .font(egui::TextStyle::Body),
+                );
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
                     let tone = if self.editor.find.error.is_some() {
                         theme.ui.danger
                     } else {
@@ -1114,33 +1207,9 @@ impl App {
                             .color(color(tone))
                             .size(11.0),
                     );
-                    if ui.button(egui::RichText::new("<").size(11.0)).clicked() {
-                        step = -1;
-                    }
-                    if ui.button(egui::RichText::new(">").size(11.0)).clicked() {
-                        step = 1;
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui::RichText::new("x").size(11.0)).clicked() {
+                        if ui.button(egui::RichText::new("×").size(11.0)).clicked() {
                             close = true;
-                        }
-                    });
-                });
-
-                if self.editor.find.replace_mode {
-                    ui.horizontal(|ui| {
-                        ui.add_space(18.0);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.editor.find.replace)
-                                .desired_width(260.0)
-                                .hint_text("Replace")
-                                .font(egui::TextStyle::Body),
-                        );
-                        if ui
-                            .button(egui::RichText::new("Replace").size(11.0))
-                            .clicked()
-                        {
-                            replace_one = true;
                         }
                         if ui
                             .button(egui::RichText::new("Replace All").size(11.0))
@@ -1148,8 +1217,20 @@ impl App {
                         {
                             replace_all = true;
                         }
+                        if ui
+                            .button(egui::RichText::new("Replace").size(11.0))
+                            .clicked()
+                        {
+                            replace_one = true;
+                        }
+                        if ui.button(egui::RichText::new(">").size(11.0)).clicked() {
+                            step = 1;
+                        }
+                        if ui.button(egui::RichText::new("<").size(11.0)).clicked() {
+                            step = -1;
+                        }
                     });
-                }
+                });
             });
 
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1274,7 +1355,7 @@ impl eframe::App for App {
                                 }
                                 SidebarView::Search => self.search_ui(ui, &theme),
                                 SidebarView::Git => {
-                                    open_from_git = self.git.ui(ui, &theme, &self.root);
+                                    open_from_git = self.git.ui(ui, &theme, &self.project.root_or_cwd());
                                 }
                             }
                         });
@@ -1297,7 +1378,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     if let Some(buf) = self.editor.buffers.active() {
-                        let path = relative_path(&buf.path, &self.root);
+                        let path = self.project.display(&buf.path);
                         let modified = buf.modified();
                         let resp = ui.label(
                             egui::RichText::new(path)
@@ -1370,7 +1451,7 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     // Panel header, matching the terminal frontend's: the
                     // label plus the session tab strip.
-                    let root = self.root.clone();
+                    let root = self.project.root_or_cwd();
                     let focused = self.terminal.focused;
                     egui::Frame::default()
                         .fill(color(theme.ui.status_bg))
@@ -1434,18 +1515,19 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| {
                 self.find_bar(ui, &theme);
-                let hint = self.empty_hint();
-                self.editor.ui(
-                    ui,
-                    &theme,
-                    &self.settings.indent,
-                    &self.settings.goto_modifiers.gui,
-                    &hint,
-                );
+                if self.editor.buffers.is_empty() {
+                    self.start_page(ui, &theme);
+                } else {
+                    self.editor.ui(
+                        ui,
+                        &theme,
+                        &self.settings.indent,
+                        &self.settings.goto_modifiers.gui,
+                    );
+                }
             });
 
         self.handle_goto();
-        self.text_prompt_modal(ctx);
         self.recent_modal(ctx);
         self.goto_modal(ctx);
         self.theme_modal(ctx);
@@ -1530,37 +1612,5 @@ fn nav_tab(
         rect.center().y - galley.size().y / 2.0,
     );
     ui.painter().galley(text_pos, galley, stroke_color);
-    resp
-}
-
-/// The little expand/collapse triangle in front of a replace field, painted
-/// like the navigator's disclosure marks.
-fn disclosure_button(ui: &mut egui::Ui, theme: &Theme, open: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    if ui.is_rect_visible(rect) {
-        let tone = if resp.hovered() {
-            color(theme.ui.fg)
-        } else {
-            color(theme.ui.fg_dim)
-        };
-        let c = rect.center();
-        let r = 3.4;
-        let pts = if open {
-            vec![
-                c + egui::vec2(-r, -r * 0.6),
-                c + egui::vec2(r, -r * 0.6),
-                c + egui::vec2(0.0, r * 0.8),
-            ]
-        } else {
-            vec![
-                c + egui::vec2(-r * 0.6, -r),
-                c + egui::vec2(-r * 0.6, r),
-                c + egui::vec2(r * 0.8, 0.0),
-            ]
-        };
-        ui.painter()
-            .add(egui::Shape::convex_polygon(pts, tone, egui::Stroke::NONE));
-    }
     resp
 }

@@ -82,6 +82,16 @@ impl Buffers {
         }
     }
 
+    /// Moves a tab to another position, keeping the active buffer active.
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        if from >= self.list.len() || to >= self.list.len() || from == to {
+            return;
+        }
+        let buf = self.list.remove(from);
+        self.list.insert(to, buf);
+        self.active = shift_index(self.active, from, to);
+    }
+
     pub fn close(&mut self, index: usize) {
         if index < self.list.len() {
             self.list.remove(index);
@@ -111,6 +121,19 @@ impl Buffers {
                 };
             }
         }
+    }
+}
+
+/// Where an index ends up after the item at `from` moves to `to`.
+pub fn shift_index(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < index && index <= to {
+        index - 1
+    } else if to <= index && index < from {
+        index + 1
+    } else {
+        index
     }
 }
 
@@ -145,4 +168,23 @@ pub fn word_at(text: &str, idx: usize) -> Option<(String, usize, usize)> {
         return None;
     }
     Some((word, start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moved_tab_takes_the_selection_with_it() {
+        // Dragging the active tab right: it is still the active one.
+        assert_eq!(shift_index(0, 0, 2), 2);
+        // Tabs it stepped over shift back by one.
+        assert_eq!(shift_index(1, 0, 2), 0);
+        assert_eq!(shift_index(2, 0, 2), 1);
+        // Dragging left pushes the ones it passes to the right.
+        assert_eq!(shift_index(1, 3, 1), 2);
+        assert_eq!(shift_index(3, 3, 1), 1);
+        // Anything outside the moved range stays put.
+        assert_eq!(shift_index(4, 0, 2), 4);
+    }
 }

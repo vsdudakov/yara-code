@@ -13,6 +13,8 @@ pub enum MenuItem {
     Rename,
     Move,
     Delete,
+    /// Drops a folder from the project, leaving it on disk.
+    RemoveFolder,
     /// An entry of the File menu, carrying the command it runs.
     Command(Command),
 }
@@ -27,13 +29,14 @@ impl MenuItem {
             Self::Rename => "Rename",
             Self::Move => "Move To...",
             Self::Delete => "Delete",
+            Self::RemoveFolder => "Remove Folder from Project",
         }
     }
 
     /// Items after which a separator is drawn. File-menu entries carry their
     /// own separators, so only the navigator items answer here.
     fn ends_group(&self) -> bool {
-        matches!(self, Self::Open | Self::NewDir | Self::Move)
+        matches!(self, Self::Open | Self::NewDir | Self::Move | Self::Delete)
     }
 }
 
@@ -52,17 +55,27 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn for_row(target: Option<PathBuf>, is_dir: bool, dir: PathBuf, x: u16, y: u16) -> Self {
-        let items = match &target {
-            None => vec![MenuItem::NewFile, MenuItem::NewDir],
-            Some(_) if is_dir => vec![
+    /// `dir` is where new entries would go — `None` when no folder is open at
+    /// all, which leaves adding one as the only thing the menu can offer.
+    pub fn for_row(
+        target: Option<PathBuf>,
+        is_dir: bool,
+        is_root: bool,
+        dir: Option<PathBuf>,
+        x: u16,
+        y: u16,
+    ) -> Self {
+        let mut items = match (&target, &dir) {
+            (None, None) => Vec::new(),
+            (None, Some(_)) => vec![MenuItem::NewFile, MenuItem::NewDir],
+            (Some(_), _) if is_dir => vec![
                 MenuItem::NewFile,
                 MenuItem::NewDir,
                 MenuItem::Rename,
                 MenuItem::Move,
                 MenuItem::Delete,
             ],
-            Some(_) => vec![
+            (Some(_), _) => vec![
                 MenuItem::Open,
                 MenuItem::NewFile,
                 MenuItem::NewDir,
@@ -71,6 +84,19 @@ impl Menu {
                 MenuItem::Delete,
             ],
         };
+        // A project folder is not a plain directory: it can be renamed or
+        // deleted on disk, and it can also just leave the project.
+        if is_root {
+            items.retain(|item| {
+                !matches!(
+                    item,
+                    MenuItem::Rename | MenuItem::Move | MenuItem::Delete
+                )
+            });
+            items.push(MenuItem::RemoveFolder);
+        }
+        items.push(MenuItem::Command(Command::AddFolder));
+        let dir = dir.unwrap_or_default();
         let mut rows = Vec::new();
         for (i, item) in items.iter().enumerate() {
             rows.push(Some(*item));

@@ -25,7 +25,7 @@ required-features = ["tui"]
 
 [features]
 default = ["gui", "tui"]
-gui = ["pty", "dep:eframe", "dep:egui"]
+gui = ["pty", "dep:eframe", "dep:egui", "dep:rfd"]
 tui = ["pty", "dep:ratatui", "dep:crossterm"]
 # A real shell on a pseudo-terminal, used by both frontends.
 pty = ["dep:portable-pty", "dep:vt100"]
@@ -44,6 +44,8 @@ vt100 = { version = "0.15", optional = true }
 # GUI only.
 eframe = { version = "0.31", features = ["wgpu"], optional = true }
 egui = { version = "0.31", optional = true }
+# Native Open/Save dialogs: Finder on macOS, Explorer on Windows.
+rfd = { version = "0.15", optional = true }
 
 # TUI only.
 ratatui = { version = "0.29", optional = true }

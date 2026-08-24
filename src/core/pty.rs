@@ -128,12 +128,48 @@ impl Drop for Pty {
 #[derive(Default)]
 pub struct Terminals {
     list: Vec<Pty>,
+    /// Per-session tab name; empty means "unnamed", drawn as its position.
+    names: Vec<String>,
     active: usize,
     /// Why the last attempt to open a shell failed.
     pub error: Option<String>,
 }
 
 impl Terminals {
+    /// What the tab strip shows: the name the user gave the session, or its
+    /// position when it has none.
+    pub fn name(&self, index: usize) -> String {
+        match self.names.get(index) {
+            Some(name) if !name.is_empty() => name.clone(),
+            _ => (index + 1).to_string(),
+        }
+    }
+
+    /// True when this session carries a name of its own.
+    pub fn is_named(&self, index: usize) -> bool {
+        self.names.get(index).is_some_and(|name| !name.is_empty())
+    }
+
+    /// Renames a session; an empty name puts it back to its position.
+    pub fn rename(&mut self, index: usize, name: &str) {
+        if let Some(slot) = self.names.get_mut(index) {
+            *slot = name.trim().to_string();
+        }
+    }
+
+    /// Moves a session to another position in the strip, keeping the active
+    /// session active wherever it lands.
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        if from >= self.list.len() || to >= self.list.len() || from == to {
+            return;
+        }
+        let pty = self.list.remove(from);
+        let name = self.names.remove(from);
+        self.list.insert(to, pty);
+        self.names.insert(to, name);
+        self.active = crate::core::buffer::shift_index(self.active, from, to);
+    }
+
     pub fn len(&self) -> usize {
         self.list.len()
     }
@@ -168,6 +204,7 @@ impl Terminals {
         match Pty::new(cwd, notify) {
             Ok(pty) => {
                 self.list.push(pty);
+                self.names.push(String::new());
                 self.active = self.list.len() - 1;
                 self.error = None;
             }
@@ -193,6 +230,7 @@ impl Terminals {
             return;
         }
         self.list.remove(index);
+        self.names.remove(index);
         // Keep pointing at the same session when an earlier tab goes away.
         if index < self.active {
             self.active -= 1;
@@ -209,6 +247,7 @@ impl Terminals {
     /// Drops every session, e.g. when the project changes.
     pub fn clear(&mut self) {
         self.list.clear();
+        self.names.clear();
         self.active = 0;
         self.error = None;
     }

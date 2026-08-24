@@ -162,7 +162,7 @@ impl Search {
 
     /// Re-runs the search when the query, the options or the exclude list
     /// changed. The replacement text alone never triggers a re-search.
-    pub fn run_if_changed(&mut self, root: &Path) {
+    pub fn run_if_changed(&mut self, roots: &[PathBuf]) {
         let key = Key {
             query: self.query.clone(),
             exclude: self.exclude.clone(),
@@ -174,11 +174,11 @@ impl Search {
             return;
         }
         self.ran = Some(key);
-        self.run(root);
+        self.run(roots);
     }
 
     /// Runs the search unconditionally, e.g. after files changed on disk.
-    pub fn run(&mut self, root: &Path) {
+    pub fn run(&mut self, roots: &[PathBuf]) {
         self.results.clear();
         self.truncated = false;
         self.error = None;
@@ -196,7 +196,7 @@ impl Search {
         let mut total = 0usize;
         let mut results = Vec::new();
         let mut truncated = false;
-        walk(root, root, &excludes, &mut |path, text| {
+        let mut visit = |path: &Path, text: &str| {
             let mut matches = Vec::new();
             for (i, line) in text.lines().enumerate() {
                 if total >= MAX_MATCHES {
@@ -215,14 +215,17 @@ impl Search {
                 });
             }
             total < MAX_MATCHES
-        });
+        };
+        for root in roots {
+            walk(root, root, &excludes, &mut visit);
+        }
         self.results = results;
         self.truncated = truncated || total >= MAX_MATCHES;
     }
 
     /// Rewrites every match in the current results. Returns how many matches
     /// were replaced in how many files, or why it could not run.
-    pub fn replace_all(&mut self, root: &Path) -> Result<(usize, usize), String> {
+    pub fn replace_all(&mut self, roots: &[PathBuf]) -> Result<(usize, usize), String> {
         if self.query.is_empty() {
             return Err("nothing to replace".into());
         }
@@ -252,7 +255,7 @@ impl Search {
                 count += hits;
             }
         }
-        self.run(root);
+        self.run(roots);
         Ok((count, files))
     }
 }
@@ -386,9 +389,9 @@ fn clip_line(line: &str) -> String {
     }
 }
 
-pub fn find_definitions(root: &Path, word: &str) -> Vec<Candidate> {
+pub fn find_definitions(roots: &[PathBuf], word: &str) -> Vec<Candidate> {
     let mut out = Vec::new();
-    walk(root, root, &[], &mut |path, text| {
+    let mut visit = |path: &Path, text: &str| {
         for (i, line) in text.lines().enumerate() {
             if line.contains(word) && is_definition_line(line, word) {
                 out.push(Candidate {
@@ -399,13 +402,16 @@ pub fn find_definitions(root: &Path, word: &str) -> Vec<Candidate> {
             }
         }
         out.len() < 50
-    });
+    };
+    for root in roots {
+        walk(root, root, &[], &mut visit);
+    }
     out
 }
 
-pub fn find_references(root: &Path, word: &str, cap: usize) -> Vec<Candidate> {
+pub fn find_references(roots: &[PathBuf], word: &str, cap: usize) -> Vec<Candidate> {
     let mut out = Vec::new();
-    walk(root, root, &[], &mut |path, text| {
+    let mut visit = |path: &Path, text: &str| {
         for (i, line) in text.lines().enumerate() {
             if line.contains(word) && word_occurrences(line, word).next().is_some() {
                 out.push(Candidate {
@@ -419,7 +425,10 @@ pub fn find_references(root: &Path, word: &str, cap: usize) -> Vec<Candidate> {
             }
         }
         true
-    });
+    };
+    for root in roots {
+        walk(root, root, &[], &mut visit);
+    }
     out
 }
 
@@ -440,7 +449,7 @@ mod tests {
     fn search(root: &Path, build: impl FnOnce(&mut Search)) -> Search {
         let mut s = Search::default();
         build(&mut s);
-        s.run(root);
+        s.run(&[root.to_path_buf()]);
         s
     }
 
@@ -509,7 +518,7 @@ mod tests {
             s.whole_word = true;
             s.replace = "sum".into();
         });
-        let (count, files) = s.replace_all(&root).unwrap();
+        let (count, files) = s.replace_all(std::slice::from_ref(&root)).unwrap();
         assert_eq!((count, files), (2, 2));
         let a = std::fs::read_to_string(root.join("src/a.rs")).unwrap();
         assert_eq!(a, "let sum = 1;\nlet TOTAL = 2;\n");
@@ -524,7 +533,7 @@ mod tests {
             s.query = "subtotal".into();
             s.replace = "$1x".into();
         });
-        s.replace_all(&root).unwrap();
+        s.replace_all(std::slice::from_ref(&root)).unwrap();
         let b = std::fs::read_to_string(root.join("src/b.rs")).unwrap();
         assert_eq!(b, "let $1x = 3;\n");
     }
@@ -537,7 +546,7 @@ mod tests {
             s.regex = true;
             s.replace = "const $1 = 3;".into();
         });
-        s.replace_all(&root).unwrap();
+        s.replace_all(std::slice::from_ref(&root)).unwrap();
         let b = std::fs::read_to_string(root.join("src/b.rs")).unwrap();
         assert_eq!(b, "const subtotal = 3;\n");
     }

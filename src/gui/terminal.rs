@@ -79,7 +79,7 @@ impl Terminal {
                 ui.painter().rect_stroke(
                     rect,
                     egui::CornerRadius::same(2),
-                    egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                    egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -280,7 +280,7 @@ impl Terminal {
                     painter.rect_stroke(
                         cursor_rect,
                         egui::CornerRadius::ZERO,
-                        egui::Stroke::new(1.0, color(theme.ui.cursor)),
+                        egui::Stroke::new(1.0_f32, color(theme.ui.cursor)),
                         egui::StrokeKind::Inside,
                     );
                 }
@@ -307,7 +307,7 @@ fn mark_button(ui: &mut egui::Ui, theme: &Theme, mark: Mark, size: f32) -> egui:
         }
         let r = size * 0.28;
         let c = rect.center();
-        let stroke = egui::Stroke::new(1.3, stroke_color);
+        let stroke = egui::Stroke::new(1.3_f32, stroke_color);
         match mark {
             Mark::Cross => {
                 ui.painter()
@@ -414,7 +414,7 @@ fn cell_format(
         background: bg,
         italics: cell.italic(),
         underline: if cell.underline() {
-            egui::Stroke::new(1.0, fg)
+            egui::Stroke::new(1.0_f32, fg)
         } else {
             egui::Stroke::NONE
         },

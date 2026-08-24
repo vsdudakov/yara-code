@@ -1904,7 +1904,7 @@ fn nav_tab(
             color(theme.ui.hover_bg),
         );
     }
-    let stroke = egui::Stroke::new(1.2, stroke_color);
+    let stroke = egui::Stroke::new(1.2_f32, stroke_color);
     let c = egui::pos2(rect.min.x + 6.0 + icon_w / 2.0, rect.center().y);
     let p = ui.painter();
     match view {

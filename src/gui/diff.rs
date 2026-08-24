@@ -167,7 +167,7 @@ impl DiffView {
                             egui::pos2(rect.min.x + half, rect.min.y),
                             egui::pos2(rect.min.x + half, rect.max.y),
                         ],
-                        egui::Stroke::new(1.0, color(theme.ui.border)),
+                        egui::Stroke::new(1.0_f32, color(theme.ui.border)),
                     );
                 }
             });

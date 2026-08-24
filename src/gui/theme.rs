@@ -63,11 +63,11 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
     v.extreme_bg_color = color(ui.editor_bg);
     v.selection.bg_fill = color(ui.selection);
     v.selection.stroke = egui::Stroke::NONE;
-    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, color(ui.border));
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, color(ui.fg_dim));
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, color(ui.border));
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, color(ui.fg_dim));
     v.widgets.inactive.bg_fill = Color32::TRANSPARENT;
     v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, color(ui.fg_dim));
+    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, color(ui.fg_dim));
     v.widgets.hovered.bg_fill = color(ui.hover_bg);
     v.widgets.hovered.weak_bg_fill = color(ui.hover_bg);
     v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
@@ -76,8 +76,8 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
     v.widgets.active.bg_stroke = egui::Stroke::NONE;
     // Panel splitters take their color from these strokes: a soft accent on
     // hover, brighter while dragging — never a hard white line.
-    v.widgets.hovered.fg_stroke = egui::Stroke::new(2.0, color(ui.accent));
-    v.widgets.active.fg_stroke = egui::Stroke::new(2.0, color(ui.accent_light));
+    v.widgets.hovered.fg_stroke = egui::Stroke::new(2.0_f32, color(ui.accent));
+    v.widgets.active.fg_stroke = egui::Stroke::new(2.0_f32, color(ui.accent_light));
 
     style.spacing.item_spacing = egui::vec2(6.0, 2.0);
     style.spacing.button_padding = egui::vec2(6.0, 2.0);

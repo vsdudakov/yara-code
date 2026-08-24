@@ -234,7 +234,7 @@ impl FileTree {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
                 egui::CornerRadius::ZERO,
-                egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -683,7 +683,7 @@ fn file_glyph(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32)
     painter.rect_stroke(
         egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0)),
         egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.0, color),
+        egui::Stroke::new(1.0_f32, color),
         egui::StrokeKind::Inside,
     );
 }

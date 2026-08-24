@@ -372,7 +372,7 @@ impl Editor {
                         } else {
                             let r = 3.2;
                             let c = icon_rect.center();
-                            let stroke = egui::Stroke::new(1.3, mark);
+                            let stroke = egui::Stroke::new(1.3_f32, mark);
                             ui.painter().line_segment(
                                 [c + egui::vec2(-r, -r), c + egui::vec2(r, r)],
                                 stroke,
@@ -399,7 +399,7 @@ impl Editor {
                     ui.painter().rect_stroke(
                         tab.response.rect,
                         egui::CornerRadius::ZERO,
-                        egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                        egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
                         egui::StrokeKind::Inside,
                     );
                 }
@@ -480,7 +480,7 @@ impl Editor {
                     };
                     let r = 3.2;
                     let c = icon_rect.center();
-                    let stroke = egui::Stroke::new(1.3, mark);
+                    let stroke = egui::Stroke::new(1.3_f32, mark);
                     ui.painter()
                         .line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
                     ui.painter()
@@ -812,7 +812,7 @@ impl Editor {
                                     ui.painter().hline(
                                         a.left()..=b.left(),
                                         b.bottom() - 1.0,
-                                        egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                                        egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
                                     );
                                 }
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -901,7 +901,7 @@ impl Editor {
         painter.hline(
             band.x_range(),
             band.max.y,
-            egui::Stroke::new(1.0, color(theme.ui.border)),
+            egui::Stroke::new(1.0_f32, color(theme.ui.border)),
         );
         let text = self
             .buffers

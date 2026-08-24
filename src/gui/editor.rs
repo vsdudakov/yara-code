@@ -118,6 +118,18 @@ impl Editor {
         index
     }
 
+    /// Re-runs the search on the open buffer — after the query or an option
+    /// changed — and lands on the match nearest the cursor.
+    pub fn refresh_find(&mut self) {
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return;
+        };
+        self.find.refresh(&text);
+        let cursor = self.cursor_char_index();
+        self.find.select_near(cursor);
+        self.reveal_current_hit();
+    }
+
     /// Moves to the next or previous match and selects it.
     pub fn find_step(&mut self, delta: isize) {
         let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {

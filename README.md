@@ -8,7 +8,7 @@ GPU window that mirror each other, in one small Rust binary.**
 [![CI](https://github.com/vsdudakov/yara-code/actions/workflows/ci.yml/badge.svg)](https://github.com/vsdudakov/yara-code/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/vsdudakov/yara-code?sort=semver)](https://github.com/vsdudakov/yara-code/releases)
 [![Docs](https://img.shields.io/badge/docs-vsdudakov.github.io%2Fyara--code-blue.svg)](https://vsdudakov.github.io/yara-code/)
-[![Coverage](https://img.shields.io/badge/core%20coverage-92%25-brightgreen.svg)](#development)
+[![Coverage](https://img.shields.io/badge/coverage-78%25-green.svg)](#development)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -138,14 +138,14 @@ make build     # release build of both binaries
 make run ARGS=~/code/project
 ```
 
-**Coverage.** 194 tests, **92% of `src/core`** — the shared logic: buffers and
-undo, project folders, search, find and replace, diffs, git (against a real
-repository), themes, settings and key chords, the updater, and the terminal
-session bookkeeping over live PTYs. CI fails under 90% there. The drawing code
-in `src/gui` and `src/tui` needs a window or a terminal to exercise, so it is
-measured (38% of the crate overall) but not gated; its pure parts — the tree
-model, the menus, key translation, the theme bridges — are covered like the
-core.
+**Coverage.** 242 tests, **78% of the crate**: 92% of `src/core` — buffers
+and undo, project folders, search, find and replace, diffs, git against a real
+repository, themes, settings and key chords, the updater, terminal sessions
+over live PTYs — and the two frontends driven **end to end**. `tests/tui_e2e.rs`
+runs the real terminal editor on ratatui's test backend and reads the frame
+back; `tests/gui_e2e.rs` runs the real window on a bare egui context with
+synthetic keys and clicks. Between them they cover 94% of the terminal's
+drawing and 61% of the window's. CI gates `src/core` at 90%.
 
 Pull requests must pass `make lint` and `make test`; CI runs them on Linux,
 macOS and Windows, and separately builds the terminal frontend with no graphics

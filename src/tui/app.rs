@@ -44,7 +44,7 @@ pub enum Splitter {
     Shell,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Focus {
     Tree,
     Editor,
@@ -2314,7 +2314,7 @@ impl App {
             MenuBar::View => (VIEW_MENU, None),
             MenuBar::Help => (
                 HELP_MENU,
-                Some(format!("Yara {}", env!("CARGO_PKG_VERSION"))),
+                Some(format!("Yara Code {}", env!("CARGO_PKG_VERSION"))),
             ),
         };
         self.menu = Some(Menu::commands(

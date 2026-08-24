@@ -26,7 +26,7 @@ impl Project {
         let path = path.canonicalize().unwrap_or(path);
         // Settings the editor writes — the theme it was switched to, the
         // recent list — land here, never in the user's own config.
-        let config = path.join(".config");
+        let config = path.with_extension("config");
         std::fs::create_dir_all(&config).unwrap();
         std::env::set_var("YARA_CONFIG_DIR", &config);
         let project = Self(path);
@@ -114,13 +114,18 @@ impl Harness {
     }
 
     fn click(&mut self, at: Pos2) {
+        // Hover on one frame, press on the next, release on the one after:
+        // that is how a real click arrives, and egui's buttons and menus only
+        // answer a press on a widget that was already hovered.
         self.events.push(Event::PointerMoved(at));
+        self.frame();
         self.events.push(Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Modifiers::NONE,
         });
+        self.frame();
         self.events.push(Event::PointerButton {
             pos: at,
             button: egui::PointerButton::Primary,
@@ -146,10 +151,13 @@ impl Harness {
     }
 
     /// The middle of a piece of text on screen — where a user would click it.
+    /// An exact match wins over a longer string that merely contains it, so a
+    /// file name finds its navigator row rather than the status bar's path.
     fn position_of(&self, text: &str) -> Option<Pos2> {
         self.text
             .iter()
-            .find(|(drawn, _)| drawn.contains(text))
+            .find(|(drawn, _)| drawn == text)
+            .or_else(|| self.text.iter().find(|(drawn, _)| drawn.contains(text)))
             .map(|(drawn, pos)| {
                 // The position is the galley's corner; aim a little inside it.
                 Pos2::new(pos.x + drawn.len().min(6) as f32 * 3.0, pos.y + 7.0)
@@ -270,4 +278,169 @@ fn clicking_a_file_in_the_navigator_opens_it() {
         "{}",
         harness.screen()
     );
+}
+
+impl Harness {
+    fn type_text(&mut self, text: &str) {
+        self.events.push(Event::Text(text.to_string()));
+        self.frame();
+        self.frame();
+    }
+}
+
+#[test]
+fn find_and_replace_in_the_open_file_works_through_the_bar() {
+    let project = Project::new("yara-gui-e2e-find");
+    project.file("many.txt", "one\none\none\n");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("many.txt").unwrap();
+    harness.click(at);
+
+    harness.press(Key::F, Modifiers::COMMAND);
+    assert!(
+        harness.shows("FIND") && harness.shows("REPLACE"),
+        "{}",
+        harness.screen()
+    );
+    harness.type_text("one");
+    assert!(harness.shows("1 of 3"), "{}", harness.screen());
+    // Next and previous match.
+    harness.press(Key::G, Modifiers::COMMAND);
+    assert!(harness.shows("2 of 3"), "{}", harness.screen());
+    harness.press(Key::G, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert!(harness.shows("1 of 3"), "{}", harness.screen());
+    // Escape closes the bar.
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!harness.shows("REPLACE"), "{}", harness.screen());
+}
+
+#[test]
+fn undo_redo_and_folding_answer_their_keys_in_the_window() {
+    let project = Project::new("yara-gui-e2e-edit");
+    project.file(
+        "deep.py",
+        "def outer():\n    first = 1\n    second = 2\n\nprint(outer())\n",
+    );
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("deep.py").unwrap();
+    harness.click(at);
+    assert!(harness.shows("first = 1"), "{}", harness.screen());
+
+    harness.press(Key::Num0, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(
+        !harness.shows("first = 1"),
+        "fold all: {}",
+        harness.screen()
+    );
+    harness.press(Key::Num9, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(
+        harness.shows("first = 1"),
+        "unfold all: {}",
+        harness.screen()
+    );
+
+    // Undo and redo with nothing to undo report, rather than fail.
+    harness.press(Key::Z, Modifiers::COMMAND);
+    assert!(harness.shows("nothing to undo"), "{}", harness.screen());
+    harness.press(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert!(harness.shows("nothing to redo"), "{}", harness.screen());
+}
+
+#[test]
+fn the_git_panel_opens_a_diff_tab_in_the_window() {
+    let project = Project::new("yara-gui-e2e-git");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@e.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "First"]);
+    project.file("README.md", "# Title\nChanged.\n");
+
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::G, Modifiers::CTRL | Modifiers::SHIFT);
+    assert!(harness.shows("REPOSITORY"), "{}", harness.screen());
+    assert!(harness.shows("README.md"), "the change is listed");
+    // Click the change: a diff tab opens with both versions.
+    let at = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.contains("README.md") && !t.contains("×"))
+        .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
+        .unwrap();
+    harness.click(at);
+    assert!(harness.shows("Changed."), "{}", harness.screen());
+    assert!(
+        harness.shows("A line of prose."),
+        "the old side: {}",
+        harness.screen()
+    );
+    assert!(harness.shows("Open File"), "{}", harness.screen());
+}
+
+#[test]
+fn the_help_menu_names_the_version_and_offers_the_update_check() {
+    let project = Project::new("yara-gui-e2e-menus");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("Help").unwrap();
+    harness.click(at);
+    assert!(harness.shows("Yara Code 0."), "{}", harness.screen());
+    assert!(
+        harness.shows("Check for Updates..."),
+        "{}",
+        harness.screen()
+    );
+    assert!(harness.shows("Documentation"), "{}", harness.screen());
+    // Escape closes it.
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(
+        !harness.shows("Check for Updates..."),
+        "{}",
+        harness.screen()
+    );
+}
+
+#[test]
+fn the_recent_projects_modal_lists_the_folder_we_opened() {
+    let project = Project::new("yara-gui-e2e-recent");
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::R, Modifiers::COMMAND);
+    assert!(harness.shows("Recent projects"), "{}", harness.screen());
+    let name = project
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert!(harness.shows(&name), "{}", harness.screen());
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!harness.shows("Recent projects"));
+}
+
+#[test]
+fn a_file_saves_from_the_window() {
+    let project = Project::new("yara-gui-e2e-save");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    // Nothing to save yet is reported, not an error.
+    harness.press(Key::S, Modifiers::COMMAND);
+    harness.press(Key::S, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(
+        harness.shows("saved") || harness.shows("nothing"),
+        "{}",
+        harness.screen()
+    );
+    // Closing the only tab returns to the start page.
+    harness.press(Key::W, Modifiers::COMMAND);
+    assert!(harness.shows("PROJECT"), "{}", harness.screen());
 }

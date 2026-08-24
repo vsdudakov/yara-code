@@ -927,7 +927,7 @@ impl App {
                         (
                             "Help",
                             HELP_MENU,
-                            Some(format!("Yara {}", env!("CARGO_PKG_VERSION"))),
+                            Some(format!("Yara Code {}", env!("CARGO_PKG_VERSION"))),
                         ),
                     ];
                     for (title, entries, note) in menus {
@@ -980,9 +980,12 @@ impl App {
         egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
             ui.set_width(460.0);
             ui.label(
-                egui::RichText::new(format!("Yara {} — key bindings", env!("CARGO_PKG_VERSION")))
-                    .color(color(theme.ui.fg))
-                    .size(13.5),
+                egui::RichText::new(format!(
+                    "Yara Code {} — key bindings",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .color(color(theme.ui.fg))
+                .size(13.5),
             );
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
@@ -1449,6 +1452,8 @@ impl App {
         let mut step = 0isize;
         let mut replace_one = false;
         let mut replace_all = false;
+        // Typing in the query, or flipping an option, changes what matches.
+        let mut refresh = false;
         let query_id = egui::Id::new("find_query");
         let replace_id = egui::Id::new("find_replace");
 
@@ -1523,6 +1528,9 @@ impl App {
                 if std::mem::take(&mut self.editor.find.focus_pending) {
                     resp.request_focus();
                 }
+                if resp.changed() {
+                    refresh = true;
+                }
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     step = 1;
                     self.editor.find.focus_pending = true;
@@ -1584,6 +1592,9 @@ impl App {
         }
         if close {
             self.editor.find.open = false;
+        }
+        if refresh {
+            self.editor.refresh_find();
         }
         if step != 0 {
             self.editor.find_step(step);

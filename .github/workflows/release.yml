@@ -27,10 +27,13 @@ jobs:
           # SDK that is already there.
           - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
           - { os: macos-latest, target: x86_64-apple-darwin, archive: tar.gz }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz }
-          # Linux on arm64 builds natively on GitHub's arm runner: a Raspberry
-          # Pi, a Graviton box or an NVIDIA DGX Spark all take this one.
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
+          # Linux builds on the oldest runner GitHub still offers, because a
+          # binary links the glibc it was built against and refuses anything
+          # older: 22.04's 2.35 runs on Debian bookworm and everything since.
+          # arm64 builds natively on the arm runner — a Raspberry Pi, a
+          # Graviton box or an NVIDIA DGX Spark all take that one.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, archive: tar.gz }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     steps:
       - uses: actions/checkout@v5
@@ -82,8 +85,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, arch: amd64 }
-          - { os: ubuntu-24.04-arm, arch: arm64 }
+          - { os: ubuntu-22.04, arch: amd64 }
+          - { os: ubuntu-22.04-arm, arch: arm64 }
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

@@ -565,3 +565,30 @@ fn the_terminal_opens_a_second_session_and_takes_typing() {
     harness.press(Key::W, Modifiers::COMMAND | Modifiers::ALT);
     harness.frame();
 }
+
+#[test]
+fn escape_closes_one_thing_at_a_time() {
+    let project = Project::new("yara-gui-e2e-escape");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::F, Modifiers::COMMAND);
+    assert!(harness.shows("REPLACE"), "{}", harness.screen());
+    // A modal over the find bar: Escape takes the modal, not the bar with it.
+    harness.press(Key::T, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert!(harness.shows("Monokai"), "{}", harness.screen());
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(
+        !harness.shows("Monokai"),
+        "the picker closed: {}",
+        harness.screen()
+    );
+    assert!(
+        harness.shows("REPLACE"),
+        "the find bar survived: {}",
+        harness.screen()
+    );
+    // A second Escape, with nothing above it, closes the bar.
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!harness.shows("REPLACE"), "{}", harness.screen());
+}

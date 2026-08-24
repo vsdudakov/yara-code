@@ -637,6 +637,17 @@ impl App {
         };
     }
 
+    /// Whether anything is layered over the editor — a picker, a
+    /// confirmation, the bindings overlay — and so owns the next Escape.
+    fn modal_open(&self) -> bool {
+        self.show_theme_picker
+            || self.show_recent
+            || self.show_help
+            || self.goto_picker.is_some()
+            || self.pending_delete.is_some()
+            || self.editor.pending_close.is_some()
+    }
+
     /// Picks up an update check that has finished.
     fn collect_update(&mut self) {
         let Some(answer) = self.updates.take() else {
@@ -843,7 +854,7 @@ impl App {
         if let Some((path, line)) = chosen {
             self.jump_to(path, line);
             self.goto_picker = None;
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.goto_picker = None;
         }
     }
@@ -894,7 +905,7 @@ impl App {
         if let Some(i) = chosen {
             self.set_theme(ctx, i);
             self.show_theme_picker = false;
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.show_theme_picker = false;
         }
     }
@@ -1022,7 +1033,7 @@ impl App {
                 self.show_help = false;
             }
         });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.show_help = false;
         }
     }
@@ -1061,7 +1072,7 @@ impl App {
                 self.status = Some(format!("gone: {}", path.display()));
             }
             self.show_recent = false;
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.show_recent = false;
         }
     }
@@ -1129,7 +1140,7 @@ impl App {
         if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
             choice = Some(Choice::Save);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             choice = Some(Choice::Cancel);
         }
         match choice {
@@ -1201,7 +1212,7 @@ impl App {
                 });
             });
         });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.pending_delete = None;
         }
     }
@@ -1587,7 +1598,11 @@ impl App {
                 });
             });
 
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // The modals are drawn after this bar, so they would never see an
+        // Escape it took. Whatever is layered on top gets first refusal.
+        if !self.modal_open()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             close = true;
         }
         if close {

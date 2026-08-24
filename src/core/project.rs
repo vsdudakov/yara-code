@@ -178,22 +178,32 @@ mod tests {
         assert!(!project.is_multi_root());
     }
 
+    /// The path as this platform writes it — Windows separates with `\`.
+    fn shown(parts: &[&str]) -> String {
+        parts
+            .iter()
+            .fold(PathBuf::new(), |path, part| path.join(part))
+            .display()
+            .to_string()
+    }
+
     #[test]
     fn added_folders_show_their_name_in_paths() {
         let root = temp_dir("a");
         let other = temp_dir("b");
+        let file = |dir: &PathBuf| dir.join("src").join("main.rs");
         let mut project = Project::new(root.clone());
-        assert_eq!(project.display(&root.join("src/main.rs")), "src/main.rs");
+        assert_eq!(project.display(&file(&root)), shown(&["src", "main.rs"]));
         project.add(other.clone()).unwrap();
         assert!(project.is_multi_root());
         assert_eq!(
-            project.display(&other.join("src/main.rs")),
-            "yara-project-b/src/main.rs"
+            project.display(&file(&other)),
+            shown(&["yara-project-b", "src", "main.rs"])
         );
         // The primary root is prefixed too, so the two never read alike.
         assert_eq!(
-            project.display(&root.join("src/main.rs")),
-            "yara-project-a/src/main.rs"
+            project.display(&file(&root)),
+            shown(&["yara-project-a", "src", "main.rs"])
         );
     }
 

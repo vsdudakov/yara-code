@@ -650,9 +650,13 @@ mod tests {
         terminals.open(dir.path(), || {});
         let pty = terminals.active_mut().expect("a shell started");
         pty.resize(24, 80);
-        pty.write(b"echo yara-selection-marker\n");
+        // Carriage return, not newline: that is what Enter sends, on ConPTY
+        // as much as on a Unix pty, where the line discipline turns it into
+        // the newline the shell reads. A bare newline is not Enter to cmd.exe.
+        pty.write(b"echo yara-selection-marker\r");
         let mut row = None;
-        for _ in 0..40 {
+        // A shell on a CI runner can take seconds to start; wait up to ten.
+        for _ in 0..200 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             // The echoed line, not the one that was typed at the prompt.
             row = pty.with_screen(|screen| {
@@ -744,11 +748,11 @@ mod tests {
         pty.resize(0, 0);
         assert_eq!(pty.size(), (30, 100));
 
-        pty.write(b"echo yara-pty-marker\n");
+        pty.write(b"echo yara-pty-marker\r");
         pty.write(b"");
         // The shell answers on its own schedule; give it a moment.
         let mut seen = false;
-        for _ in 0..40 {
+        for _ in 0..200 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             seen = pty.with_screen(|screen| screen.contents().contains("yara-pty-marker"));
             if seen {

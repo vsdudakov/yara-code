@@ -9,7 +9,8 @@
 //!
 //! Pasting goes the other way: a terminal program cannot read the clipboard
 //! itself, so the desktop's tool is asked — `pbpaste` on macOS, `wl-paste` or
-//! `xclip` on Linux, PowerShell on Windows. That is also how an *image* reaches
+//! `xclip` on Linux, PowerShell on Windows, told to write the text as it is
+//! rather than print it — printing would add a newline the clipboard never held. That is also how an *image* reaches
 //! the terminal panel: it is written to a file, and the path is what gets
 //! pasted, which is what a program running in the shell can actually open.
 //! Where no tool answers — over SSH, on a bare console — the internal copy is
@@ -46,9 +47,17 @@ pub fn system_text() -> Option<String> {
     let text = if cfg!(target_os = "macos") {
         run("pbpaste", &[])
     } else if cfg!(windows) {
+        // Written, not echoed: PowerShell ends anything it *prints* with a
+        // newline that was never on the clipboard, and it prints in the
+        // console's code page unless told otherwise.
         run(
             "powershell",
-            &["-NoProfile", "-Command", "Get-Clipboard -Raw"],
+            &[
+                "-NoProfile",
+                "-Command",
+                "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
+                 [Console]::Out.Write([string](Get-Clipboard -Raw))",
+            ],
         )
     } else if wayland() {
         run("wl-paste", &["--no-newline"])
@@ -71,6 +80,9 @@ fn set_system_text(text: &str) {
     if cfg!(target_os = "macos") {
         feed("pbcopy", &[], text);
     } else if cfg!(windows) {
+        // clip.exe, and not PowerShell: it is on the clipboard by the time
+        // this returns, and a paste that follows a copy at once reads what
+        // was just copied. PowerShell would still be starting up.
         feed("clip", &[], text);
     } else if wayland() {
         feed("wl-copy", &[], text);

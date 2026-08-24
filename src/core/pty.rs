@@ -251,3 +251,119 @@ impl Terminals {
         self.error = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two shells in a scratch directory. Spawning a real PTY is the point:
+    /// the tab bookkeeping only means anything over live sessions.
+    fn two_sessions() -> (crate::core::test_support::Dir, Terminals) {
+        let dir = crate::core::test_support::Dir::new("yara-pty");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        terminals.open(dir.path(), || {});
+        (dir, terminals)
+    }
+
+    #[test]
+    fn a_session_opens_and_is_the_one_in_front() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-open");
+        let mut terminals = Terminals::default();
+        assert!(terminals.is_empty());
+        assert!(terminals.active().is_none());
+
+        terminals.ensure(dir.path(), || {});
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals.active_index(), 0);
+        assert!(terminals.error.is_none());
+        // Ensuring again does not open a second one.
+        terminals.ensure(dir.path(), || {});
+        assert_eq!(terminals.len(), 1);
+    }
+
+    #[test]
+    fn sessions_are_numbered_until_they_are_named() {
+        let (_dir, mut terminals) = two_sessions();
+        assert_eq!(terminals.name(0), "1");
+        assert_eq!(terminals.name(1), "2");
+        assert!(!terminals.is_named(0));
+
+        terminals.rename(0, "  build  ");
+        assert_eq!(terminals.name(0), "build", "the name is trimmed");
+        assert!(terminals.is_named(0));
+        // An empty name puts it back to its position.
+        terminals.rename(0, "   ");
+        assert_eq!(terminals.name(0), "1");
+        assert!(!terminals.is_named(0));
+        // A session that is not there is not renamed, and does not panic.
+        terminals.rename(9, "ghost");
+        assert_eq!(terminals.name(9), "10");
+    }
+
+    #[test]
+    fn dragging_a_tab_moves_the_session_and_its_name() {
+        let (_dir, mut terminals) = two_sessions();
+        terminals.rename(0, "first");
+        terminals.set_active(0);
+        terminals.reorder(0, 1);
+        assert_eq!(terminals.name(1), "first");
+        assert_eq!(terminals.active_index(), 1, "the dragged tab stays active");
+        // Out of range, and onto itself: nothing happens either way.
+        terminals.reorder(0, 9);
+        terminals.reorder(1, 1);
+        assert_eq!(terminals.name(1), "first");
+    }
+
+    #[test]
+    fn closing_keeps_the_selection_on_a_live_session() {
+        let (_dir, mut terminals) = two_sessions();
+        terminals.set_active(1);
+        terminals.close(0);
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals.active_index(), 0, "it followed the session left");
+        terminals.close(9); // out of range
+        assert_eq!(terminals.len(), 1);
+        terminals.close_active();
+        assert!(terminals.is_empty());
+    }
+
+    #[test]
+    fn clearing_drops_every_session() {
+        let (_dir, mut terminals) = two_sessions();
+        terminals.clear();
+        assert!(terminals.is_empty());
+        assert_eq!(terminals.active_index(), 0);
+        assert!(terminals.active_mut().is_none());
+    }
+
+    #[test]
+    fn a_shell_echoes_what_is_written_to_it() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-echo");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        assert_eq!(pty.size(), (24, 80));
+        pty.resize(30, 100);
+        assert_eq!(pty.size(), (30, 100));
+        // Resizing to the same size, or to nothing, is a no-op.
+        pty.resize(30, 100);
+        pty.resize(0, 0);
+        assert_eq!(pty.size(), (30, 100));
+
+        pty.write(b"echo yara-pty-marker\n");
+        pty.write(b"");
+        // The shell answers on its own schedule; give it a moment.
+        let mut seen = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            seen = pty.with_screen(|screen| screen.contents().contains("yara-pty-marker"));
+            if seen {
+                break;
+            }
+        }
+        assert!(seen, "the shell never echoed the line");
+        assert_eq!(pty.scrollback(), 0, "the live screen is not scrolled back");
+        pty.set_scrollback(5);
+    }
+}

@@ -195,3 +195,135 @@ fn collect(dir: &Path, depth: usize, expanded: &HashSet<PathBuf>, out: &mut Vec<
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    /// A folder with a nested one inside, so rows have something to expand.
+    fn project(tag: &str) -> Dir {
+        let dir = Dir::new(tag);
+        dir.file("src/main.rs", "");
+        dir.file("src/lib.rs", "");
+        dir.file("README.md", "");
+        dir
+    }
+
+    #[test]
+    fn one_folder_is_drawn_without_a_header_row() {
+        let dir = project("yara-tree-one");
+        let tree = Tree::new(dir.path().to_path_buf());
+        let names: Vec<String> = tree
+            .rows()
+            .iter()
+            .map(|r| r.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // Folders first, then files; nothing is expanded to begin with.
+        assert_eq!(names, ["src", "README.md"]);
+        assert!(tree.rows().iter().all(|r| !r.is_root));
+        assert_eq!(tree.root(), Some(dir.path()));
+    }
+
+    #[test]
+    fn several_folders_each_head_their_own_subtree() {
+        let one = project("yara-tree-a");
+        let two = project("yara-tree-b");
+        let tree = Tree::with_roots(vec![one.path().to_path_buf(), two.path().to_path_buf()]);
+        let roots: Vec<&Row> = tree.rows().iter().filter(|r| r.is_root).collect();
+        assert_eq!(roots.len(), 2);
+        // Added folders start open, so a new folder is not an empty row.
+        assert!(tree.rows().len() > 2);
+        assert!(tree.rows().iter().any(|r| r.depth == 1));
+    }
+
+    #[test]
+    fn a_folder_opens_and_closes_under_the_cursor() {
+        let dir = project("yara-tree-toggle");
+        let mut tree = Tree::new(dir.path().to_path_buf());
+        assert_eq!(tree.rows().len(), 2);
+        tree.selected = 0; // src
+        tree.toggle_selected();
+        assert_eq!(tree.rows().len(), 4, "src brought its two files");
+        tree.toggle_selected();
+        assert_eq!(tree.rows().len(), 2);
+        // A file has nothing to toggle.
+        tree.selected = 1;
+        tree.toggle_selected();
+        assert_eq!(tree.rows().len(), 2);
+    }
+
+    #[test]
+    fn revealing_a_file_expands_everything_above_it() {
+        let dir = project("yara-tree-reveal");
+        let mut tree = Tree::new(dir.path().to_path_buf());
+        let file = dir.path().join("src").join("lib.rs");
+        tree.reveal(&file);
+        assert_eq!(tree.selected_path(), Some(file.as_path()));
+        // A path in no folder of the project is not revealed at all.
+        let before = tree.selected;
+        tree.reveal(Path::new("/elsewhere/file.rs"));
+        assert_eq!(tree.selected, before);
+    }
+
+    #[test]
+    fn new_entries_go_beside_what_is_selected() {
+        let dir = project("yara-tree-target");
+        let mut tree = Tree::new(dir.path().to_path_buf());
+        // A folder takes them inside itself…
+        tree.selected = 0;
+        assert_eq!(tree.target_dir(), Some(dir.path().join("src")));
+        // …a file, into the folder holding it.
+        tree.selected = 1;
+        assert_eq!(tree.target_dir(), Some(dir.path().to_path_buf()));
+        // With no folder open there is nowhere to put them.
+        let empty = Tree::with_roots(Vec::new());
+        assert_eq!(empty.target_dir(), None);
+        assert_eq!(empty.root(), None);
+        assert!(empty.rows().is_empty());
+    }
+
+    #[test]
+    fn the_cursor_stays_inside_the_list() {
+        let dir = project("yara-tree-move");
+        let mut tree = Tree::new(dir.path().to_path_buf());
+        tree.move_selection(-5);
+        assert_eq!(tree.selected, 0, "it stops at the top");
+        tree.move_selection(50);
+        assert_eq!(tree.selected, tree.rows().len() - 1);
+        // An empty tree has nothing to move through.
+        let mut empty = Tree::with_roots(Vec::new());
+        empty.move_selection(1);
+        assert_eq!(empty.selected, 0);
+    }
+
+    #[test]
+    fn the_view_scrolls_to_keep_the_cursor_visible() {
+        let dir = Dir::new("yara-tree-scroll");
+        for i in 0..20 {
+            dir.file(&format!("file{i:02}.txt"), "");
+        }
+        let mut tree = Tree::new(dir.path().to_path_buf());
+        tree.selected = 15;
+        tree.clamp_scroll(5);
+        assert_eq!(tree.scroll, 11, "the cursor is the last visible row");
+        tree.selected = 2;
+        tree.clamp_scroll(5);
+        assert_eq!(tree.scroll, 2, "and the first when it moves up");
+        // A pane with no height cannot scroll.
+        tree.clamp_scroll(0);
+        assert_eq!(tree.scroll, 2);
+    }
+
+    #[test]
+    fn adding_a_folder_keeps_the_cursor_where_it_was() {
+        let one = project("yara-tree-set-a");
+        let two = project("yara-tree-set-b");
+        let mut tree = Tree::new(one.path().to_path_buf());
+        let readme = one.path().join("README.md");
+        tree.reveal(&readme);
+        tree.set_roots(vec![one.path().to_path_buf(), two.path().to_path_buf()]);
+        assert_eq!(tree.selected_path(), Some(readme.as_path()));
+        assert_eq!(tree.roots.len(), 2);
+    }
+}

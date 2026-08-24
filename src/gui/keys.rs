@@ -73,3 +73,56 @@ pub fn consumed(ctx: &egui::Context, chord: &Chord) -> bool {
     let mods = modifiers(&chord.mods);
     ctx.input_mut(|i| i.consume_key(mods, egui_key))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::command::Chord;
+
+    fn egui_key(text: &str) -> Option<egui::Key> {
+        key(&text.parse::<Chord>().unwrap().key)
+    }
+
+    #[test]
+    fn every_modifier_reaches_egui() {
+        let mods = modifiers(&Mods {
+            cmd: true,
+            ctrl: true,
+            alt: true,
+            shift: true,
+        });
+        assert!(mods.command && mods.ctrl && mods.alt && mods.shift);
+        assert_eq!(modifiers(&Mods::default()), egui::Modifiers::NONE);
+    }
+
+    #[test]
+    fn letters_digits_and_punctuation_all_translate() {
+        assert_eq!(egui_key("Cmd+S"), Some(egui::Key::S));
+        assert_eq!(egui_key("Cmd+0"), Some(egui::Key::Num0));
+        assert_eq!(egui_key("Cmd+,"), Some(egui::Key::Comma));
+        assert_eq!(egui_key("Ctrl+-"), Some(egui::Key::Minus));
+        assert_eq!(egui_key("Cmd+="), Some(egui::Key::Equals));
+        assert_eq!(egui_key("Cmd+["), Some(egui::Key::OpenBracket));
+        // Nothing egui knows: better unbound than bound to the wrong key.
+        assert_eq!(key(&Key::Char('§')), None);
+    }
+
+    #[test]
+    fn named_keys_translate_including_the_function_row() {
+        assert_eq!(egui_key("Alt+Left"), Some(egui::Key::ArrowLeft));
+        assert_eq!(egui_key("Ctrl+Enter"), Some(egui::Key::Enter));
+        assert_eq!(egui_key("Shift+Delete"), Some(egui::Key::Delete));
+        assert_eq!(egui_key("Ctrl+PageDown"), Some(egui::Key::PageDown));
+        assert_eq!(egui_key("F12"), Some(egui::Key::F12));
+        assert_eq!(egui_key("F1"), Some(egui::Key::F1));
+        assert_eq!(key(&Key::Named("nosuchkey".into())), None);
+    }
+
+    #[test]
+    fn a_chord_egui_cannot_express_is_never_consumed() {
+        let ctx = egui::Context::default();
+        let chord: Chord = "Cmd+§".parse().unwrap_or_else(|_| "Cmd+S".parse().unwrap());
+        // With no such key event in the queue, nothing is consumed either way.
+        assert!(!consumed(&ctx, &chord));
+    }
+}

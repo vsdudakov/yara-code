@@ -85,3 +85,42 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
 
     ctx.set_style(style);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::theme::{dark_plus, light_plus};
+
+    #[test]
+    fn colours_cross_into_egui_unchanged() {
+        assert_eq!(color((1, 2, 3)), Color32::from_rgb(1, 2, 3));
+        let theme = dark_plus();
+        assert_eq!(ansi_color(&theme, 1), color(theme.ansi[1]));
+    }
+
+    #[test]
+    fn applying_a_theme_sets_the_code_font_and_the_visuals() {
+        let ctx = egui::Context::default();
+        crate::gui::theme::apply(&ctx, &dark_plus(), 17.0);
+        let style = ctx.style();
+        let mono = style.text_styles.get(&TextStyle::Monospace).unwrap();
+        assert_eq!(mono.size, 17.0, "zoom reaches the code font");
+        assert!(style.visuals.dark_mode);
+        assert_eq!(style.visuals.panel_fill, color(dark_plus().ui.editor_bg));
+
+        // A light theme switches egui's own visuals with it.
+        crate::gui::theme::apply(&ctx, &light_plus(), 13.5);
+        assert!(!ctx.style().visuals.dark_mode);
+    }
+
+    #[test]
+    fn the_code_font_reported_is_the_one_in_effect() {
+        let ctx = egui::Context::default();
+        crate::gui::theme::apply(&ctx, &dark_plus(), 21.0);
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert_eq!(code_font(ui).size, 21.0);
+            });
+        });
+    }
+}

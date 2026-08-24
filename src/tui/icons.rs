@@ -67,3 +67,47 @@ pub fn detect() -> Icons {
     }
     UNICODE
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ascii_set_stands_in_for_terminals_without_the_glyphs() {
+        // Every field is filled in both sets, and none of them is empty.
+        for icons in [UNICODE, ASCII] {
+            for glyph in [
+                icons.dir_open,
+                icons.dir_closed,
+                icons.file,
+                icons.modified,
+                icons.close,
+                icons.menu_marker,
+                icons.nav_files,
+                icons.nav_search,
+                icons.nav_git,
+                icons.ellipsis,
+            ] {
+                assert!(!glyph.is_empty());
+            }
+        }
+        assert!(ASCII.ellipsis.is_ascii(), "that is the point of the set");
+        assert!(!UNICODE.ellipsis.is_ascii());
+    }
+
+    #[test]
+    fn the_environment_chooses_the_set() {
+        // Whatever the machine says, one of the two comes back whole.
+        let chosen = detect();
+        assert!(chosen.file == UNICODE.file || chosen.file == ASCII.file);
+        assert_eq!(
+            chosen.menu_marker,
+            if chosen.file == ASCII.file {
+                ASCII.menu_marker
+            } else {
+                UNICODE.menu_marker
+            },
+            "the sets are never mixed"
+        );
+    }
+}

@@ -229,3 +229,118 @@ impl Menu {
         self.item_at_row(self.selected)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(menu: &Menu) -> Vec<&'static str> {
+        menu.rows()
+            .iter()
+            .filter_map(|row| row.map(|item| item.label()))
+            .collect()
+    }
+
+    #[test]
+    fn a_file_row_offers_everything_a_file_can_have_done_to_it() {
+        let menu = Menu::for_row(
+            Some(PathBuf::from("/p/a.rs")),
+            false,
+            false,
+            Some(PathBuf::from("/p")),
+            3,
+            4,
+        );
+        let labels = labels(&menu);
+        assert_eq!(labels[0], "Open", "a file opens; a folder does not");
+        for expected in ["New File", "New Folder", "Rename", "Move To...", "Delete"] {
+            assert!(labels.contains(&expected), "{expected} is missing");
+        }
+        assert_eq!(menu.x, 3);
+        assert_eq!(menu.y, 4);
+        assert_eq!(menu.dir, PathBuf::from("/p"));
+    }
+
+    #[test]
+    fn a_project_folder_leaves_the_project_rather_than_the_disk() {
+        let root = PathBuf::from("/p");
+        let menu = Menu::for_row(Some(root.clone()), true, true, Some(root), 0, 0);
+        let labels = labels(&menu);
+        assert!(labels.contains(&"Remove Folder from Project"));
+        // Renaming, moving or deleting the folder you are working in is not on
+        // offer.
+        for absent in ["Rename", "Move To...", "Delete"] {
+            assert!(!labels.contains(&absent), "{absent} should not be offered");
+        }
+    }
+
+    #[test]
+    fn empty_space_offers_only_what_makes_sense_there() {
+        let menu = Menu::for_row(None, true, false, Some(PathBuf::from("/p")), 0, 0);
+        assert_eq!(
+            labels(&menu),
+            ["New File", "New Folder", "Add Folder to Project..."]
+        );
+
+        // With no folder open, adding one is all there is.
+        let empty = Menu::for_row(None, true, false, None, 0, 0);
+        assert_eq!(labels(&empty), ["Add Folder to Project..."]);
+    }
+
+    #[test]
+    fn the_selection_steps_over_separators_and_notes() {
+        let mut menu = Menu::commands(
+            crate::core::command::HELP_MENU,
+            Some("Yara Code 0.0.0".into()),
+            0,
+            0,
+            |_| Some("F1".into()),
+        );
+        // The note is drawn first, and the cursor starts past it.
+        assert!(matches!(menu.item_at_row(0), Some(MenuItem::Note(_))));
+        assert!(matches!(menu.selected_item(), Some(MenuItem::Command(_))));
+        let first = menu.selected;
+        menu.move_selection(1);
+        assert!(menu.selected > first);
+        assert!(menu.selected_item().is_some(), "never lands on a separator");
+        // Past either end it stays where it is.
+        menu.move_selection(-50);
+        let top = menu.selected;
+        menu.move_selection(-1);
+        assert_eq!(menu.selected, top);
+    }
+
+    #[test]
+    fn the_file_menu_shows_the_chord_each_entry_answers_to() {
+        let menu = Menu::file_menu(0, 0, |command| {
+            (command == crate::core::command::Command::Save).then(|| "Ctrl+S".to_string())
+        });
+        let save_row = menu
+            .rows()
+            .iter()
+            .position(|row| matches!(row, Some(MenuItem::Command(c)) if c.label() == "Save"))
+            .unwrap();
+        assert_eq!(menu.shortcut_at_row(save_row), "Ctrl+S");
+        // An unbound entry simply has no hint.
+        assert!(menu
+            .rows()
+            .iter()
+            .enumerate()
+            .any(|(i, row)| row.is_some() && menu.shortcut_at_row(i).is_empty()));
+        assert_eq!(menu.shortcut_at_row(999), "");
+    }
+
+    #[test]
+    fn the_box_is_wide_enough_for_its_longest_line() {
+        let menu = Menu::file_menu(0, 0, |_| Some("Cmd+Shift+A".into()));
+        let longest = menu
+            .rows()
+            .iter()
+            .flatten()
+            .map(|item| item.label().chars().count())
+            .max()
+            .unwrap();
+        assert!(menu.width() as usize >= longest + 4);
+        assert_eq!(menu.height() as usize, menu.rows().len() + 2);
+    }
+}

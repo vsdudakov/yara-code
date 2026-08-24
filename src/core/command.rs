@@ -503,3 +503,108 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn every_command_has_a_label_and_a_stable_id() {
+        for command in ALL {
+            let id = command.id();
+            assert!(!id.is_empty());
+            assert!(
+                id.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{id} is not a settings key"
+            );
+            assert!(!command.label().is_empty(), "{id} has no label");
+            assert_eq!(Command::from_id(id), Some(*command));
+        }
+        assert_eq!(Command::from_id("no_such_command"), None);
+    }
+
+    #[test]
+    fn the_menus_only_list_commands_that_exist() {
+        for (name, menu) in [
+            ("File", FILE_MENU),
+            ("View", VIEW_MENU),
+            ("Help", HELP_MENU),
+        ] {
+            let entries: Vec<Command> = menu.iter().flatten().copied().collect();
+            assert!(!entries.is_empty(), "the {name} menu is empty");
+            for command in &entries {
+                assert!(
+                    ALL.contains(command),
+                    "{name}: {:?} is not a command",
+                    command
+                );
+            }
+            // A separator at either end would draw a line against the border.
+            assert!(menu.first().is_some_and(Option::is_some), "{name}");
+            assert!(menu.last().is_some_and(Option::is_some), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_start_page_groups_name_real_commands() {
+        for (group, commands) in START_PAGE {
+            assert!(!group.is_empty());
+            assert!(!commands.is_empty(), "{group} lists nothing");
+            for command in *commands {
+                assert!(ALL.contains(command), "{group}: {:?}", command);
+            }
+        }
+    }
+
+    #[test]
+    fn a_command_survives_the_settings_file() {
+        let json = serde_json::to_string(&Command::ToggleTerminal).unwrap();
+        assert_eq!(json, "\"toggle_terminal\"");
+        let back: Command = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Command::ToggleTerminal);
+    }
+
+    #[test]
+    fn a_chord_reads_the_way_it_is_written() {
+        let chord: Chord = "Cmd+Shift+F".parse().unwrap();
+        assert!(chord.mods.cmd && chord.mods.shift);
+        assert!(!chord.mods.ctrl && !chord.mods.alt);
+        assert_eq!(chord.key, Key::Char('f'));
+
+        // Named keys, function keys and the awkward ones.
+        assert_eq!(
+            "F12".parse::<Chord>().unwrap().key,
+            Key::Named("f12".into())
+        );
+        assert_eq!(
+            "Shift+Delete".parse::<Chord>().unwrap().key,
+            Key::Named("delete".into())
+        );
+        assert_eq!("Ctrl+-".parse::<Chord>().unwrap().key, Key::Char('-'));
+        assert_eq!("+".parse::<Chord>().unwrap().key, Key::Char('+'));
+        assert_eq!("Cmd+,".parse::<Chord>().unwrap().key, Key::Char(','));
+    }
+
+    #[test]
+    fn nonsense_is_not_a_chord() {
+        assert!("".parse::<Chord>().is_err());
+        assert!("Ctrl+".parse::<Chord>().is_err());
+        assert!("Hyper+K".parse::<Chord>().is_err(), "no such modifier");
+        // The error says what it could not read.
+        let message = "Hyper+K".parse::<Chord>().unwrap_err().to_string();
+        assert!(message.contains("hyper"), "{message}");
+    }
+
+    #[test]
+    fn a_chord_prints_as_a_binding_a_user_would_type() {
+        let chord: Chord = "alt+shift+left".parse().unwrap();
+        assert_eq!(chord.to_string(), "Alt+Shift+Left");
+        assert_eq!(
+            "ctrl+alt+enter".parse::<Chord>().unwrap().to_string(),
+            "Ctrl+Alt+Enter"
+        );
+        // Every modifier at once, in the order they are always written.
+        let all: Chord = "shift+alt+ctrl+cmd+s".parse().unwrap();
+        assert_eq!(all.to_string(), "Cmd+Ctrl+Alt+Shift+S");
+    }
+}

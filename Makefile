@@ -1,4 +1,4 @@
-.PHONY: build run run-tui lint format test cov docs docs-serve docs-install clean release
+.PHONY: build run run-tui lint format test coverage coverage-html docs docs-serve docs-install clean release
 
 # Everything the CI gate runs, in one target.
 lint:
@@ -15,6 +15,15 @@ test:
 # it runs over SSH.
 test-headless:
 	cargo test --no-default-features --features tui
+
+# What CI gates on: the shared logic, at 90% of lines or better.
+coverage:
+	cargo llvm-cov --all-features --ignore-filename-regex '(gui|tui|bin)/' \
+		--fail-under-lines 90 --summary-only
+	cargo llvm-cov --all-features --summary-only | tail -1
+
+coverage-html:
+	cargo llvm-cov --all-features --html --open
 
 build:
 	cargo build --release --all-features

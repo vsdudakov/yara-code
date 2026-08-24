@@ -138,7 +138,7 @@ make build     # release build of both binaries
 make run ARGS=~/code/project
 ```
 
-**Coverage.** 242 tests, **81% of the crate**: 92% of `src/core` — buffers
+**Coverage.** 251 tests, **81% of the crate**: 92% of `src/core` — buffers
 and undo, project folders, search, find and replace, diffs, git against a real
 repository, themes, settings and key chords, the updater, terminal sessions
 over live PTYs — and the two frontends driven **end to end**. `tests/tui_e2e.rs`

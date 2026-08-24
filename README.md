@@ -69,12 +69,13 @@ malware scanner in every package manager.
 On Linux, every release also carries a `.deb`, an `.rpm` and a `PKGBUILD`:
 
 ```bash
-sudo apt install ./ycode_X.Y.Z-1_amd64.deb   # Debian, Ubuntu, Mint
-sudo dnf install ./ycode-X.Y.Z-1.x86_64.rpm  # Fedora, RHEL, openSUSE
+sudo apt install ./ycode_X.Y.Z-1_amd64.deb   # Debian, Ubuntu, Mint (arm64 too)
+sudo dnf install ./ycode-X.Y.Z-1.x86_64.rpm  # Fedora, RHEL, openSUSE (aarch64 too)
 makepkg -si                                  # Arch, from the release PKGBUILD
 ```
 
-Plain binaries for macOS (Apple Silicon and Intel), Linux x86_64 and Windows x64
+Plain binaries for macOS (Apple Silicon and Intel), Linux x86_64 and arm64, and
+Windows x64
 are on the [releases page](https://github.com/vsdudakov/yara-code/releases/latest);
 `cargo build --release` builds both from source. On a server, build the terminal
 frontend alone — it pulls no graphics stack at all:

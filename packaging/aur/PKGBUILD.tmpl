@@ -4,16 +4,18 @@ pkgname=ycode-bin
 pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Lightweight code editor for agent-driven development: a terminal UI and a GPU window that mirror each other"
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url="https://github.com/vsdudakov/yara-code"
 license=('MIT')
 provides=('ycode')
 conflicts=('ycode')
-source=("https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-x86_64-unknown-linux-gnu.tar.gz")
-sha256sums=('@LINUX_SHA@')
+source_x86_64=("https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-aarch64-unknown-linux-gnu.tar.gz")
+sha256sums_x86_64=('@LINUX_SHA@')
+sha256sums_aarch64=('@LINUX_ARM_SHA@')
 
 package() {
-  cd "ycode-@TAG@-x86_64-unknown-linux-gnu"
+  cd "ycode-@TAG@-$CARCH-unknown-linux-gnu"
   install -Dm755 ycode "$pkgdir/usr/bin/ycode"
   install -Dm755 ycode-gui "$pkgdir/usr/bin/ycode-gui"
   install -Dm644 README.md "$pkgdir/usr/share/doc/ycode/README.md"

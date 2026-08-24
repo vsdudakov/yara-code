@@ -10,13 +10,13 @@ use std::path::Path;
 
 /// Rows the find bar takes: heading, field, heading, field, actions.
 const FIND_ROWS: u16 = 5;
-use crate::core::command::{Command, START_PAGE};
+use crate::core::command::{Command, ALL, START_PAGE};
 use crate::core::diff;
 use crate::core::fold;
 use crate::core::git as core_git;
 use crate::core::search::Field as SearchField;
 use crate::core::theme as core_theme;
-use crate::tui::app::{App, Focus, Prompt, SidebarView, Splitter, TabStrip};
+use crate::tui::app::{App, Focus, GitRow, Prompt, SidebarView, Splitter, TabStrip};
 use crate::tui::theme::{color, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -520,59 +520,126 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     y += 1;
 
+    // The rows: a heading over what is staged, one over what is not, and
+    // the changes under each. A file with both kinds of edit is in both.
+    let mut rows: Vec<GitRow> = Vec::new();
+    let staged: Vec<usize> = (0..app.git.changes.len())
+        .filter(|i| app.git.changes[*i].staged())
+        .collect();
+    let unstaged: Vec<usize> = (0..app.git.changes.len())
+        .filter(|i| app.git.changes[*i].unstaged())
+        .collect();
+    if !staged.is_empty() {
+        rows.push(GitRow::Heading(format!("STAGED CHANGES  {}", staged.len())));
+        rows.extend(staged.iter().map(|i| GitRow::Change {
+            index: *i,
+            staged: true,
+        }));
+    }
+    if !unstaged.is_empty() {
+        rows.push(GitRow::Heading(format!("CHANGES  {}", unstaged.len())));
+        rows.extend(unstaged.iter().map(|i| GitRow::Change {
+            index: *i,
+            staged: false,
+        }));
+    }
+    app.git_rows = rows;
+    // The last row says which keys the panel answers, when there is room.
+    let hint = " s stage/unstage · a stage all · c commit";
+    let hint_rows = u16::from(bottom.saturating_sub(y) > 3 && !app.git_rows.is_empty());
     let list_area = Rect {
         y,
-        height: bottom.saturating_sub(y),
+        height: bottom.saturating_sub(y).saturating_sub(hint_rows),
         ..area
     };
     app.layout.git_list = list_area;
     let height = list_area.height as usize;
-    if height == 0 || app.git.changes.is_empty() {
+    if height == 0 || app.git_rows.is_empty() {
         app.layout.git_list_offset = 0;
         return;
     }
-    app.git_selected = app.git_selected.min(app.git.changes.len() - 1);
+    if app.git_selected >= app.git_rows.len()
+        || matches!(app.git_rows[app.git_selected], GitRow::Heading(_))
+    {
+        app.git_selected = app
+            .git_rows
+            .iter()
+            .position(|r| matches!(r, GitRow::Change { .. }))
+            .unwrap_or(0);
+    }
     let offset = app.git_selected.saturating_sub(height.saturating_sub(1));
     app.layout.git_list_offset = offset;
-
+    let mark_x = list_area.x + list_area.width.saturating_sub(3);
     let lines: Vec<Line> = app
-        .git
-        .changes
+        .git_rows
         .iter()
         .enumerate()
         .skip(offset)
         .take(height)
-        .map(|(i, change)| {
-            let selected = i == app.git_selected;
-            let bg = if selected {
-                theme.ui.selected_bg
-            } else {
-                theme.ui.sidebar_bg
-            };
-            let letter = change.letter();
-            let path_width = width.saturating_sub(4);
-            Line::from(vec![
-                Span::styled(
-                    format!(" {letter}  "),
-                    Style::default()
-                        .fg(color(git_letter_color(letter, &theme)))
-                        .bg(color(bg)),
-                ),
-                Span::styled(
-                    pad(&trim_front(&change.path, path_width), path_width),
-                    on(
-                        if selected {
-                            theme.ui.fg_bright
-                        } else {
-                            theme.ui.fg_dim
-                        },
-                        bg,
+        .map(|(i, row)| match row {
+            GitRow::Heading(text) => Line::from(Span::styled(
+                pad(&format!(" {text}"), width),
+                on(theme.ui.fg_faint, theme.ui.sidebar_bg),
+            )),
+            GitRow::Change { index, staged } => {
+                let change = &app.git.changes[*index];
+                let selected = i == app.git_selected;
+                let bg = if selected {
+                    theme.ui.selected_bg
+                } else {
+                    theme.ui.sidebar_bg
+                };
+                let letter = change.letter();
+                let path_width = width.saturating_sub(7);
+                let row_y = list_area.y + (i - offset) as u16;
+                let on_mark = mouse.is_some_and(|(mx, my)| my == row_y && mx >= mark_x);
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {letter}  "),
+                        Style::default()
+                            .fg(color(git_letter_color(letter, &theme)))
+                            .bg(color(bg)),
                     ),
-                ),
-            ])
+                    Span::styled(
+                        pad(&trim_front(&change.path, path_width), path_width),
+                        on(
+                            if selected {
+                                theme.ui.fg_bright
+                            } else {
+                                theme.ui.fg_dim
+                            },
+                            bg,
+                        ),
+                    ),
+                    Span::styled(
+                        format!(" {} ", if *staged { "\u{2212}" } else { "+" }),
+                        on(
+                            if on_mark || selected {
+                                theme.ui.fg_bright
+                            } else {
+                                theme.ui.fg_faint
+                            },
+                            bg,
+                        ),
+                    ),
+                ])
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), list_area);
+    if hint_rows == 1 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                pad(&clip(hint, width), width),
+                on(theme.ui.fg_faint, theme.ui.sidebar_bg),
+            ))),
+            Rect {
+                y: list_area.y + list_area.height,
+                height: 1,
+                ..area
+            },
+        );
+    }
 }
 
 /// Status letters use the terminal palette, so every theme colors them sanely.
@@ -725,8 +792,9 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
 /// The start page: what fills the editor while nothing is open — the name, the
 /// folder in play, and the keys that are actually bound, in the same groups the
 /// window shows. Groups are packed into as many columns as the pane affords.
-fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = app.theme();
+fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.layout.start_rows.clear();
+    let theme = app.theme().clone();
     frame.render_widget(
         Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
         area,
@@ -737,18 +805,18 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
     let chord = |command| app.settings.tui_chord(command).map(|c| c.to_string());
 
     // One block per group: its heading, then a line per bound key.
-    let mut blocks: Vec<Vec<(String, String)>> = Vec::new();
+    let mut blocks: Vec<Vec<(String, String, Option<Command>)>> = Vec::new();
     for (name, commands) in START_PAGE {
-        let mut rows: Vec<(String, String)> = Vec::new();
+        let mut rows: Vec<(String, String, Option<Command>)> = Vec::new();
         for command in *commands {
             if let Some(chord) = chord(*command) {
-                rows.push((chord, command.label().to_string()));
+                rows.push((chord, command.label().to_string(), Some(*command)));
             }
         }
         if rows.is_empty() {
             continue;
         }
-        rows.insert(0, (String::new(), name.to_uppercase()));
+        rows.insert(0, (String::new(), name.to_uppercase(), None));
         blocks.push(rows);
     }
     if blocks.is_empty() {
@@ -758,13 +826,13 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
     let chord_width = blocks
         .iter()
         .flatten()
-        .map(|(chord, _)| chord.chars().count())
+        .map(|(chord, _, _)| chord.chars().count())
         .max()
         .unwrap_or(0);
     let column_width = blocks
         .iter()
         .flatten()
-        .map(|(chord, label)| {
+        .map(|(chord, label, _)| {
             if chord.is_empty() {
                 label.chars().count()
             } else {
@@ -792,21 +860,25 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
     let plain = on(theme.ui.fg_faint, theme.ui.editor_bg);
 
     // Each column is a list of styled cells; columns are then zipped into rows.
-    let mut grid: Vec<Vec<Vec<Span>>> = Vec::new();
+    let mouse = app.mouse;
+    let mut grid: Vec<Vec<(Vec<Span>, Option<Command>)>> = Vec::new();
     for chunk in blocks.chunks(per_column) {
-        let mut cells: Vec<Vec<Span>> = Vec::new();
+        let mut cells: Vec<(Vec<Span>, Option<Command>)> = Vec::new();
         for (i, rows) in chunk.iter().enumerate() {
             if i > 0 {
-                cells.push(Vec::new());
+                cells.push((Vec::new(), None));
             }
-            for (chord, label) in rows {
+            for (chord, label, command) in rows {
                 if chord.is_empty() {
-                    cells.push(vec![Span::styled(label.clone(), group)]);
+                    cells.push((vec![Span::styled(label.clone(), group)], None));
                 } else {
-                    cells.push(vec![
-                        Span::styled(format!("{chord:<chord_width$}  "), key),
-                        Span::styled(label.clone(), plain),
-                    ]);
+                    cells.push((
+                        vec![
+                            Span::styled(format!("{chord:<chord_width$}  "), key),
+                            Span::styled(label.clone(), plain),
+                        ],
+                        *command,
+                    ));
                 }
             }
         }
@@ -843,11 +915,33 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
             ]));
         }
     }
+    let header_rows = lines.len();
     for row in 0..body_height {
         let mut spans = vec![Span::styled(left.clone(), plain)];
         for (i, column) in grid.iter().enumerate() {
-            let cell = column.get(row).cloned().unwrap_or_default();
+            let (mut cell, command) = column.get(row).cloned().unwrap_or_default();
             let used: usize = cell.iter().map(|s| s.content.chars().count()).sum();
+            // Each row is the action it names: a click runs it, so the page
+            // is a menu, not a manual. Where it lands is only known once the
+            // block's top is, so the rect is filled in below.
+            if let Some(command) = command {
+                let x = area.x + (left.chars().count() + i * (column_width + GAP)) as u16;
+                let rect = Rect {
+                    x,
+                    y: (header_rows + row) as u16,
+                    width: used as u16,
+                    height: 1,
+                };
+                app.layout.start_rows.push((rect, command));
+                let hovered = mouse.is_some_and(|(mx, my)| {
+                    my == rect.y && mx >= rect.x && mx < rect.x + rect.width
+                });
+                if hovered {
+                    if let Some(last) = cell.last_mut() {
+                        *last = Span::styled(last.content.to_string(), key);
+                    }
+                }
+            }
             spans.extend(cell);
             let tail = if i + 1 == grid.len() {
                 0
@@ -860,6 +954,9 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
     }
     // Sit a little above center, the way the window's start page does.
     let top = (area.height as usize).saturating_sub(lines.len()) / 3;
+    for (rect, _) in &mut app.layout.start_rows {
+        rect.y += area.y + top as u16;
+    }
     let mut out: Vec<Line> = vec![Line::from(""); top];
     out.extend(lines);
     frame.render_widget(Paragraph::new(out), area);
@@ -1856,20 +1953,30 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let cursor_row = visible
         .binary_search(&cursor_line)
         .unwrap_or_else(|insert| insert.min(visible.len().saturating_sub(1)));
+    let gutter = 7usize;
+    let text_width = text_area.width.saturating_sub(gutter as u16) as usize;
     {
         let state = app.edit_state();
-        if state.scroll > cursor_row {
-            state.scroll = cursor_row;
-        } else if height > 0 && cursor_row >= state.scroll + height {
-            state.scroll = cursor_row + 1 - height;
+        if !state.free_scroll {
+            if state.scroll > cursor_row {
+                state.scroll = cursor_row;
+            } else if height > 0 && cursor_row >= state.scroll + height {
+                state.scroll = cursor_row + 1 - height;
+            }
         }
         if state.scroll >= visible.len() {
             state.scroll = visible.len().saturating_sub(1);
         }
+        // Sideways the view always follows the caret: a line wider than the
+        // pane scrolls under it rather than hiding it.
+        if cursor_col < state.col_scroll {
+            state.col_scroll = cursor_col;
+        } else if text_width > 0 && cursor_col >= state.col_scroll + text_width {
+            state.col_scroll = cursor_col + 1 - text_width;
+        }
     }
     let scroll = app.edit_state().scroll;
-    let gutter = 7usize;
-    let text_width = text_area.width.saturating_sub(gutter as u16) as usize;
+    let col_scroll = app.edit_state().col_scroll;
     app.layout.editor = text_area;
     app.layout.gutter = gutter as u16;
 
@@ -1964,6 +2071,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                 row_style.unwrap_or_else(|| on(theme.ui.fg_faint, theme.ui.editor_bg)),
             ),
         ];
+        let limit = text_width + col_scroll;
         let mut col = 0usize;
         let link = app.link.filter(|(line, _, _)| *line == n);
         // Find hits on this line, as column ranges, with the current one
@@ -1999,14 +2107,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         });
         if let Some(regions) = app.highlight.get(n) {
             for (rgb, italic, text) in regions {
-                if col >= text_width {
+                if col >= limit {
                     break;
                 }
                 let mut style = row_style.unwrap_or_else(|| on(*rgb, theme.ui.editor_bg));
                 if *italic {
                     style = style.add_modifier(Modifier::ITALIC);
                 }
-                let piece: String = text.chars().take(text_width - col).collect();
+                let piece: String = text.chars().take(limit - col).collect();
                 let len = piece.chars().count();
                 let touched = selected.is_some_and(|(s, e)| col < e && col + len > s);
                 let underlined = link.is_some_and(|(_, s, e)| col < e && col + len > s);
@@ -2047,14 +2155,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         // A blank line inside a block carries the block's guides too.
         if row_style.is_none() {
-            while col < guide_cols.min(text_width) {
+            while col < guide_cols.min(limit) {
                 let glyph = if guide_at(col) { "\u{2502}" } else { " " };
                 spans.push(Span::styled(glyph, guide_style));
                 col += 1;
             }
         }
         // A selection running past the end of the line shows on the newline.
-        if selected.is_some_and(|(s, e)| e > col && col >= s) && col < text_width {
+        if selected.is_some_and(|(s, e)| e > col && col >= s) && col < limit {
             spans.push(Span::styled(" ", on(theme.ui.fg, theme.ui.selection)));
         }
         if folded {
@@ -2067,6 +2175,26 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                 format!("  {} {count} {unit}", app.icons.file),
                 on(theme.ui.fg_faint, theme.ui.selected_bg),
             ));
+        }
+        // The gutter stays; the text starts `col_scroll` columns in.
+        if col_scroll > 0 {
+            let mut skip = col_scroll;
+            let mut kept = Vec::with_capacity(spans.len());
+            for (i, span) in spans.into_iter().enumerate() {
+                if i < 3 || skip == 0 {
+                    kept.push(span);
+                    continue;
+                }
+                let len = span.content.chars().count();
+                if len <= skip {
+                    skip -= len;
+                    continue;
+                }
+                let rest: String = span.content.chars().skip(skip).collect();
+                skip = 0;
+                kept.push(Span::styled(rest, span.style));
+            }
+            spans = kept;
         }
         Line::from(spans)
     };
@@ -2092,7 +2220,9 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.focus == Focus::Editor {
         if let Some(row) = cursor_screen_row {
-            let cx = text_area.x + gutter as u16 + cursor_col.min(text_width) as u16;
+            let cx = text_area.x
+                + gutter as u16
+                + cursor_col.saturating_sub(col_scroll).min(text_width) as u16;
             let cy = text_area.y + row as u16;
             if cy < text_area.y + text_area.height {
                 frame.set_cursor_position((cx, cy));
@@ -2485,6 +2615,27 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
         Prompt::Goto { candidates, .. } => candidates
             .iter()
             .map(|c| format!("{}:{}  {}", app.project.display(&c.path), c.line, c.text))
+            .collect(),
+        Prompt::Palette => {
+            let width = ALL.iter().map(|c| c.label().len()).max().unwrap_or(0);
+            app.picker_items
+                .iter()
+                .filter_map(|i| ALL.get(*i))
+                .map(|command| {
+                    let chord = app
+                        .settings
+                        .tui_chord(*command)
+                        .map(|c| c.to_string())
+                        .unwrap_or_default();
+                    format!("{:<width$}  {chord}", command.label())
+                })
+                .collect()
+        }
+        Prompt::QuickOpen => app
+            .picker_items
+            .iter()
+            .filter_map(|i| app.picker_files.get(*i))
+            .map(|(_, rel)| rel.clone())
             .collect(),
         _ => Vec::new(),
     };

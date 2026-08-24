@@ -17,6 +17,7 @@ where the window has `Cmd+Shift`. Every command is rebindable in
 | Save / Save As… / Save All | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` |
 | Settings | `Cmd+,` | `Ctrl+,` |
 | Close tab / Quit | `Cmd+W` / `Cmd+Q` | `Ctrl+W` / `Ctrl+Q` |
+| Command palette / Go to file / Go to line | `Cmd+Shift+P` / `Cmd+P` / `Ctrl+G` | `Ctrl+Shift+P` / `Ctrl+P` / `Ctrl+G` |
 | Undo / Redo | `Cmd+Z` / `Cmd+Shift+Z` | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Find in file | `Cmd+F` | `Ctrl+F` |
 | Search / Files / Git sidebar | `Cmd+Shift+F` / `Cmd+Shift+E` / `Ctrl+Shift+G` | `Ctrl+Shift+F` / `Ctrl+Shift+E` / `Ctrl+Shift+G` |

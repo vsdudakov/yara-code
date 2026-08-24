@@ -11,6 +11,24 @@ pub struct Buffer {
     pub extension: String,
     /// Undo/redo for this buffer, fed by whichever frontend is editing it.
     pub history: History,
+    /// When the file was last written, as far as this buffer knows — so an
+    /// edit made outside the editor is noticed.
+    pub disk_stamp: Option<std::time::SystemTime>,
+}
+
+/// What a look at the disk found for one open file.
+#[derive(Debug, PartialEq)]
+pub enum DiskEvent {
+    /// The file changed and the buffer was clean, so it now shows the new
+    /// text.
+    Reloaded(String),
+    /// The file changed under unsaved edits; the buffer keeps them, and a
+    /// save would overwrite what is on disk.
+    ChangedOnDisk(String),
+}
+
+fn stamp_of(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
 }
 
 impl Buffer {
@@ -87,6 +105,7 @@ impl Buffers {
             .map(|e| e.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.list.push(Buffer {
+            disk_stamp: stamp_of(&path),
             path,
             saved_text: text.clone(),
             text,
@@ -114,7 +133,37 @@ impl Buffers {
         };
         std::fs::write(&buf.path, &buf.text).map_err(SaveError::Io)?;
         buf.saved_text = buf.text.clone();
+        buf.disk_stamp = stamp_of(&buf.path);
         Ok(())
+    }
+
+    /// Looks at every open file's timestamp. A clean buffer whose file moved
+    /// on takes the new text; one with unsaved edits keeps them and is only
+    /// reported. Each change is reported once.
+    pub fn poll_disk(&mut self) -> Vec<DiskEvent> {
+        let mut events = Vec::new();
+        for buf in &mut self.list {
+            let now = stamp_of(&buf.path);
+            if now.is_none() || now == buf.disk_stamp {
+                continue;
+            }
+            buf.disk_stamp = now;
+            if buf.modified() {
+                events.push(DiskEvent::ChangedOnDisk(buf.name()));
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&buf.path) else {
+                continue;
+            };
+            if text == buf.text {
+                continue;
+            }
+            buf.record(EditKind::Bulk, 0);
+            buf.text = text.clone();
+            buf.saved_text = text;
+            events.push(DiskEvent::Reloaded(buf.name()));
+        }
+        events
     }
 
     pub fn try_save_active(&mut self) -> Result<(), SaveError> {
@@ -375,6 +424,7 @@ mod buffer_tests {
             saved_text: String::new(),
             extension: "rs".into(),
             history: History::default(),
+            disk_stamp: None,
         };
         assert_eq!(buffer.name(), "main.rs");
         assert!(!buffer.modified());

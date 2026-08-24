@@ -64,6 +64,9 @@ pub enum Command {
     CheckForUpdates,
     InstallUpdate,
     Help,
+    CommandPalette,
+    QuickOpen,
+    GotoLine,
 }
 
 impl Command {
@@ -124,6 +127,9 @@ impl Command {
             Self::CheckForUpdates => "check_for_updates",
             Self::InstallUpdate => "install_update",
             Self::Help => "help",
+            Self::CommandPalette => "command_palette",
+            Self::QuickOpen => "quick_open",
+            Self::GotoLine => "goto_line",
         }
     }
 
@@ -188,6 +194,9 @@ impl Command {
             Self::CheckForUpdates => "Check for Updates...",
             Self::InstallUpdate => "Install Update",
             Self::Help => "Show Key Bindings",
+            Self::CommandPalette => "Command Palette...",
+            Self::QuickOpen => "Go to File...",
+            Self::GotoLine => "Go to Line...",
         }
     }
 }
@@ -247,6 +256,9 @@ pub const ALL: &[Command] = &[
     Command::CheckForUpdates,
     Command::InstallUpdate,
     Command::Help,
+    Command::CommandPalette,
+    Command::QuickOpen,
+    Command::GotoLine,
 ];
 
 /// What the File menu lists, in order; `None` is a separator.
@@ -270,6 +282,10 @@ pub const FILE_MENU: &[Option<Command>] = &[
 
 /// What the View menu lists, in order; `None` is a separator.
 pub const VIEW_MENU: &[Option<Command>] = &[
+    Some(Command::CommandPalette),
+    Some(Command::QuickOpen),
+    Some(Command::GotoLine),
+    None,
     Some(Command::ToggleSidebar),
     Some(Command::ToggleTerminal),
     None,
@@ -331,7 +347,13 @@ pub const START_PAGE: &[(&str, &[Command])] = &[
     ),
     (
         "More",
-        &[Command::ThemePicker, Command::Settings, Command::Help],
+        &[
+            Command::CommandPalette,
+            Command::QuickOpen,
+            Command::ThemePicker,
+            Command::Settings,
+            Command::Help,
+        ],
     ),
 ];
 

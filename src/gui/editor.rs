@@ -361,6 +361,7 @@ impl Editor {
         self.previews.push(crate::gui::preview::PreviewView {
             path,
             blocks: crate::core::markdown::parse(&buf.text),
+            source: buf.text.clone(),
         });
         self.active_preview = Some(self.previews.len() - 1);
         self.active_diff = None;
@@ -398,6 +399,11 @@ impl Editor {
     /// Preview button there too, `preview_chord` being the key that does the
     /// same.
     pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme, preview_chord: Option<&str>) {
+        for preview in &mut self.previews {
+            if let Some(buf) = self.buffers.list.iter().find(|b| b.path == preview.path) {
+                preview.follow(&buf.text);
+            }
+        }
         let mut close: Option<usize> = None;
         let mut preview_clicked = false;
         let in_front = (self.buffers.active, self.active_diff, self.active_preview);

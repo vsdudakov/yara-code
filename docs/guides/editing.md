@@ -11,6 +11,20 @@ changes and a cross once the pointer is over them. Drag a tab onto another to
 reorder; `Ctrl+PageUp` / `Ctrl+PageDown` walk the strip. Diffs open as tabs of
 their own beside the files — see [Git](git.md).
 
+## Getting around
+
+- **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P`) lists every command by
+  name with its chord; type a few letters, the rows narrow to what matches,
+  Enter runs the top one. Everything in the menus is here too, so nothing
+  needs remembering.
+- **Go to File** (`Cmd+P` / `Ctrl+P`) does the same over every file in the
+  project — `gapp` finds `src/gui/app.rs` — and opens the pick.
+- **Go to Line** (`Ctrl+G` in both) jumps within the file in front.
+
+The mouse wheel scrolls the view without moving the caret; the next keystroke
+brings the view back to it. A line wider than the pane scrolls sideways under
+the caret rather than hiding it.
+
 ## Undo and redo
 
 `Cmd+Z` / `Ctrl+Z` and `Cmd+Shift+Z` / `Ctrl+Shift+Z`. Every change is
@@ -49,6 +63,15 @@ Holding the modifier underlines the identifier under the pointer.
 It is a keyword heuristic across Rust, Python, JS/TS, Go, Swift, Java/Kotlin,
 C# and proto — not an LSP — and it falls back to listing references. `Ctrl+-`
 (window) / `Alt+←` (terminal) goes back.
+
+## Files that change outside the editor
+
+A formatter, a script, an agent, another editor: once a second every open file
+is checked against the disk. A file you have not touched takes the new text
+silently and the status bar says `main.rs changed on disk — reloaded` — the
+reload is one undo step, so it can be taken back. A file with unsaved edits
+keeps them and says `changed on disk — saving will overwrite it`, so nothing
+of yours is lost without being asked.
 
 ## The navigator
 

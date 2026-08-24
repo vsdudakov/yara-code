@@ -6,6 +6,7 @@ pub mod diff;
 pub mod find;
 pub mod fold;
 pub mod fs_ops;
+pub mod fuzzy;
 pub mod git;
 pub mod glob;
 pub mod history;

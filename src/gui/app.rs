@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::core::command::{Command, FILE_MENU, HELP_MENU, START_PAGE, VIEW_MENU};
+use crate::core::command::{Command, ALL, FILE_MENU, HELP_MENU, START_PAGE, VIEW_MENU};
 use crate::core::fs_ops;
 use crate::core::git::{Blame, Change, LineState};
 /// Placeholder for an empty input; the heading above already names the field.
@@ -46,6 +46,8 @@ pub struct App {
     /// The project-wide Replace All is waiting for a yes.
     pending_replace_all: bool,
     goto_picker: Option<GotoPicker>,
+    /// The command palette, the file finder or go to line, while one is up.
+    picker: Option<Picker>,
     /// Locations to return to with ⌃- after a goto jump.
     history: Vec<(PathBuf, usize)>,
     themes: Vec<Theme>,
@@ -115,6 +117,7 @@ impl App {
             pending_delete: None,
             pending_replace_all: false,
             goto_picker: None,
+            picker: None,
             history: Vec::new(),
             themes,
             theme_index,
@@ -392,6 +395,19 @@ impl App {
             }
             Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => {}
             Command::Help => self.show_help = true,
+            Command::CommandPalette => self.picker = Some(Picker::new(PickerKind::Commands)),
+            Command::QuickOpen => {
+                let mut picker = Picker::new(PickerKind::Files);
+                picker.files = search::project_files(self.project.roots(), 5000);
+                self.picker = Some(picker);
+            }
+            Command::GotoLine => {
+                if self.editor.buffers.is_empty() {
+                    self.status = Some("open a file first".into());
+                } else {
+                    self.picker = Some(Picker::new(PickerKind::Line));
+                }
+            }
         }
     }
 
@@ -421,6 +437,7 @@ impl App {
             return;
         }
         self.settings_polled = std::time::Instant::now();
+        self.poll_disk();
         let stamp = Settings::stamp(self.project.root());
         match &self.settings_stamp {
             // The first look only remembers what is there.
@@ -456,7 +473,7 @@ impl App {
 
     /// The start page: what fills the editor while nothing is open — the
     /// name, the folder in play, and the keys that are actually bound.
-    fn start_page(&self, ui: &mut egui::Ui, theme: &Theme) {
+    fn start_page(&self, ui: &mut egui::Ui, theme: &Theme) -> Option<Command> {
         let chord = |command| self.settings.gui_chord(command).map(|c| c.to_string());
         let project = match self.project.root() {
             Some(root) => Project::name_of(root),
@@ -478,7 +495,7 @@ impl App {
 
         struct Group {
             name: String,
-            rows: Vec<(String, &'static str)>,
+            rows: Vec<(String, &'static str, Command)>,
             chords: f32,
             width: f32,
         }
@@ -487,20 +504,20 @@ impl App {
         let groups: Vec<Group> = START_PAGE
             .iter()
             .filter_map(|(name, commands)| {
-                let rows: Vec<(String, &'static str)> = commands
+                let rows: Vec<(String, &'static str, Command)> = commands
                     .iter()
-                    .filter_map(|command| Some((chord(*command)?, command.label())))
+                    .filter_map(|command| Some((chord(*command)?, command.label(), *command)))
                     .collect();
                 if rows.is_empty() {
                     return None;
                 }
                 let chords = rows
                     .iter()
-                    .map(|(chord, _)| width_of(chord, &chord_font))
+                    .map(|(chord, _, _)| width_of(chord, &chord_font))
                     .fold(0.0, f32::max);
                 let labels = rows
                     .iter()
-                    .map(|(_, label)| width_of(label, &label_font))
+                    .map(|(_, label, _)| width_of(label, &label_font))
                     .fold(0.0, f32::max);
                 Some(Group {
                     name: name.to_uppercase(),
@@ -511,8 +528,9 @@ impl App {
             })
             .collect();
         if groups.is_empty() {
-            return;
+            return None;
         }
+        let mut clicked = None;
         let block =
             groups.iter().map(|g| g.width).sum::<f32>() + COLUMN_GAP * (groups.len() - 1) as f32;
         let tallest = groups.iter().map(|g| g.rows.len()).max().unwrap_or(0);
@@ -553,8 +571,10 @@ impl App {
                                 .size(10.0)
                                 .strong(),
                         );
-                        for (key, label) in &group.rows {
-                            ui.horizontal(|ui| {
+                        for (key, label, command) in &group.rows {
+                            // Each row is the action it names: a click runs
+                            // it, so the page is a menu, not a manual.
+                            let row = ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 ui.label(
                                     egui::RichText::new(key)
@@ -565,12 +585,24 @@ impl App {
                                 // pad each chord out to the widest one.
                                 let used = width_of(key, &chord_font);
                                 ui.add_space(group.chords - used + KEY_GAP);
+                                let hovered = ui.rect_contains_pointer(ui.max_rect());
                                 ui.label(
                                     egui::RichText::new(*label)
-                                        .color(color(theme.ui.fg_faint))
+                                        .color(color(if hovered {
+                                            theme.ui.fg
+                                        } else {
+                                            theme.ui.fg_faint
+                                        }))
                                         .font(label_font.clone()),
                                 );
                             });
+                            let response = row.response.interact(egui::Sense::click());
+                            if response.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if response.clicked() {
+                                clicked = Some(*command);
+                            }
                         }
                     },
                 );
@@ -579,6 +611,7 @@ impl App {
                 }
             }
         });
+        clicked
     }
 
     // ----- native dialogs --------------------------------------------------
@@ -706,6 +739,21 @@ impl App {
         }
     }
 
+    /// Notices files edited outside the window — a formatter, a script,
+    /// another editor — and says what happened to them.
+    fn poll_disk(&mut self) {
+        for event in self.editor.buffers.poll_disk() {
+            self.status = Some(match event {
+                crate::core::buffer::DiskEvent::Reloaded(name) => {
+                    format!("{name} changed on disk — reloaded")
+                }
+                crate::core::buffer::DiskEvent::ChangedOnDisk(name) => {
+                    format!("{name} changed on disk — saving will overwrite it")
+                }
+            });
+        }
+    }
+
     /// Re-reads the file in front from disk, replacing the buffer's text.
     /// What an outside edit — a formatter, a script, another editor — asks
     /// for; the undo history is kept so the reload itself can be undone.
@@ -741,6 +789,7 @@ impl App {
             || self.show_help
             || self.show_indent_picker
             || self.goto_picker.is_some()
+            || self.picker.is_some()
             || self.pending_delete.is_some()
             || self.pending_replace_all
             || self.editor.pending_close.is_some()
@@ -907,6 +956,178 @@ impl App {
                     is_definition,
                 });
             }
+        }
+    }
+
+    /// The three pickers share one shape: a field to type in, and under it
+    /// the rows that still match, best first. Enter takes the highlighted
+    /// row, the arrows move it, Escape leaves.
+    fn picker_modal(&mut self, ctx: &egui::Context) {
+        let theme = self.theme().clone();
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        let title = match picker.kind {
+            PickerKind::Commands => "Command Palette",
+            PickerKind::Files => "Go to File",
+            PickerKind::Line => "Go to Line",
+        };
+        let rows: Vec<(usize, String, String)> = match picker.kind {
+            PickerKind::Commands => {
+                let settings = &self.settings;
+                crate::core::fuzzy::rank(&picker.query, ALL.iter().map(|c| c.label()))
+                    .into_iter()
+                    .map(|(i, label)| {
+                        let chord = settings
+                            .gui_chord(ALL[i])
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
+                        (i, label.to_string(), chord)
+                    })
+                    .collect()
+            }
+            PickerKind::Files => crate::core::fuzzy::rank(
+                &picker.query,
+                picker.files.iter().map(|(_, rel)| rel.as_str()),
+            )
+            .into_iter()
+            .take(200)
+            .map(|(i, rel)| (i, rel.to_string(), String::new()))
+            .collect(),
+            PickerKind::Line => Vec::new(),
+        };
+        if picker.selected >= rows.len() {
+            picker.selected = rows.len().saturating_sub(1);
+        }
+        let (escape, enter, up, down) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+            )
+        });
+        if up {
+            picker.selected = picker.selected.saturating_sub(1);
+        }
+        if down && !rows.is_empty() {
+            picker.selected = (picker.selected + 1).min(rows.len() - 1);
+        }
+        let mut chosen: Option<usize> = None;
+        let mut typed_line = false;
+        egui::Modal::new(egui::Id::new("picker")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.label(
+                egui::RichText::new(title)
+                    .color(color(theme.ui.fg))
+                    .size(13.5),
+            );
+            ui.add_space(4.0);
+            let hint = match picker.kind {
+                PickerKind::Commands => "Type a command",
+                PickerKind::Files => "Type a file name",
+                PickerKind::Line => "Line number",
+            };
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut picker.query)
+                    .hint_text(hint)
+                    // A modal sizes itself to its contents, so the field
+                    // needs a width of its own rather than "all of it".
+                    .desired_width(540.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            if std::mem::take(&mut picker.focus_pending) {
+                field.request_focus();
+            }
+            if field.changed() {
+                picker.selected = 0;
+            }
+            if picker.kind == PickerKind::Line {
+                typed_line = enter;
+                return;
+            }
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (n, (_, label, chord)) in rows.iter().enumerate() {
+                        let selected = n == picker.selected;
+                        let mut job = egui::text::LayoutJob::default();
+                        let fmt = |c| egui::text::TextFormat {
+                            font_id: egui::FontId::monospace(11.5),
+                            color: c,
+                            ..Default::default()
+                        };
+                        // The highlighted row carries a pointer and the
+                        // brighter colour, the way the terminal's list does.
+                        job.append(
+                            &format!("{} {label}", if selected { "▸" } else { " " }),
+                            0.0,
+                            fmt(color(if selected {
+                                theme.ui.fg_bright
+                            } else {
+                                theme.ui.fg_dim
+                            })),
+                        );
+                        if !chord.is_empty() {
+                            job.append(&format!("   {chord}"), 0.0, fmt(color(theme.ui.fg_faint)));
+                        }
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        let response = ui
+                            .add(egui::Button::new(job).frame(false))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        if selected && (up || down) {
+                            response.scroll_to_me(None);
+                        }
+                        if response.clicked() {
+                            chosen = Some(n);
+                        }
+                    }
+                });
+        });
+        if enter && picker.kind != PickerKind::Line && !rows.is_empty() {
+            chosen = Some(picker.selected);
+        }
+        if escape {
+            self.picker = None;
+            return;
+        }
+        if typed_line {
+            let query = picker.query.trim().to_string();
+            self.picker = None;
+            match query.parse::<usize>() {
+                Ok(line) if line > 0 => {
+                    if let Some(path) = self.editor.buffers.active().map(|b| b.path.clone()) {
+                        self.jump_to(path, line);
+                    }
+                }
+                _ => self.status = Some(format!("not a line number: {query}")),
+            }
+            return;
+        }
+        let Some(n) = chosen else { return };
+        let Some((index, _, _)) = rows.get(n) else {
+            return;
+        };
+        let kind = picker.kind;
+        let file = picker.files.get(*index).map(|(path, _)| path.clone());
+        let index = *index;
+        self.picker = None;
+        match kind {
+            PickerKind::Commands => {
+                if let Some(command) = ALL.get(index) {
+                    self.execute(ctx, *command);
+                }
+            }
+            PickerKind::Files => {
+                if let Some(path) = file {
+                    self.tree.reveal(&path);
+                    self.open_file(path);
+                }
+            }
+            PickerKind::Line => {}
         }
     }
 
@@ -1860,6 +2081,35 @@ impl App {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum PickerKind {
+    Commands,
+    Files,
+    Line,
+}
+
+/// One of the three pickers while it is up.
+struct Picker {
+    kind: PickerKind,
+    query: String,
+    selected: usize,
+    /// What Go to File can offer: every file, with its path from the root.
+    files: Vec<(PathBuf, String)>,
+    focus_pending: bool,
+}
+
+impl Picker {
+    fn new(kind: PickerKind) -> Self {
+        Self {
+            kind,
+            query: String::new(),
+            selected: 0,
+            files: Vec::new(),
+            focus_pending: true,
+        }
+    }
+}
+
 /// A menu in the top bar: its title, its entries, and a line about itself.
 type MenuBarEntry = (&'static str, &'static [Option<Command>], Option<String>);
 
@@ -1935,6 +2185,11 @@ impl App {
         }
 
         let theme = self.theme().clone();
+        // Git's view of the project feeds the navigator's colours and the
+        // gutter too, so it is kept current whichever panel is showing.
+        if let Some(root) = self.project.root().map(Path::to_path_buf) {
+            self.git.state.tick(&root);
+        }
         self.refresh_git_lines();
         self.refresh_blame();
         self.collect_update();
@@ -2006,6 +2261,9 @@ impl App {
                         });
                     if let Some(change) = diff_from_git {
                         self.show_diff(&change);
+                    }
+                    if let Some(message) = self.git.message.take() {
+                        self.status = Some(message);
                     }
                 });
         }
@@ -2232,7 +2490,10 @@ impl App {
                 self.find_bar(ui, &theme);
                 if self.editor.buffers.is_empty() {
                     ui.add_space(8.0);
-                    self.start_page(ui, &theme);
+                    if let Some(command) = self.start_page(ui, &theme) {
+                        let ctx = ui.ctx().clone();
+                        self.execute(&ctx, command);
+                    }
                 } else {
                     self.editor.ui(
                         ui,
@@ -2245,6 +2506,7 @@ impl App {
             });
 
         self.handle_goto();
+        self.picker_modal(ctx);
         self.recent_modal(ctx);
         self.help_modal(ctx);
         self.indent_modal(ctx);

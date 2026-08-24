@@ -11,6 +11,10 @@ use crate::gui::theme::{ansi_color, color};
 #[derive(Default)]
 pub struct GitPanel {
     pub state: GitState,
+    /// What the next commit will say.
+    pub commit_message: String,
+    /// What the last stage, unstage or commit had to say, for the status bar.
+    pub message: Option<String>,
 }
 
 impl GitPanel {
@@ -134,33 +138,160 @@ impl GitPanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for change in &self.state.changes {
-                    let letter = change.letter();
-                    let mut job = egui::text::LayoutJob::default();
-                    let fmt = |c| egui::text::TextFormat {
-                        font_id: egui::FontId::monospace(11.5),
-                        color: c,
-                        ..Default::default()
-                    };
-                    job.append(
-                        &format!(" {letter}  "),
-                        0.0,
-                        fmt(letter_color(letter, theme)),
-                    );
-                    job.append(&change.path, 0.0, fmt(color(theme.ui.fg_dim)));
-                    job.wrap.max_rows = 1;
-                    job.wrap.break_anywhere = true;
-                    if ui
-                        .add(egui::Button::new(job).frame(false))
-                        .on_hover_text(&change.path)
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        open = Some(change.clone());
+                let staged: Vec<Change> = self.state.staged().into_iter().cloned().collect();
+                let unstaged: Vec<Change> = self.state.unstaged().into_iter().cloned().collect();
+                let heading = |ui: &mut egui::Ui, text: String| {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(text)
+                                .color(color(theme.ui.fg_faint))
+                                .size(10.0),
+                        );
+                    });
+                };
+
+                // The commit box sits over the staged list, where what it
+                // will commit is in view.
+                if !staged.is_empty() {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut self.commit_message)
+                                .hint_text("Commit message")
+                                .desired_width(ui.available_width() - 70.0)
+                                .font(egui::TextStyle::Body),
+                        );
+                        let entered =
+                            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let clicked = ui
+                            .button(egui::RichText::new("Commit").size(11.0))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked();
+                        if entered || clicked {
+                            let message = self.commit_message.clone();
+                            match self.state.commit(&message) {
+                                Ok(line) => {
+                                    self.commit_message.clear();
+                                    self.message = Some(line);
+                                }
+                                Err(e) => self.message = Some(e),
+                            }
+                        }
+                    });
+                    heading(ui, format!("STAGED CHANGES  {}", staged.len()));
+                    for change in &staged {
+                        match self.row(ui, theme, change, Mark::Unstage) {
+                            RowClick::Open => open = Some(change.clone()),
+                            RowClick::Mark => {
+                                self.message =
+                                    Some(unwrap_message(self.state.unstage(&change.path)))
+                            }
+                            RowClick::None => {}
+                        }
+                    }
+                }
+                if !unstaged.is_empty() {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(format!("CHANGES  {}", unstaged.len()))
+                                .color(color(theme.ui.fg_faint))
+                                .size(10.0),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(10.0);
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("Stage All").size(10.0))
+                                        .frame(false),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                self.message = Some(unwrap_message(self.state.stage_all()));
+                            }
+                        });
+                    });
+                    for change in &unstaged {
+                        match self.row(ui, theme, change, Mark::Stage) {
+                            RowClick::Open => open = Some(change.clone()),
+                            RowClick::Mark => {
+                                self.message = Some(unwrap_message(self.state.stage(&change.path)))
+                            }
+                            RowClick::None => {}
+                        }
                     }
                 }
             });
         open
+    }
+
+    /// One changed file: its letter and path open the diff; the mark at the
+    /// right end moves it into or out of the index.
+    fn row(&self, ui: &mut egui::Ui, theme: &Theme, change: &Change, mark: Mark) -> RowClick {
+        let letter = change.letter();
+        let mut result = RowClick::None;
+        ui.horizontal(|ui| {
+            let mut job = egui::text::LayoutJob::default();
+            let fmt = |c| egui::text::TextFormat {
+                font_id: egui::FontId::monospace(11.5),
+                color: c,
+                ..Default::default()
+            };
+            job.append(
+                &format!(" {letter}  "),
+                0.0,
+                fmt(letter_color(letter, theme)),
+            );
+            job.append(&change.path, 0.0, fmt(color(theme.ui.fg_dim)));
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            let width = ui.available_width() - 26.0;
+            if ui
+                .add_sized([width, 18.0], egui::Button::new(job).frame(false))
+                .on_hover_text(&change.path)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                result = RowClick::Open;
+            }
+            let (glyph, hint) = match mark {
+                Mark::Stage => ("+", "Stage"),
+                Mark::Unstage => ("−", "Unstage"),
+            };
+            if ui
+                .add(egui::Button::new(egui::RichText::new(glyph).size(12.0)).frame(false))
+                .on_hover_text(hint)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                result = RowClick::Mark;
+            }
+        });
+        result
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Mark {
+    Stage,
+    Unstage,
+}
+
+enum RowClick {
+    None,
+    Open,
+    Mark,
+}
+
+/// Either way git answered, the status bar gets one line.
+fn unwrap_message(result: Result<String, String>) -> String {
+    match result {
+        Ok(line) | Err(line) => line,
     }
 }
 

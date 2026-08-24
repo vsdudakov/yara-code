@@ -108,6 +108,7 @@ ycode-gui ~/code/project   # the window
 | Find in file / Search project | `Ctrl+F` / `Ctrl+Shift+F` | `Cmd+F` / `Cmd+Shift+F` |
 | Git panel / Terminal panel | `Ctrl+Shift+G` / `Ctrl+J` | `Ctrl+Shift+G` / `Cmd+J` |
 | Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` | `Cmd+Z` / `Cmd+Shift+Z` |
+| Command palette / Go to file | `Ctrl+Shift+P` / `Ctrl+P` | `Cmd+Shift+P` / `Cmd+P` |
 | Key bindings overlay | `F1` | `F1` |
 
 The full table is in the [key bindings guide](https://vsdudakov.github.io/yara-code/guides/keys/).
@@ -138,7 +139,7 @@ make build     # release build of both binaries
 make run ARGS=~/code/project
 ```
 
-**Coverage.** 278 tests, **81% of the crate**: 92% of `src/core` — buffers
+**Coverage.** 288 tests, **81% of the crate**: 92% of `src/core` — buffers
 and undo, project folders, search, find and replace, diffs, git against a real
 repository, themes, settings and key chords, the updater, terminal sessions
 over live PTYs — and the two frontends driven **end to end**. `tests/tui_e2e.rs`

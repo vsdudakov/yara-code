@@ -305,6 +305,69 @@ impl Search {
     }
 }
 
+/// Every file under the project's folders, as paths relative to their root,
+/// in navigator order and skipping what a search would skip — what Go to
+/// File offers. Capped, so a huge tree answers at once.
+pub fn project_files(roots: &[PathBuf], cap: usize) -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    let excludes = default_excludes();
+    for root in roots {
+        list_paths(root, root, &excludes, cap, &mut out);
+        if out.len() >= cap {
+            break;
+        }
+    }
+    out
+}
+
+fn default_excludes() -> Vec<String> {
+    Search::default()
+        .exclude
+        .split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+fn list_paths(
+    dir: &Path,
+    root: &Path,
+    excludes: &[String],
+    cap: usize,
+    out: &mut Vec<(PathBuf, String)>,
+) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = read.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name().to_ascii_lowercase());
+    for entry in entries {
+        if out.len() >= cap {
+            return;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if glob::matches_any(excludes, &relative) || name == ".git" {
+            continue;
+        }
+        if kind.is_dir() {
+            if !SKIP_DIRS.contains(&name.as_str()) {
+                list_paths(&path, root, excludes, cap, out);
+            }
+        } else if kind.is_file() {
+            out.push((path, relative));
+        }
+    }
+}
+
 /// Walks the project, handing each readable text file to `visit`. Returning
 /// false from `visit` stops the walk.
 fn walk(dir: &Path, root: &Path, excludes: &[String], visit: &mut dyn FnMut(&Path, &str) -> bool) {

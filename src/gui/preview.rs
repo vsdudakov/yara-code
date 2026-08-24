@@ -8,6 +8,19 @@ use crate::gui::theme::{code_font, color};
 pub struct PreviewView {
     pub path: std::path::PathBuf,
     pub blocks: Vec<Block>,
+    /// The text the blocks were parsed from, so an edit re-renders.
+    pub source: String,
+}
+
+impl PreviewView {
+    /// Re-parses when the file's text moved on, so the preview follows the
+    /// editor keystroke by keystroke.
+    pub fn follow(&mut self, text: &str) {
+        if self.source != text {
+            self.source = text.to_string();
+            self.blocks = crate::core::markdown::parse(text);
+        }
+    }
 }
 
 /// What the preview's header asked for.

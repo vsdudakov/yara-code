@@ -698,3 +698,20 @@ fn saving_the_settings_file_applies_it_without_a_restart() {
         harness.screen()
     );
 }
+
+#[test]
+fn the_command_palette_opens_from_its_key_and_runs_a_command() {
+    let project = Project::new("yara-gui-e2e-palette");
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::P, Modifiers::COMMAND | Modifiers::SHIFT);
+    // The picker sizes itself on its first frame and shows on the next.
+    harness.frame();
+    assert!(harness.shows("Command Palette"), "{}", harness.screen());
+    harness.type_text("toggle side");
+    assert!(harness.shows("Toggle Sidebar"), "{}", harness.screen());
+    harness.press(Key::Enter, Modifiers::NONE);
+    // The start page lists the palette too, so the field's hint is what
+    // proves the picker itself is gone.
+    assert!(!harness.shows("Type a command"), "{}", harness.screen());
+    assert!(!harness.shows("FILES"), "{}", harness.screen());
+}

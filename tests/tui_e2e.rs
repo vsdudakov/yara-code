@@ -1434,3 +1434,140 @@ fn too_many_tabs_scroll_behind_arrows_and_the_front_one_stays_in_view() {
         .to_string();
     assert!(strip.contains("name_11.rs"), "{strip}");
 }
+
+#[test]
+fn the_command_palette_runs_what_is_typed() {
+    let project = Project::new("yara-e2e-palette");
+    let mut harness = Harness::open(&project);
+    assert!(harness.shows("FILES"), "{}", harness.screen());
+    harness.press(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    assert!(harness.shows("Command Palette"), "{}", harness.screen());
+    // The rows narrow as the name is typed, best match on top; Enter runs it.
+    harness.type_text("toggle side");
+    assert!(harness.shows("Toggle Sidebar"), "{}", harness.screen());
+    harness.key(KeyCode::Enter);
+    assert!(!harness.shows("> toggle side"), "{}", harness.screen());
+    assert!(!harness.shows("FILES"), "{}", harness.screen());
+}
+
+#[test]
+fn go_to_file_opens_the_best_match() {
+    let project = Project::new("yara-e2e-quick-open");
+    let mut harness = Harness::open(&project);
+    harness.ctrl('p');
+    assert!(harness.shows("Go to File"), "{}", harness.screen());
+    harness.type_text("main");
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("main.rs ×"), "{}", harness.screen());
+    assert!(harness.shows("fn main()"), "{}", harness.screen());
+}
+
+#[test]
+fn go_to_line_moves_the_caret() {
+    let project = Project::new("yara-e2e-goto-line");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    harness.ctrl('g');
+    assert!(harness.shows("Go to Line"), "{}", harness.screen());
+    harness.type_text("2");
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("Ln 2, Col 1"), "{}", harness.screen());
+}
+
+#[test]
+fn the_git_panel_stages_and_commits() {
+    let project = Project::new("yara-e2e-stage");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .expect("git is on PATH");
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "First"]);
+    project.file("README.md", "# Title\nA changed line.\n");
+
+    let mut harness = Harness::open(&project);
+    harness.press(
+        KeyCode::Char('g'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    assert!(harness.shows("CHANGES  1"), "{}", harness.screen());
+    assert!(!harness.shows("STAGED CHANGES"));
+    // `s` moves the selected file into the index; the panel says so at once.
+    harness.key(KeyCode::Char('s'));
+    assert!(harness.shows("STAGED CHANGES  1"), "{}", harness.screen());
+    // `c` asks for a message, and Enter makes the commit.
+    harness.key(KeyCode::Char('c'));
+    assert!(harness.shows("Commit message"), "{}", harness.screen());
+    harness.type_text("Second");
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("committed"), "{}", harness.screen());
+    assert!(harness.shows("no changes"), "{}", harness.screen());
+    let log = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project.path())
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Second");
+}
+
+#[test]
+fn the_wheel_scrolls_the_view_and_leaves_the_caret() {
+    let project = Project::new("yara-e2e-wheel");
+    let body: String = (1..=60).map(|n| format!("line {n}\n")).collect();
+    project.file("long.txt", &body);
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("long.txt").unwrap();
+    harness.click(4, row);
+    let editor = harness.app.layout.editor;
+    for _ in 0..2 {
+        harness.app.handle(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: editor.x + 10,
+            row: editor.y + 2,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    harness.draw();
+    // The view moved on; the caret did not.
+    assert!(!harness.shows("line 1\n"), "{}", harness.screen());
+    assert!(harness.shows("line 7"), "{}", harness.screen());
+    assert!(harness.shows("Ln 1, Col 1"), "{}", harness.screen());
+    // Moving the caret brings the view back to wherever it lands.
+    harness.key(KeyCode::Down);
+    assert!(harness.shows(" 2  line 2"), "{}", harness.screen());
+    assert!(harness.shows("Ln 2, Col 1"), "{}", harness.screen());
+}
+
+#[test]
+fn a_file_changed_on_disk_is_reloaded_while_clean() {
+    let project = Project::new("yara-e2e-disk");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    assert!(harness.shows("A line of prose"), "{}", harness.screen());
+    // Timestamps are whole seconds on some filesystems; the poll itself runs
+    // once a second, so the wait covers both.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    project.file("README.md", "# Title\nWritten by something else.\n");
+    harness.draw();
+    assert!(
+        harness.shows("Written by something else"),
+        "{}",
+        harness.screen()
+    );
+    assert!(harness.shows("changed on disk"), "{}", harness.screen());
+}

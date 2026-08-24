@@ -20,6 +20,16 @@ pub struct Change {
 }
 
 impl Change {
+    /// Whether the index holds a version of this change, ready to commit.
+    pub fn staged(&self) -> bool {
+        !matches!(self.code.chars().next(), Some(' ') | Some('?') | None)
+    }
+
+    /// Whether the worktree holds edits the index does not.
+    pub fn unstaged(&self) -> bool {
+        self.code == "??" || !matches!(self.code.chars().nth(1), Some(' ') | None)
+    }
+
     /// The single letter shown in a change list: the worktree column when it
     /// says anything, the index column otherwise, `U` for untracked.
     pub fn letter(&self) -> char {
@@ -143,6 +153,46 @@ impl GitState {
     pub fn select_worktree(&mut self, index: usize) {
         self.worktree = index.min(self.worktrees.len().saturating_sub(1));
         self.refresh();
+    }
+
+    /// The changes the index holds, and the ones it does not; a file with
+    /// both kinds of edit is in both lists.
+    pub fn staged(&self) -> Vec<&Change> {
+        self.changes.iter().filter(|c| c.staged()).collect()
+    }
+
+    pub fn unstaged(&self) -> Vec<&Change> {
+        self.changes.iter().filter(|c| c.unstaged()).collect()
+    }
+
+    /// Runs one git action against the selected worktree and re-reads the
+    /// status right after, so the panel shows the result at once.
+    pub fn act(
+        &mut self,
+        action: impl FnOnce(&Path) -> Result<String, String>,
+    ) -> Result<String, String> {
+        let Some(dir) = self.dir() else {
+            return Err("not a git repository".to_string());
+        };
+        let result = action(&dir);
+        self.refresh();
+        result
+    }
+
+    pub fn stage(&mut self, path: &str) -> Result<String, String> {
+        self.act(|dir| stage(dir, path).map(|_| format!("staged {path}")))
+    }
+
+    pub fn unstage(&mut self, path: &str) -> Result<String, String> {
+        self.act(|dir| unstage(dir, path).map(|_| format!("unstaged {path}")))
+    }
+
+    pub fn stage_all(&mut self) -> Result<String, String> {
+        self.act(|dir| stage_all(dir).map(|_| "staged everything".to_string()))
+    }
+
+    pub fn commit(&mut self, message: &str) -> Result<String, String> {
+        self.act(|dir| commit(dir, message).map(|line| format!("committed {line}")))
     }
 
     /// The directory whose status is shown: the selected worktree.
@@ -478,6 +528,32 @@ pub fn changed_lines(dir: &Path, path: &str) -> BTreeMap<usize, LineState> {
 
 pub fn status(dir: &Path) -> Result<Vec<Change>, String> {
     git(dir, &["status", "--porcelain"]).map(|out| parse_status(&out))
+}
+
+/// Puts one path's worktree state into the index — a deletion included.
+pub fn stage(dir: &Path, path: &str) -> Result<(), String> {
+    git(dir, &["add", "-A", "--", path]).map(|_| ())
+}
+
+/// Takes one path back out of the index, leaving the worktree as it is.
+pub fn unstage(dir: &Path, path: &str) -> Result<(), String> {
+    git(dir, &["reset", "-q", "--", path]).map(|_| ())
+}
+
+pub fn stage_all(dir: &Path) -> Result<(), String> {
+    git(dir, &["add", "-A"]).map(|_| ())
+}
+
+/// Commits the index with `message`, answering with git's own one-line
+/// summary.
+pub fn commit(dir: &Path, message: &str) -> Result<String, String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("a commit needs a message".to_string());
+    }
+    git(dir, &["commit", "-q", "-m", message])?;
+    let line = git(dir, &["log", "-1", "--format=%h %s"])?;
+    Ok(line.trim().to_string())
 }
 
 fn parse_status(out: &str) -> Vec<Change> {

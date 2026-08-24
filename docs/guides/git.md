@@ -1,5 +1,5 @@
 ---
-description: Read what your agent changed: git status in the navigator, changed lines in the gutter, side-by-side diffs in tabs, and blame for the line under the cursor.
+description: Read what your agent changed and commit it: git status in the navigator, changed lines in the gutter, side-by-side diffs in tabs, blame for the line under the cursor, staging and commits from the panel.
 ---
 
 # Git
@@ -17,7 +17,26 @@ works in both frontends.
 - the list of changed files, each with its porcelain letter — `M`, `A`, `D`,
   `R`, `U` — colored from the theme's terminal palette.
 
-The status is re-polled on a timer while the view is on screen.
+The list is in two groups — **STAGED CHANGES**, what the next commit will
+hold, and **CHANGES**, what is only in the worktree — and a file edited both
+before and after staging appears in both.
+
+The status is re-polled on a timer, whichever view is showing, so the
+navigator's tints and the gutter bars are always current.
+
+## Staging and committing
+
+- The mark at the right end of a row moves the file: **+** into the index,
+  **−** back out. In the terminal frontend `s` does the same for the selected
+  row, and `a` stages everything; the panel's last line says so.
+- With something staged, a **commit message** field and a **Commit** button
+  appear above the staged list in the window; in the terminal, `c` asks for
+  the message. Enter commits.
+- What git answered — `staged src/main.rs`, `committed 3f2a1c0 Fix the
+  thing`, or the reason it refused — lands in the status bar.
+
+There is no push, pull or branch switching: those are a shell command away,
+and the terminal panel is right there.
 
 ## Diffs
 

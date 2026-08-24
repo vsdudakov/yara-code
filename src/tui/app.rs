@@ -16,12 +16,12 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use crate::core::buffer::{word_at, Buffers};
-use crate::core::command::{Chord, Command, Key, Mods, FILE_MENU, HELP_MENU, VIEW_MENU};
+use crate::core::command::{Chord, Command, Key, Mods, ALL, FILE_MENU, HELP_MENU, VIEW_MENU};
 use crate::core::diff;
 use crate::core::find::Find;
 use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
-use crate::core::git::{self as core_git, GitState};
+use crate::core::git::{self as core_git, Change, GitState};
 use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::project::Project;
@@ -56,6 +56,14 @@ pub enum Focus {
     Shell,
 }
 
+/// One row of the git panel: a heading over a group, or a change that can
+/// be moved into or out of the index.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GitRow {
+    Heading(String),
+    Change { index: usize, staged: bool },
+}
+
 /// A markdown file rendered rather than edited: headings, lists and code laid
 /// out as a reader sees them, in a tab beside the file itself.
 pub struct Preview {
@@ -63,6 +71,19 @@ pub struct Preview {
     pub blocks: Vec<crate::core::markdown::Block>,
     /// First drawn line.
     pub scroll: usize,
+    /// The text the blocks were parsed from, so an edit re-renders.
+    pub source: String,
+}
+
+impl Preview {
+    /// Re-parses when the file's text moved on, so the preview follows the
+    /// editor keystroke by keystroke.
+    pub fn follow(&mut self, text: &str) {
+        if self.source != text {
+            self.source = text.to_string();
+            self.blocks = crate::core::markdown::parse(text);
+        }
+    }
 }
 
 /// A changed file shown side by side: what it was on the left, what it is now
@@ -124,6 +145,14 @@ pub enum Prompt {
     },
     GitRepo,
     GitWorktree,
+    /// The message for a commit of what is staged.
+    Commit,
+    /// Every command by name, narrowed by what is typed.
+    Palette,
+    /// Every file in the project by path, narrowed by what is typed.
+    QuickOpen,
+    /// A line number to jump to in the file in front.
+    GotoLine,
     OpenPath,
     OpenFolder,
     /// Typed-path counterpart of the browser's "add folder".
@@ -172,6 +201,10 @@ impl Prompt {
             }
             Self::GitRepo => "Repository".to_string(),
             Self::GitWorktree => "Worktree".to_string(),
+            Self::Commit => "Commit message".to_string(),
+            Self::Palette => "Command Palette".to_string(),
+            Self::QuickOpen => "Go to File".to_string(),
+            Self::GotoLine => "Go to Line".to_string(),
             Self::OpenPath => "Open file (path relative to the project)".to_string(),
             Self::OpenFolder => "Open folder as project".to_string(),
             Self::AddFolderPath => "Add folder to project (path)".to_string(),
@@ -251,12 +284,24 @@ impl Prompt {
                 | Self::OpenFolder
                 | Self::AddFolderPath
                 | Self::RenameTerminal(_)
+                | Self::Commit
+                | Self::Palette
+                | Self::QuickOpen
+                | Self::GotoLine
                 | Self::SaveAs
         )
     }
 
-    pub fn list_len(&self, themes: usize, recent: usize, repos: usize, worktrees: usize) -> usize {
+    pub fn list_len(
+        &self,
+        themes: usize,
+        recent: usize,
+        repos: usize,
+        worktrees: usize,
+        picker: usize,
+    ) -> usize {
         match self {
+            Self::Palette | Self::QuickOpen => picker,
             Self::Themes => themes,
             Self::Indent => crate::core::settings::Indent::CHOICES.len(),
             Self::Recent => recent,
@@ -269,6 +314,13 @@ impl Prompt {
             }
             _ => 0,
         }
+    }
+}
+
+/// Either way git answered, the status bar gets one line.
+fn flatten(result: Result<String, String>) -> String {
+    match result {
+        Ok(line) | Err(line) => line,
     }
 }
 
@@ -339,6 +391,8 @@ pub const TAB_SCROLL_STEP: u16 = 12;
 
 #[derive(Default, Clone)]
 pub struct Layout {
+    /// The start page's rows, each the command it names.
+    pub start_rows: Vec<(Rect, Command)>,
     pub sidebar: Rect,
     pub sidebar_header: Rect,
     pub tree: Rect,
@@ -421,6 +475,11 @@ pub struct EditState {
     pub col: usize,
     /// Index into the visible-line list, not a raw line number.
     pub scroll: usize,
+    /// Columns scrolled off the left edge, for lines wider than the pane.
+    pub col_scroll: usize,
+    /// The wheel moved the view away from the caret; the view stays put
+    /// until the caret itself moves.
+    pub free_scroll: bool,
     /// Column the cursor tries to return to when moving vertically.
     pub goal_col: usize,
     /// Header lines whose blocks are collapsed.
@@ -458,7 +517,15 @@ pub struct App {
     pub git_lines: BTreeMap<usize, core_git::LineState>,
     git_lines_key: Option<(PathBuf, usize)>,
     /// Selected row in the git change list.
+    /// Which git row the keyboard is on — an index into [`Self::git_rows`].
     pub git_selected: usize,
+    /// The git panel's rows as last drawn: headings and changes.
+    pub git_rows: Vec<GitRow>,
+    /// What Go to File can offer: every file, with its path from the root.
+    pub picker_files: Vec<(PathBuf, String)>,
+    /// The palette's or file finder's rows, best match first, as indices
+    /// into the commands or into `picker_files`.
+    pub picker_items: Vec<usize>,
     pub shell: Shell,
     /// Raised by the shell's reader thread when there is new output to draw.
     shell_dirty: Arc<AtomicBool>,
@@ -560,6 +627,9 @@ impl App {
             git_lines: BTreeMap::new(),
             git_lines_key: None,
             git_selected: 0,
+            git_rows: Vec::new(),
+            picker_files: Vec::new(),
+            picker_items: Vec::new(),
             shell: Shell::new(Arc::clone(&shell_dirty)),
             shell_dirty,
             syntax,
@@ -613,6 +683,16 @@ impl App {
     /// before drawing, and so must anything else that draws.
     pub fn prepare(&mut self) {
         self.poll_settings();
+        // Git's view of the project feeds the navigator's colours and the
+        // gutter too, so it is kept current whichever panel is showing.
+        if let Some(root) = self.project.root().map(std::path::Path::to_path_buf) {
+            self.git.tick(&root);
+        }
+        for preview in &mut self.previews {
+            if let Some(buf) = self.buffers.list.iter().find(|b| b.path == preview.path) {
+                preview.follow(&buf.text);
+            }
+        }
         self.refresh_highlight();
         self.refresh_git_marks();
         self.collect_update();
@@ -1260,7 +1340,8 @@ impl App {
             return None;
         }
         let line = self.line_at_row(y)?;
-        let col = x.checked_sub(self.layout.editor.x + self.layout.gutter)? as usize;
+        let col = x.checked_sub(self.layout.editor.x + self.layout.gutter)? as usize
+            + self.edit[self.buffers.active].col_scroll;
         if col > self.line_len(line) {
             return None;
         }
@@ -1482,7 +1563,8 @@ impl App {
         let Some(line) = self.line_at_row(y) else {
             return;
         };
-        let col = (x.saturating_sub(self.layout.editor.x + self.layout.gutter)) as usize;
+        let col = (x.saturating_sub(self.layout.editor.x + self.layout.gutter)) as usize
+            + self.edit[self.buffers.active].col_scroll;
         let col = col.min(self.line_len(line));
         let state = self.edit_state();
         state.line = line;
@@ -1506,13 +1588,13 @@ impl App {
                 self.search_selected = total - 1;
             }
         } else if hits(self.layout.git_list, x, y) {
-            self.git_selected = (self.git_selected as isize + delta).max(0) as usize;
-            let total = self.git.changes.len();
-            if total > 0 && self.git_selected >= total {
-                self.git_selected = total - 1;
-            }
+            self.move_git_selection(delta);
         } else if hits(self.layout.editor, x, y) && !self.buffers.is_empty() {
-            self.move_cursor(delta, 0);
+            let rows = self.visible_lines().len();
+            let state = self.edit_state();
+            state.scroll =
+                (state.scroll as isize + delta).clamp(0, rows.saturating_sub(1) as isize) as usize;
+            state.free_scroll = true;
         }
     }
 
@@ -1530,6 +1612,17 @@ impl App {
             }
             return;
         }
+        if self.prompt.is_none() && self.buffers.is_empty() {
+            if let Some((_, command)) = self
+                .layout
+                .start_rows
+                .iter()
+                .find(|(rect, _)| hits(*rect, x, y))
+            {
+                self.execute(*command);
+                return;
+            }
+        }
 
         // Prompt list selection.
         if self.prompt.is_some() && hits(self.layout.prompt_list, x, y) {
@@ -1540,6 +1633,7 @@ impl App {
                     self.settings.recent_projects.len(),
                     self.git.repos.len(),
                     self.git.worktrees.len(),
+                    self.picker_items.len(),
                 )
             });
             let offset = self.prompt_list_offset();
@@ -1662,9 +1756,15 @@ impl App {
         if hits(self.layout.git_list, x, y) {
             self.focus = Focus::Git;
             let row = self.layout.git_list_offset + (y - self.layout.git_list.y) as usize;
-            if row < self.git.changes.len() {
+            if let Some(GitRow::Change { .. }) = self.git_rows.get(row) {
                 self.git_selected = row;
-                self.open_git_change();
+                // The mark at the row's end moves the file; the rest opens it.
+                let list = self.layout.git_list;
+                if x + 3 >= list.x + list.width {
+                    self.toggle_git_stage();
+                } else {
+                    self.open_git_change();
+                }
             }
             return;
         }
@@ -1824,7 +1924,8 @@ impl App {
                 self.toggle_fold(line);
                 return;
             }
-            let col = (x.saturating_sub(self.layout.editor.x + self.layout.gutter)) as usize;
+            let col = (x.saturating_sub(self.layout.editor.x + self.layout.gutter)) as usize
+                + self.edit[self.buffers.active].col_scroll;
             let col = col.min(self.line_len(line));
             let state = self.edit_state();
             state.line = line;
@@ -1952,6 +2053,28 @@ impl App {
     }
 
     /// First list row the prompt overlay renders, mirroring `ui::draw_prompt`.
+    /// Re-ranks the palette or file list against what has been typed.
+    fn refilter_picker(&mut self) {
+        let query = self.prompt_input.clone();
+        self.picker_items = match self.prompt {
+            Some(Prompt::Palette) => {
+                crate::core::fuzzy::rank(&query, ALL.iter().map(|c| c.label()))
+                    .into_iter()
+                    .map(|(i, _)| i)
+                    .collect()
+            }
+            Some(Prompt::QuickOpen) => crate::core::fuzzy::rank(
+                &query,
+                self.picker_files.iter().map(|(_, rel)| rel.as_str()),
+            )
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect(),
+            _ => Vec::new(),
+        };
+        self.prompt_selected = 0;
+    }
+
     fn prompt_list_offset(&self) -> usize {
         let height = self.layout.prompt_list.height as usize;
         self.prompt_selected
@@ -2085,7 +2208,10 @@ impl App {
             }
             _ => match self.focus {
                 Focus::Tree => self.tree_key(key),
-                Focus::Editor => self.editor_key(key),
+                Focus::Editor => {
+                    self.edit_state().free_scroll = false;
+                    self.editor_key(key)
+                }
                 Focus::Search => self.search_key(key),
                 Focus::Git => self.git_key(key),
                 Focus::Find => self.find_key(key),
@@ -2400,6 +2526,25 @@ impl App {
             Command::FileMenu => self.open_menu_bar_menu(MenuBar::File),
             Command::ViewMenu => self.open_menu_bar_menu(MenuBar::View),
             Command::HelpMenu => self.open_menu_bar_menu(MenuBar::Help),
+            Command::CommandPalette => {
+                self.prompt_input.clear();
+                self.prompt = Some(Prompt::Palette);
+                self.refilter_picker();
+            }
+            Command::QuickOpen => {
+                self.prompt_input.clear();
+                self.picker_files = search::project_files(self.project.roots(), 5000);
+                self.prompt = Some(Prompt::QuickOpen);
+                self.refilter_picker();
+            }
+            Command::GotoLine => {
+                if self.buffers.is_empty() {
+                    self.status = "open a file first".into();
+                } else {
+                    self.prompt_input.clear();
+                    self.prompt = Some(Prompt::GotoLine);
+                }
+            }
             Command::Help => {
                 self.prompt_selected = 0;
                 self.prompt = Some(Prompt::Help(self.help_entries()));
@@ -2484,11 +2629,39 @@ impl App {
     /// Once a second, looks whether a settings file was written by something
     /// other than this editor — the other frontend, a script, a hand edit —
     /// and applies it, so a change lands without a restart either way.
+    /// Notices files edited outside the editor — a formatter, a script,
+    /// another editor — and says what happened to them.
+    fn poll_disk(&mut self) {
+        let events = self.buffers.poll_disk();
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            self.status = match event {
+                crate::core::buffer::DiskEvent::Reloaded(name) => {
+                    format!("{name} changed on disk — reloaded")
+                }
+                crate::core::buffer::DiskEvent::ChangedOnDisk(name) => {
+                    format!("{name} changed on disk — saving will overwrite it")
+                }
+            };
+        }
+        // A reloaded file may be shorter than where the caret was.
+        for (i, buf) in self.buffers.list.iter().enumerate() {
+            if let Some(state) = self.edit.get_mut(i) {
+                let lines = buf.text.split('\n').count();
+                state.line = state.line.min(lines.saturating_sub(1));
+            }
+        }
+        self.mark_dirty();
+    }
+
     fn poll_settings(&mut self) {
         if self.settings_polled.elapsed() < std::time::Duration::from_secs(1) {
             return;
         }
         self.settings_polled = std::time::Instant::now();
+        self.poll_disk();
         let stamp = Settings::stamp(self.project.root());
         match &self.settings_stamp {
             // The first look only remembers what is there.
@@ -3000,13 +3173,12 @@ impl App {
 
     fn git_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => self.git_selected = self.git_selected.saturating_sub(1),
-            KeyCode::Down => {
-                if !self.git.changes.is_empty() {
-                    self.git_selected = (self.git_selected + 1).min(self.git.changes.len() - 1);
-                }
-            }
+            KeyCode::Up => self.move_git_selection(-1),
+            KeyCode::Down => self.move_git_selection(1),
             KeyCode::Enter => self.open_git_change(),
+            KeyCode::Char('s') => self.toggle_git_stage(),
+            KeyCode::Char('a') => self.status = flatten(self.git.stage_all()),
+            KeyCode::Char('c') => self.start_commit(),
             KeyCode::Char('r') if !self.git.repos.is_empty() => {
                 self.prompt_selected = self.git.repo;
                 self.prompt = Some(Prompt::GitRepo);
@@ -3019,10 +3191,72 @@ impl App {
         }
     }
 
+    /// The change under the git selection, if it is on one.
+    fn selected_change(&self) -> Option<(Change, bool)> {
+        match self.git_rows.get(self.git_selected)? {
+            GitRow::Change { index, staged } => {
+                Some((self.git.changes.get(*index)?.clone(), *staged))
+            }
+            GitRow::Heading(_) => None,
+        }
+    }
+
+    /// Steps the git selection over changes, skipping the headings.
+    fn move_git_selection(&mut self, delta: isize) {
+        let rows = &self.git_rows;
+        if rows.is_empty() {
+            return;
+        }
+        let mut at = self.git_selected.min(rows.len() - 1) as isize;
+        let step = delta.signum();
+        let mut left = delta.abs();
+        while left > 0 {
+            let next = at + step;
+            if next < 0 || next >= rows.len() as isize {
+                break;
+            }
+            at = next;
+            if matches!(rows[at as usize], GitRow::Change { .. }) {
+                left -= 1;
+            }
+        }
+        // A heading is never the resting place; settle on the nearest change.
+        while matches!(rows[at as usize], GitRow::Heading(_)) {
+            let next = at + if step == 0 { 1 } else { step };
+            if next < 0 || next >= rows.len() as isize {
+                break;
+            }
+            at = next;
+        }
+        self.git_selected = at as usize;
+    }
+
+    /// Moves the selected change into the index, or back out of it.
+    fn toggle_git_stage(&mut self) {
+        let Some((change, staged)) = self.selected_change() else {
+            return;
+        };
+        self.status = flatten(if staged {
+            self.git.unstage(&change.path)
+        } else {
+            self.git.stage(&change.path)
+        });
+    }
+
+    /// Asks for a message; the prompt's answer makes the commit.
+    fn start_commit(&mut self) {
+        if self.git.staged().is_empty() {
+            self.status = "nothing staged to commit".into();
+            return;
+        }
+        self.prompt_input.clear();
+        self.prompt = Some(Prompt::Commit);
+    }
+
     /// Shows a changed file side by side: what it was against what it is.
     fn open_git_change(&mut self) {
         let Some(dir) = self.git.dir() else { return };
-        let Some(change) = self.git.changes.get(self.git_selected).cloned() else {
+        let Some((change, _)) = self.selected_change() else {
             return;
         };
         match core_git::diff(&dir, &change) {
@@ -3068,6 +3302,7 @@ impl App {
             path,
             blocks: crate::core::markdown::parse(&buf.text),
             scroll: 0,
+            source: buf.text.clone(),
         });
         self.active_preview = Some(self.previews.len() - 1);
         self.active_diff = None;
@@ -3257,6 +3492,7 @@ impl App {
                 self.settings.recent_projects.len(),
                 self.git.repos.len(),
                 self.git.worktrees.len(),
+                self.picker_items.len(),
             );
             match key.code {
                 KeyCode::Down => {
@@ -3278,10 +3514,21 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char(c) => self.prompt_input.push(c),
+            KeyCode::Char(c) => {
+                self.prompt_input.push(c);
+                self.refilter_picker();
+            }
             KeyCode::Backspace => {
                 self.prompt_input.pop();
+                self.refilter_picker();
             }
+            KeyCode::Down => {
+                let len = self.picker_items.len();
+                if len > 0 {
+                    self.prompt_selected = (self.prompt_selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => self.prompt_selected = self.prompt_selected.saturating_sub(1),
             KeyCode::Enter => self.confirm_prompt(),
             _ => {}
         }
@@ -3391,6 +3638,35 @@ impl App {
                     self.status = format!("could not write \"{name}\"");
                 }
             }
+            Prompt::Commit => self.status = flatten(self.git.commit(&input)),
+            Prompt::Palette => {
+                if let Some(command) = self
+                    .picker_items
+                    .get(self.prompt_selected)
+                    .and_then(|i| ALL.get(*i))
+                {
+                    self.execute(*command);
+                }
+            }
+            Prompt::QuickOpen => {
+                if let Some((path, _)) = self
+                    .picker_items
+                    .get(self.prompt_selected)
+                    .and_then(|i| self.picker_files.get(*i))
+                    .cloned()
+                {
+                    self.tree.reveal(&path);
+                    self.open(path);
+                }
+            }
+            Prompt::GotoLine => match input.trim().parse::<usize>() {
+                Ok(line) if line > 0 => {
+                    if let Some(path) = self.buffers.active().map(|b| b.path.clone()) {
+                        self.jump_to(path, line);
+                    }
+                }
+                _ => self.status = format!("not a line number: {}", input.trim()),
+            },
             Prompt::GitRepo => {
                 self.git.select_repo(self.prompt_selected);
                 self.git_selected = 0;

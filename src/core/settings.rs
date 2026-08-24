@@ -250,6 +250,10 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::NextTab => "Ctrl+PageDown",
         Command::PrevTab => "Ctrl+PageUp",
         Command::Help => "F1",
+        // VS Code's own three: the palette, the file finder, and go to line.
+        Command::CommandPalette => "Cmd+Shift+P",
+        Command::QuickOpen => "Cmd+P",
+        Command::GotoLine => "Ctrl+G",
         // Driven by the mouse and the menu bar in the window frontend.
         Command::ContextMenu | Command::FileMenu | Command::ViewMenu | Command::HelpMenu => {
             return None
@@ -331,6 +335,9 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
         Command::Help => "F1",
         Command::Documentation => "Ctrl+Shift+H",
         Command::CheckForUpdates | Command::InstallUpdate => return None,
+        Command::CommandPalette => "Ctrl+Shift+P",
+        Command::QuickOpen => "Ctrl+P",
+        Command::GotoLine => "Ctrl+G",
     })
 }
 

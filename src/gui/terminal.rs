@@ -202,6 +202,14 @@ impl Terminal {
         self.focus_pending = false;
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+            // The wheel walks the scrollback, a few rows per notch; typing
+            // brings the live screen back, as in any terminal.
+            let wheel = ui.input(|i| i.smooth_scroll_delta.y);
+            if wheel.abs() >= 1.0 {
+                let rows = (wheel / cell_h).round() as isize;
+                let current = pty.scrollback() as isize;
+                pty.set_scrollback((current + rows).max(0) as usize);
+            }
         }
         let focused = response.has_focus();
         self.focused = focused;
@@ -376,7 +384,10 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
             }
         }
     });
-    pty.write(&bytes);
+    if !bytes.is_empty() {
+        pty.set_scrollback(0);
+        pty.write(&bytes);
+    }
 }
 
 fn vt_color(c: vt100::Color, default: egui::Color32, theme: &Theme) -> egui::Color32 {

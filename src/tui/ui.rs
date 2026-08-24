@@ -224,7 +224,7 @@ fn draw_splitters(frame: &mut Frame, app: &App, vertical: Rect, horizontal: Rect
 /// The top bar: the app name, then the File, View and Help menus.
 fn draw_menu_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme().clone();
-    let name = " YARA CODE ";
+    let name = " YCODE ";
     let labels = [" File ", " View ", " Help "];
     let mut spans = vec![Span::styled(
         name,
@@ -1442,6 +1442,8 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
         height: whole.height.saturating_sub(1),
         ..whole
     };
+    // The whole pane, header included: a wheel anywhere over it scrolls.
+    app.layout.viewer = whole;
     let Some(diff) = app.active_diff() else {
         return;
     };
@@ -1537,6 +1539,7 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
 fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
     use crate::core::markdown::{plain, Block, Span as Md};
     let theme = app.theme().clone();
+    app.layout.viewer = whole;
     let Some(preview) = app.active_preview() else {
         return;
     };
@@ -1937,6 +1940,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     );
     let text_area = area;
     app.layout.editor = text_area;
+    app.layout.viewer = Rect::default();
     if app.buffers.is_empty() {
         draw_start_page(frame, app, text_area);
         return;
@@ -2332,6 +2336,12 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     pty.resize(grid.height, grid.width);
 
+    // The mouse's selection, in view rows: it is held against the shell's own
+    // text so it stays on that text while the panel scrolls.
+    let selection = pty.selection();
+    let scrollback = pty.scrollback() as isize;
+    let selected_bg = color(theme.ui.selection);
+
     // Paint the shell's screen cell by cell, merging runs that share a style.
     let (lines, cursor) = pty.with_screen(|screen| {
         let mut lines: Vec<Line> = Vec::with_capacity(grid.height as usize);
@@ -2339,6 +2349,9 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
             let mut spans: Vec<Span> = Vec::new();
             let mut run = String::new();
             let mut run_style: Option<Style> = None;
+            let highlighted = selection
+                .and_then(|s| s.span_on(row as isize - scrollback, grid.width))
+                .unwrap_or((0, 0));
             for col in 0..grid.width {
                 let (text, style) = match screen.cell(row, col) {
                     Some(cell) => {
@@ -2354,6 +2367,13 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
                         " ".to_string(),
                         on(theme.ui.terminal_fg, theme.ui.editor_bg),
                     ),
+                };
+                // The selection changes the background only: a shell's own
+                // colors carry meaning, and the text stays readable.
+                let style = if col >= highlighted.0 && col < highlighted.1 {
+                    style.bg(selected_bg)
+                } else {
+                    style
                 };
                 match run_style {
                     Some(current) if current == style => run.push_str(&text),

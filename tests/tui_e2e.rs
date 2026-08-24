@@ -163,6 +163,38 @@ impl Harness {
         self.draw();
     }
 
+    /// Presses the left button at one point, drags to another, and releases —
+    /// the three events a mouse actually sends.
+    fn drag(&mut self, from: (u16, u16), to: (u16, u16)) {
+        for (kind, (column, row)) in [
+            (MouseEventKind::Down(MouseButton::Left), from),
+            (MouseEventKind::Drag(MouseButton::Left), to),
+            (MouseEventKind::Up(MouseButton::Left), to),
+        ] {
+            self.app.handle(Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }));
+        }
+        self.draw();
+    }
+
+    fn wheel(&mut self, column: u16, row: u16, up: bool) {
+        self.app.handle(Event::Mouse(MouseEvent {
+            kind: if up {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            },
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        self.draw();
+    }
+
     /// The row a piece of text is drawn on, if it is on screen at all.
     fn row_of(&self, text: &str) -> Option<u16> {
         self.screen()
@@ -631,28 +663,6 @@ fn replacing_in_a_file_rewrites_every_match() {
     assert_eq!(body, "two\ntwo\ntwo\n", "every match was rewritten");
 }
 
-fn drag(harness: &mut Harness, from: (u16, u16), to: (u16, u16)) {
-    harness.app.handle(Event::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: from.0,
-        row: from.1,
-        modifiers: KeyModifiers::NONE,
-    }));
-    harness.app.handle(Event::Mouse(MouseEvent {
-        kind: MouseEventKind::Drag(MouseButton::Left),
-        column: to.0,
-        row: to.1,
-        modifiers: KeyModifiers::NONE,
-    }));
-    harness.app.handle(Event::Mouse(MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: to.0,
-        row: to.1,
-        modifiers: KeyModifiers::NONE,
-    }));
-    harness.draw();
-}
-
 #[test]
 fn a_shift_selection_copies_and_the_mouse_places_the_cursor() {
     let project = Project::new("yara-e2e-select");
@@ -673,15 +683,8 @@ fn a_shift_selection_copies_and_the_mouse_places_the_cursor() {
     assert!(harness.shows("Ln 2"), "{}", harness.screen());
 
     // The wheel scrolls whichever pane is under it without falling over.
-    for kind in [MouseEventKind::ScrollDown, MouseEventKind::ScrollUp] {
-        harness.app.handle(Event::Mouse(MouseEvent {
-            kind,
-            column: 45,
-            row: line,
-            modifiers: KeyModifiers::NONE,
-        }));
-    }
-    harness.draw();
+    harness.wheel(45, line, false);
+    harness.wheel(45, line, true);
 }
 
 #[test]
@@ -893,7 +896,7 @@ fn a_row_dragged_onto_a_folder_moves_the_file() {
     let mut harness = Harness::open(&project);
     let from = harness.row_of("README.md").unwrap();
     let to = harness.row_of("src").unwrap();
-    drag(&mut harness, (4, from), (4, to));
+    harness.drag((4, from), (4, to));
     assert!(
         project.path().join("src").join("README.md").is_file(),
         "{}",
@@ -952,12 +955,12 @@ fn the_splitters_resize_the_panes() {
     // The splitter is the one-column rect the layout reserves for it.
     let bar = harness.app.layout.v_split.x;
     let row = harness.app.layout.v_split.y + 2;
-    drag(&mut harness, (bar, row), (bar + 10, row));
+    harness.drag((bar, row), (bar + 10, row));
     let after = harness.app.layout.v_split.x;
     assert!(after > bar, "the sidebar grew: {bar} -> {after}");
     // The horizontal one, above the terminal, moves too.
     let top = harness.app.layout.h_split.y;
-    drag(&mut harness, (60, top), (60, top.saturating_sub(4)));
+    harness.drag((60, top), (60, top.saturating_sub(4)));
     assert!(
         harness.app.layout.h_split.y < top,
         "the terminal grew taller"
@@ -1084,7 +1087,7 @@ fn a_shift_drag_selects_text_and_paste_replaces_it() {
     harness.click(4, row);
     let line = harness.row_of("A line of prose.").unwrap();
     // Drag across the second line to select it.
-    drag(&mut harness, (38, line), (54, line));
+    harness.drag((38, line), (54, line));
     // A paste event goes where the keyboard is: over the selection.
     harness.app.handle(Event::Paste("replaced".into()));
     harness.draw();
@@ -1534,14 +1537,8 @@ fn the_wheel_scrolls_the_view_and_leaves_the_caret() {
     harness.click(4, row);
     let editor = harness.app.layout.editor;
     for _ in 0..2 {
-        harness.app.handle(Event::Mouse(MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: editor.x + 10,
-            row: editor.y + 2,
-            modifiers: KeyModifiers::NONE,
-        }));
+        harness.wheel(editor.x + 10, editor.y + 2, false);
     }
-    harness.draw();
     // The view moved on; the caret did not.
     assert!(!harness.shows("line 1\n"), "{}", harness.screen());
     assert!(harness.shows("line 7"), "{}", harness.screen());

@@ -1,11 +1,23 @@
 //! Copy and paste for the terminal frontend.
 //!
-//! Copying also hands the text to the host terminal with OSC 52, so it lands in
-//! the system clipboard — including over SSH, where the editor has no access to
-//! the local one. Terminals that ignore the sequence simply keep the internal
-//! copy, which paste uses.
+//! A copy goes three places: an internal copy, the host terminal by OSC 52, and
+//! the desktop's own clipboard tool. The OSC 52 sequence is what reaches the
+//! *local* clipboard over SSH, where the editor is running on another machine;
+//! the tool is what reaches it when the editor and the desktop are the same
+//! machine and the terminal ignores the sequence. Writing both keeps the two
+//! ends saying the same thing, so a paste can trust whichever answers.
+//!
+//! Pasting goes the other way: a terminal program cannot read the clipboard
+//! itself, so the desktop's tool is asked — `pbpaste` on macOS, `wl-paste` or
+//! `xclip` on Linux, PowerShell on Windows. That is also how an *image* reaches
+//! the terminal panel: it is written to a file, and the path is what gets
+//! pasted, which is what a program running in the shell can actually open.
+//! Where no tool answers — over SSH, on a bare console — the internal copy is
+//! all there is, and that is enough for copying and pasting within the editor.
 
 use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 #[derive(Default)]
 pub struct Clipboard {
@@ -16,6 +28,7 @@ impl Clipboard {
     pub fn set(&mut self, text: String) {
         self.text = text;
         offer_to_terminal(&self.text);
+        set_system_text(&self.text);
     }
 
     pub fn text(&self) -> &str {
@@ -25,6 +38,166 @@ impl Clipboard {
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
+}
+
+/// What the system clipboard holds as text, or nothing when the desktop has no
+/// tool to ask.
+pub fn system_text() -> Option<String> {
+    let text = if cfg!(target_os = "macos") {
+        run("pbpaste", &[])
+    } else if cfg!(windows) {
+        run(
+            "powershell",
+            &["-NoProfile", "-Command", "Get-Clipboard -Raw"],
+        )
+    } else if wayland() {
+        run("wl-paste", &["--no-newline"])
+    } else if x11() {
+        run("xclip", &["-selection", "clipboard", "-o"])
+    } else {
+        None
+    }?;
+    let text = String::from_utf8(text).ok()?;
+    (!text.is_empty()).then_some(text)
+}
+
+/// Hands the copy to the desktop's clipboard, so it can be pasted into any
+/// other program — and so a later paste here reads back what was copied rather
+/// than whatever the clipboard held before.
+fn set_system_text(text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if cfg!(target_os = "macos") {
+        feed("pbcopy", &[], text);
+    } else if cfg!(windows) {
+        feed("clip", &[], text);
+    } else if wayland() {
+        feed("wl-copy", &[], text);
+    } else if x11() {
+        feed("xclip", &["-selection", "clipboard"], text);
+    }
+}
+
+/// Writes text to a clipboard tool's standard input. `wl-copy` and `xclip` stay
+/// running to own the selection, so the child is waited on by a thread of its
+/// own rather than here — otherwise every copy would leave a zombie behind.
+fn feed(program: &str, args: &[&str], text: &str) {
+    let child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let Ok(mut child) = child else { return };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+/// The clipboard's image, written to a file of its own and handed back as that
+/// path. Nothing when the clipboard holds no image, or when the desktop has no
+/// tool to ask. The file lives in the system's temporary directory, which is
+/// cleared by the system, not by the editor.
+pub fn system_image() -> Option<PathBuf> {
+    let path = image_path();
+    let ok = if cfg!(target_os = "macos") {
+        mac_clipboard_image(&path)
+    } else if cfg!(windows) {
+        windows_clipboard_image(&path)
+    } else if wayland() {
+        write_image(&path, run("wl-paste", &["--type", "image/png"]))
+    } else if x11() {
+        write_image(
+            &path,
+            run(
+                "xclip",
+                &["-selection", "clipboard", "-t", "image/png", "-o"],
+            ),
+        )
+    } else {
+        false
+    };
+    if !ok {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    Some(path)
+}
+
+/// A file for one pasted image, named so that two pastes never collide.
+fn image_path() -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("ycode-paste-{}-{n}.png", std::process::id()))
+}
+
+/// Runs a clipboard tool, treating "not installed" and "it failed" alike:
+/// there is simply nothing to paste.
+fn run(program: &str, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new(program).args(args).output().ok()?;
+    output.status.success().then_some(output.stdout)
+}
+
+fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+fn x11() -> bool {
+    std::env::var_os("DISPLAY").is_some()
+}
+
+/// True once the bytes are on disk and are actually an image.
+fn write_image(path: &std::path::Path, bytes: Option<Vec<u8>>) -> bool {
+    // A PNG starts with a fixed eight-byte signature; anything shorter is a
+    // tool reporting that the clipboard holds something else.
+    match bytes {
+        Some(bytes) if bytes.starts_with(b"\x89PNG") => std::fs::write(path, bytes).is_ok(),
+        _ => false,
+    }
+}
+
+/// macOS keeps images on the pasteboard as a flavour of their own, and
+/// AppleScript is what reads them. It converts to PNG on the way out, so a
+/// screenshot taken as TIFF still arrives as one.
+fn mac_clipboard_image(path: &std::path::Path) -> bool {
+    let info = run("osascript", &["-e", "clipboard info"]).unwrap_or_default();
+    let info = String::from_utf8_lossy(&info);
+    if !(info.contains("PNGf") || info.contains("TIFF")) {
+        return false;
+    }
+    let script = format!(
+        "set f to open for access POSIX file \"{}\" with write permission\n\
+         try\n\
+             write (the clipboard as «class PNGf») to f\n\
+         end try\n\
+         close access f",
+        path.display()
+    );
+    run("osascript", &["-e", &script]);
+    is_image_file(path)
+}
+
+/// Windows hands the clipboard's bitmap to .NET, which writes the PNG.
+fn windows_clipboard_image(path: &std::path::Path) -> bool {
+    let script = format!(
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; \
+         $image = [Windows.Forms.Clipboard]::GetImage(); \
+         if ($image -ne $null) {{ \
+             $image.Save('{}', [System.Drawing.Imaging.ImageFormat]::Png) \
+         }}",
+        path.display()
+    );
+    run("powershell", &["-NoProfile", "-Command", &script]);
+    is_image_file(path)
+}
+
+fn is_image_file(path: &std::path::Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 8)
 }
 
 /// Terminals cap the OSC 52 payload; a whole file pasted at once would be

@@ -30,7 +30,7 @@ use crate::core::settings::{Modifier, Settings};
 use crate::core::syntax::Syntax;
 use crate::core::theme::{self as core_theme, Theme};
 use crate::core::update as core_update;
-use crate::tui::clipboard::Clipboard;
+use crate::tui::clipboard::{self, Clipboard};
 use crate::tui::icons::{self, Icons};
 use crate::tui::menu::{Menu, MenuItem};
 use crate::tui::shell::Shell;
@@ -326,6 +326,31 @@ fn flatten(result: Result<String, String>) -> String {
 
 /// Whether a chord is one no shell program would be listening for: a
 /// function key, or Ctrl with Shift or Alt on top.
+/// A path on its way into a shell, quoted when it holds anything the shell
+/// would otherwise split on or read as a quote. Plain paths are left bare:
+/// what a pasted screenshot's path is worth depends on the program reading
+/// the line, and most of them want it as typed.
+fn shell_quoted(path: &Path) -> String {
+    let text = path.display().to_string();
+    // A backslash separates folders on Windows and escapes on Unix, so it
+    // only counts as special on the side where it means something.
+    let special: &[char] = if cfg!(windows) {
+        &[' ', '\t', '"']
+    } else {
+        &[' ', '\t', '\'', '"', '\\']
+    };
+    if !text.contains(special) {
+        return text;
+    }
+    if cfg!(windows) {
+        // Windows shells quote with `"`, and a path cannot contain one.
+        format!("\"{}\"", text.replace('"', ""))
+    } else {
+        // A single quote inside single quotes is closed, escaped, reopened.
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 fn shell_has_no_use_for(chord: &Chord) -> bool {
     match &chord.key {
         Key::Named(name) if name.starts_with('f') && name[1..].parse::<u8>().is_ok() => true,
@@ -441,6 +466,10 @@ pub struct Layout {
     pub tab_spans: Vec<(u16, u16, usize, bool)>,
     pub editor: Rect,
     pub gutter: u16,
+    /// The same region as the editor, while a diff or a markdown preview is
+    /// drawn there instead. Kept apart so a click or a wheel over one of those
+    /// is not taken for the text underneath.
+    pub viewer: Rect,
     pub shell: Rect,
     /// (start_x, end_x, session index, is_close_button) for each shell tab in
     /// the panel header.
@@ -510,6 +539,9 @@ pub struct App {
     /// The update check, and the release it found.
     pub updates: core_update::Checker,
     pub update: Option<core_update::Release>,
+    /// The install of that release, and how far it has got.
+    pub installs: core_update::Installer,
+    pub installing: Option<core_update::Progress>,
     /// Who last touched the line the cursor is on, and what it was read for.
     pub blame: Option<core_git::Blame>,
     blame_key: Option<(PathBuf, usize)>,
@@ -552,6 +584,9 @@ pub struct App {
     resizing: Option<Splitter>,
     /// True while the left button is dragging out a selection in the editor.
     selecting: bool,
+    /// True while the left button is dragging out a selection in the terminal
+    /// panel, whose selection lives on the session rather than on a buffer.
+    shell_selecting: bool,
     pub settings: Settings,
     /// When the settings files were last written, as of the last look; `None`
     /// before the first look.
@@ -622,6 +657,8 @@ impl App {
             quit_after_close: false,
             updates: core_update::Checker::default(),
             update: None,
+            installs: core_update::Installer::default(),
+            installing: None,
             blame: None,
             blame_key: None,
             git_lines: BTreeMap::new(),
@@ -652,6 +689,7 @@ impl App {
             shell_height: 10,
             resizing: None,
             selecting: false,
+            shell_selecting: false,
             settings,
             settings_stamp: None,
             settings_polled: std::time::Instant::now(),
@@ -696,6 +734,7 @@ impl App {
         self.refresh_highlight();
         self.refresh_git_marks();
         self.collect_update();
+        self.collect_install();
     }
 
     /// Handles one terminal event, the way the run loop does. Public so an
@@ -730,6 +769,11 @@ impl App {
             // The git view re-polls `git status` on a timer, so it needs a
             // frame even when nothing else happened.
             if self.show_sidebar && self.sidebar_view == SidebarView::Git && self.git.stale() {
+                redraw = true;
+            }
+            // An update check or an install turns a marker in the status line,
+            // which only moves if there are frames to move it in.
+            if self.updates.is_running() || self.installs.is_running() {
                 redraw = true;
             }
             if redraw || self.shell_dirty.swap(false, Ordering::Relaxed) {
@@ -840,6 +884,14 @@ impl App {
     /// Picks up an update check that has finished.
     fn collect_update(&mut self) {
         let Some(answer) = self.updates.take() else {
+            // Nothing yet: keep the marker turning so the wait looks alive.
+            if self.updates.is_running() {
+                self.status = format!(
+                    "{} checking for updates (this is {})…",
+                    core_update::spinner(self.updates.tick()),
+                    core_update::CURRENT
+                );
+            }
             return;
         };
         match answer {
@@ -853,6 +905,30 @@ impl App {
             }
             Ok(_) => self.status = format!("Yara Code {} is the latest", core_update::CURRENT),
             Err(message) => self.status = format!("update check failed: {message}"),
+        }
+    }
+
+    /// Shows how an install is getting on. The work happens on a thread, so
+    /// this reads the newest step and writes it into the status line, with a
+    /// turning marker in front of it while there is more to come.
+    fn collect_install(&mut self) {
+        if let Some(progress) = self.installs.poll() {
+            if progress.is_finished() {
+                if matches!(progress, core_update::Progress::Done(_)) {
+                    self.update = None;
+                }
+                self.status = progress.line(self.installs.tag());
+                self.installing = None;
+                return;
+            }
+            self.installing = Some(progress);
+        }
+        if let Some(progress) = &self.installing {
+            self.status = format!(
+                "{} {}",
+                core_update::spinner(self.installs.tick()),
+                progress.line(self.installs.tag())
+            );
         }
     }
 
@@ -1120,9 +1196,44 @@ impl App {
     }
 
     fn copy(&mut self) {
+        // In the terminal the copy is what the mouse dragged over; taking it
+        // clears the highlight, so the next Ctrl+C is the interrupt again.
+        if self.focus == Focus::Shell {
+            if let Some(text) = self.shell.selected_text() {
+                self.clipboard.set(text);
+                self.shell.clear_selection();
+                self.status = "copied".into();
+            }
+            return;
+        }
         if let Some(text) = self.selected_text() {
             self.clipboard.set(text);
             self.status = "copied".into();
+        }
+    }
+
+    /// Pastes what the system clipboard holds, falling back to the editor's
+    /// own copy where no clipboard tool answers — over SSH, on a bare console.
+    /// An image on the clipboard is written to a file and its *path* is what
+    /// reaches the terminal, which is what a program running there can open.
+    fn paste_clipboard(&mut self) {
+        if self.focus == Focus::Shell {
+            if let Some(path) = clipboard::system_image() {
+                let quoted = shell_quoted(&path);
+                self.shell.paste(&quoted);
+                self.status = format!("pasted {}", path.display());
+                return;
+            }
+        }
+        let text = clipboard::system_text().unwrap_or_else(|| self.clipboard.text().to_string());
+        if !text.is_empty() {
+            self.paste_event(&text);
+        } else if self.focus == Focus::Shell {
+            // Nothing the editor can reach; a program that reads the
+            // clipboard itself still gets its key.
+            self.shell.send_paste_key();
+        } else {
+            self.status = "clipboard is empty".into();
         }
     }
 
@@ -1416,6 +1527,32 @@ impl App {
         (index < self.tree.rows().len()).then_some(index)
     }
 
+    /// The cell of the terminal's grid under a point, counted from the grid's
+    /// own top-left. The panel's first row is its tab strip, so it is not part
+    /// of the grid; a point outside the panel belongs to no cell at all.
+    fn shell_cell_at(&self, x: u16, y: u16) -> Option<(u16, u16)> {
+        let panel = self.layout.shell;
+        if !hits(panel, x, y) || y == panel.y {
+            return None;
+        }
+        Some((y - panel.y - 1, x - panel.x))
+    }
+
+    /// The same, for a drag: a pointer that has left the panel keeps selecting
+    /// along its nearest edge, which is what dragging past the end does
+    /// everywhere else.
+    fn shell_cell_clamped(&self, x: u16, y: u16) -> (u16, u16) {
+        let panel = self.layout.shell;
+        let last_row = panel.height.saturating_sub(2);
+        let last_col = panel.width.saturating_sub(1);
+        let row = if y <= panel.y {
+            0
+        } else {
+            (y - panel.y - 1).min(last_row)
+        };
+        (row, x.saturating_sub(panel.x).min(last_col))
+    }
+
     fn on_mouse(&mut self, m: MouseEvent) {
         let (x, y) = (m.column, m.row);
         self.mouse = Some((x, y));
@@ -1452,6 +1589,10 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing.is_some() => {
                 self.resize(x, y);
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.shell_selecting => {
+                let (row, col) = self.shell_cell_clamped(x, y);
+                self.shell.extend_selection(row, col);
             }
             MouseEventKind::Drag(MouseButton::Left) if self.selecting => {
                 self.extend_selection_to(x, y);
@@ -1498,6 +1639,10 @@ impl App {
                 }
                 self.tab_drag = None;
                 self.tab_drag_over = None;
+                if self.shell_selecting {
+                    self.shell_selecting = false;
+                    return;
+                }
                 if self.selecting {
                     self.selecting = false;
                     // A click without movement leaves no selection behind.
@@ -1589,12 +1734,29 @@ impl App {
             }
         } else if hits(self.layout.git_list, x, y) {
             self.move_git_selection(delta);
+        } else if hits(self.layout.viewer, x, y) {
+            self.scroll_viewer(delta);
         } else if hits(self.layout.editor, x, y) && !self.buffers.is_empty() {
             let rows = self.visible_lines().len();
             let state = self.edit_state();
             state.scroll =
                 (state.scroll as isize + delta).clamp(0, rows.saturating_sub(1) as isize) as usize;
             state.free_scroll = true;
+        }
+    }
+
+    /// The wheel over a diff or a markdown preview, whichever is drawn in the
+    /// editor's place. Both count in rows of their own — diff lines for one,
+    /// blocks of markdown for the other — so they move as their arrow keys do.
+    fn scroll_viewer(&mut self, delta: isize) {
+        let step =
+            |scroll: usize, last: usize| (scroll as isize + delta).clamp(0, last as isize) as usize;
+        if let Some(preview) = self.active_preview.and_then(|i| self.previews.get_mut(i)) {
+            let last = preview.blocks.len().saturating_sub(1);
+            preview.scroll = step(preview.scroll, last);
+        } else if let Some(diff) = self.active_diff.and_then(|i| self.diffs.get_mut(i)) {
+            let last = diff.rows.len().saturating_sub(1);
+            diff.scroll = step(diff.scroll, last);
         }
     }
 
@@ -1611,6 +1773,11 @@ impl App {
                 self.menu = None;
             }
             return;
+        }
+        // A click anywhere but the terminal drops its highlight, the way
+        // clicking away drops a selection in the text.
+        if !hits(self.layout.shell, x, y) {
+            self.shell.clear_selection();
         }
         if self.prompt.is_none() && self.buffers.is_empty() {
             if let Some((_, command)) = self
@@ -1894,6 +2061,18 @@ impl App {
                 }
             }
             self.focus = Focus::Shell;
+            // A press on the grid starts a selection; the drag extends it and
+            // the release leaves it standing, ready for a copy.
+            if let Some((row, col)) = self.shell_cell_at(x, y) {
+                self.shell.begin_selection(row, col);
+                self.shell_selecting = true;
+            }
+            return;
+        }
+        // A diff or a preview is drawn where the editor would be; a click
+        // there belongs to whichever is actually in front.
+        if hits(self.layout.viewer, x, y) {
+            self.focus = Focus::Diff;
             return;
         }
         if hits(self.layout.editor, x, y) && !self.buffers.is_empty() {
@@ -2234,10 +2413,20 @@ impl App {
             Command::Rename | Command::MoveTo | Command::Delete => self.focus == Focus::Tree,
             Command::FindNext | Command::FindPrev | Command::ReplaceAll => self.find_showing(),
             Command::PickRepository | Command::PickWorktree => self.focus == Focus::Git,
-            // Selecting, copying and cutting are the editor's; a paste goes
-            // to whichever field is being typed in.
-            Command::SelectAll | Command::Copy | Command::Cut => self.focus == Focus::Editor,
-            Command::Paste => matches!(self.focus, Focus::Editor | Focus::Find | Focus::Search),
+            // Selecting and cutting are the editor's; a paste goes to
+            // whichever field is being typed in, the terminal included.
+            Command::SelectAll | Command::Cut => self.focus == Focus::Editor,
+            // Ctrl+C in the terminal copies only when the mouse has selected
+            // something; with nothing selected it stays the interrupt every
+            // shell expects.
+            Command::Copy => {
+                self.focus == Focus::Editor
+                    || (self.focus == Focus::Shell && self.shell.has_selection())
+            }
+            Command::Paste => matches!(
+                self.focus,
+                Focus::Editor | Focus::Find | Focus::Search | Focus::Shell
+            ),
             // The shell keeps every key a program inside it could want —
             // plain keys, Ctrl+letter, Escape, Tab — so vim and tmux work.
             // Function keys and Ctrl+Shift / Ctrl+Alt chords mean nothing to
@@ -2442,20 +2631,15 @@ impl App {
                     .start(move || dirty.store(true, Ordering::Relaxed));
             }
             Command::InstallUpdate => match self.update.clone() {
-                Some(release) => {
-                    self.status = format!("installing {}…", release.tag);
-                    match core_update::install(&release) {
-                        Ok(dir) => {
-                            self.update = None;
-                            self.status = format!(
-                                "{} installed in {} — restart to use it",
-                                release.tag,
-                                dir.display()
-                            );
-                        }
-                        Err(message) => self.status = message,
-                    }
+                // The download is minutes of work on a slow line, so it goes
+                // to a thread and reports back into the status line.
+                Some(release) if !self.installs.is_running() => {
+                    self.status = format!("installing {} — starting the download", release.tag);
+                    let dirty = Arc::clone(&self.shell_dirty);
+                    self.installs
+                        .start(&release, move || dirty.store(true, Ordering::Relaxed));
                 }
+                Some(_) => {}
                 None => self.status = "nothing to install; check for updates first".into(),
             },
             Command::Documentation => {
@@ -2478,14 +2662,7 @@ impl App {
             Command::SelectAll => self.select_all(),
             Command::Copy => self.copy(),
             Command::Cut => self.cut(),
-            Command::Paste => {
-                let text = self.clipboard.text().to_string();
-                if text.is_empty() {
-                    self.status = "clipboard is empty".into();
-                } else {
-                    self.paste_event(&text);
-                }
-            }
+            Command::Paste => self.paste_clipboard(),
             Command::ToggleFold => self.toggle_fold_at_cursor(),
             Command::FoldAll => {
                 let starts = fold::all_starts(&self.regions);
@@ -3751,6 +3928,39 @@ impl App {
                     self.jump_to(path, line);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pasted_path_is_quoted_only_when_a_shell_would_split_it() {
+        let plain = shell_quoted(Path::new("/tmp/ycode-paste-1.png"));
+        assert_eq!(plain, "/tmp/ycode-paste-1.png");
+        if cfg!(windows) {
+            // Folder separators are not special where they separate folders.
+            assert_eq!(
+                shell_quoted(Path::new(r"C:\Temp\shot.png")),
+                r"C:\Temp\shot.png"
+            );
+            assert_eq!(
+                shell_quoted(Path::new(r"C:\My Files\shot.png")),
+                "\"C:\\My Files\\shot.png\""
+            );
+        } else {
+            assert_eq!(
+                shell_quoted(Path::new("/tmp/my shot.png")),
+                "'/tmp/my shot.png'"
+            );
+            // A quote inside is closed, escaped and reopened, so the shell
+            // still reads one word.
+            assert_eq!(
+                shell_quoted(Path::new("/tmp/it's.png")),
+                r"'/tmp/it'\''s.png'"
+            );
         }
     }
 }

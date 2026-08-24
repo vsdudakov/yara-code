@@ -23,6 +23,65 @@ pub struct Pty {
     /// The last title worked out, and when — asking the system what is in
     /// front costs a process, so it is done once a second, not once a frame.
     title: Mutex<Option<(Instant, String)>>,
+    /// The run of cells the mouse has dragged over, if any.
+    selection: Option<Selection>,
+}
+
+/// One cell of the grid, counted from the top of the live screen: row 0 is the
+/// shell's first line and the scrollback above it is negative. Counting this
+/// way keeps a selection on the text it was made over while the panel scrolls.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GridPoint {
+    pub row: isize,
+    pub col: u16,
+}
+
+/// What the mouse dragged over: the cell the button went down on and the one
+/// the pointer is on now, either of which may be the earlier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Selection {
+    pub anchor: GridPoint,
+    pub cursor: GridPoint,
+}
+
+impl Selection {
+    /// The two ends in reading order.
+    pub fn ordered(&self) -> (GridPoint, GridPoint) {
+        if (self.anchor.row, self.anchor.col) <= (self.cursor.row, self.cursor.col) {
+            (self.anchor, self.cursor)
+        } else {
+            (self.cursor, self.anchor)
+        }
+    }
+
+    /// A press that never left its cell selects nothing, so an ordinary click
+    /// in the terminal stays an ordinary click.
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.cursor
+    }
+
+    /// The columns covered on one row, as a half-open range. Rows in the
+    /// middle of the run are covered to the end, which is what a terminal
+    /// shows for a line that wrapped.
+    pub fn span_on(&self, row: isize, width: u16) -> Option<(u16, u16)> {
+        if self.is_empty() {
+            return None;
+        }
+        let (start, end) = self.ordered();
+        if row < start.row || row > end.row {
+            return None;
+        }
+        let from = if row == start.row { start.col } else { 0 };
+        // The cell under the pointer is part of the selection, so the end is
+        // one past it.
+        let to = if row == end.row {
+            end.col.saturating_add(1)
+        } else {
+            width
+        };
+        let to = to.min(width);
+        (from < to).then_some((from, to))
+    }
 }
 
 /// How long a worked-out title is trusted before asking again.
@@ -91,6 +150,7 @@ impl Pty {
             size: (rows, cols),
             cwd: cwd.to_path_buf(),
             title: Mutex::new(None),
+            selection: None,
         })
     }
 
@@ -179,6 +239,109 @@ impl Pty {
     pub fn scrollback(&self) -> usize {
         self.parser.lock().unwrap().screen().scrollback()
     }
+
+    // ----- selection -----------------------------------------------------
+
+    /// A point on the visible grid, as a point in the shell's own text — see
+    /// [`GridPoint`].
+    fn point_at(&self, view_row: u16, col: u16) -> GridPoint {
+        GridPoint {
+            row: view_row as isize - self.scrollback() as isize,
+            col,
+        }
+    }
+
+    /// Starts a selection where the mouse went down.
+    pub fn begin_selection(&mut self, view_row: u16, col: u16) {
+        let at = self.point_at(view_row, col);
+        self.selection = Some(Selection {
+            anchor: at,
+            cursor: at,
+        });
+    }
+
+    /// Drags the open end of the selection to where the pointer is now.
+    pub fn extend_selection(&mut self, view_row: u16, col: u16) {
+        let at = self.point_at(view_row, col);
+        if let Some(selection) = &mut self.selection {
+            selection.cursor = at;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// The selection, once it covers more than the cell it started on.
+    pub fn selection(&self) -> Option<Selection> {
+        self.selection.filter(|s| !s.is_empty())
+    }
+
+    /// The selected text, read off the grid a screenful at a time. A selection
+    /// taller than the panel — dragged, then scrolled — is reached by moving
+    /// the view to it and back, which the caller never sees.
+    pub fn selected_text(&mut self) -> Option<String> {
+        let (start, end) = self.selection()?.ordered();
+        let (rows, cols) = self.size;
+        let restore = self.scrollback();
+        let mut text = String::new();
+        let mut row = start.row;
+        while row <= end.row {
+            // Scrolled back far enough to put `row` on the top line, or not at
+            // all when it is on the live screen already.
+            let back = (-row).max(0) as usize;
+            self.set_scrollback(back);
+            if self.scrollback() != back {
+                // History that far back has already been dropped.
+                break;
+            }
+            let top = (row + back as isize) as u16;
+            let last = (end.row + back as isize).min(rows as isize - 1) as u16;
+            let from = if row == start.row { start.col } else { 0 };
+            let to = if last as isize - back as isize == end.row {
+                end.col.saturating_add(1).min(cols)
+            } else {
+                cols
+            };
+            text.push_str(&self.with_screen(|screen| screen.contents_between(top, from, last, to)));
+            row = last as isize - back as isize + 1;
+            if row <= end.row {
+                text.push('\n');
+            }
+        }
+        self.set_scrollback(restore);
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// Sends pasted text the way a terminal emulator does — see
+    /// [`paste_bytes`]. Any selection goes, as it does when a key is pressed.
+    pub fn paste(&mut self, text: &str) {
+        let bracketed = self.with_screen(|screen| screen.bracketed_paste());
+        let bytes = paste_bytes(text, bracketed);
+        self.clear_selection();
+        self.set_scrollback(0);
+        self.write(&bytes);
+    }
+}
+
+/// The bytes a paste sends. Line endings become carriage returns, the way a
+/// terminal turns a pasted line ending into the Return key, and the text is
+/// wrapped in the paste brackets when the program in front asked for them —
+/// without those, a shell or an agent runs every pasted line the moment it
+/// arrives, which is the whole reason bracketed paste exists. An escape inside
+/// the text would end the bracket early or be read as a key sequence, so it is
+/// dropped.
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let text = text.replace("\r\n", "\r").replace('\n', "\r");
+    let mut bytes = Vec::with_capacity(text.len() + 12);
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[200~");
+    }
+    bytes.extend(text.bytes().filter(|b| *b != 0x1b));
+    if bracketed {
+        bytes.extend_from_slice(b"\x1b[201~");
+    }
+    bytes
 }
 
 /// `ps` reports a login shell as `-zsh` and some programs by their full
@@ -405,6 +568,122 @@ mod tests {
         }
         // Asked again at once, the cached answer comes back unchanged.
         assert_eq!(pty.title(), title);
+    }
+
+    fn point(row: isize, col: u16) -> GridPoint {
+        GridPoint { row, col }
+    }
+
+    #[test]
+    fn a_selection_covers_the_cells_the_mouse_dragged_over() {
+        // Dragged from the middle of one row to the middle of a lower one.
+        let selection = Selection {
+            anchor: point(1, 4),
+            cursor: point(3, 2),
+        };
+        assert!(!selection.is_empty());
+        // The first row runs from the press to the end of the line, the rows
+        // between are covered whole, and the last stops one past the pointer.
+        assert_eq!(selection.span_on(1, 20), Some((4, 20)));
+        assert_eq!(selection.span_on(2, 20), Some((0, 20)));
+        assert_eq!(selection.span_on(3, 20), Some((0, 3)));
+        // Rows outside the run carry nothing.
+        assert_eq!(selection.span_on(0, 20), None);
+        assert_eq!(selection.span_on(4, 20), None);
+
+        // Dragged the other way, it reads the same.
+        let backwards = Selection {
+            anchor: point(3, 2),
+            cursor: point(1, 4),
+        };
+        assert_eq!(backwards.ordered(), selection.ordered());
+        assert_eq!(backwards.span_on(1, 20), Some((4, 20)));
+
+        // A press that never moved selects nothing at all.
+        let click = Selection {
+            anchor: point(1, 4),
+            cursor: point(1, 4),
+        };
+        assert!(click.is_empty());
+        assert_eq!(click.span_on(1, 20), None);
+
+        // The end never runs past the grid, however narrow it is.
+        let wide = Selection {
+            anchor: point(0, 0),
+            cursor: point(0, 40),
+        };
+        assert_eq!(wide.span_on(0, 8), Some((0, 8)));
+
+        // Scrollback counts as rows above the live screen.
+        let scrolled = Selection {
+            anchor: point(-2, 3),
+            cursor: point(-1, 5),
+        };
+        assert_eq!(scrolled.span_on(-2, 10), Some((3, 10)));
+        assert_eq!(scrolled.span_on(-1, 10), Some((0, 6)));
+    }
+
+    #[test]
+    fn a_paste_arrives_as_returns_and_in_brackets_when_asked_for() {
+        // Every line ending becomes the Return key, whichever kind it was.
+        assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc".to_vec());
+        // Bracketed, the text is wrapped so the program in front can tell a
+        // paste from typing and not run each line as it lands.
+        assert_eq!(
+            paste_bytes("ls\n", true),
+            b"\x1b[200~ls\r\x1b[201~".to_vec()
+        );
+        // An escape inside the text would close the bracket early or read as
+        // a key sequence, so it never reaches the shell.
+        assert_eq!(
+            paste_bytes("a\x1b[201~b", true),
+            b"\x1b[200~a[201~b\x1b[201~".to_vec()
+        );
+        assert_eq!(paste_bytes("", true), b"\x1b[200~\x1b[201~".to_vec());
+        assert_eq!(paste_bytes("", false), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn dragging_over_the_shell_copies_what_it_covers() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-select");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        pty.resize(24, 80);
+        pty.write(b"echo yara-selection-marker\n");
+        let mut row = None;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            // The echoed line, not the one that was typed at the prompt.
+            row = pty.with_screen(|screen| {
+                (0..24u16).rev().find(|r| {
+                    let line = screen.contents_between(*r, 0, *r, 80);
+                    line.trim() == "yara-selection-marker"
+                })
+            });
+            if row.is_some() {
+                break;
+            }
+        }
+        let row = row.expect("the shell never echoed the line");
+
+        assert!(pty.selection().is_none(), "nothing is selected yet");
+        assert!(pty.selected_text().is_none());
+        pty.begin_selection(row, 0);
+        // A press that has not moved is still not a selection.
+        assert!(pty.selection().is_none());
+        pty.extend_selection(row, 20);
+        assert_eq!(
+            pty.selected_text().as_deref(),
+            Some("yara-selection-marker")
+        );
+        // The highlight is on that row, from the press to the pointer.
+        let selection = pty.selection().expect("a selection stands");
+        assert_eq!(selection.span_on(row as isize, 80), Some((0, 21)));
+
+        // Typing drops it, the way it does anywhere else.
+        pty.clear_selection();
+        assert!(pty.selection().is_none());
     }
 
     #[test]

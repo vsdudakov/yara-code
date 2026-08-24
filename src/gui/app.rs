@@ -61,6 +61,9 @@ pub struct App {
     /// The update check, and the release it found.
     updates: crate::core::update::Checker,
     update: Option<crate::core::update::Release>,
+    /// The install of that release, and how far it has got.
+    installs: crate::core::update::Installer,
+    installing: Option<crate::core::update::Progress>,
     /// Who last touched the line the cursor is on.
     blame: Option<Blame>,
     /// What `blame` was read for.
@@ -126,6 +129,8 @@ impl App {
             quit_after_close: false,
             updates: crate::core::update::Checker::default(),
             update: None,
+            installs: crate::core::update::Installer::default(),
+            installing: None,
             blame: None,
             blame_key: None,
             git_lines: BTreeMap::new(),
@@ -240,17 +245,17 @@ impl App {
                 self.updates.start(move || ctx.request_repaint());
             }
             Command::InstallUpdate => match self.update.clone() {
-                Some(release) => match crate::core::update::install(&release) {
-                    Ok(dir) => {
-                        self.update = None;
-                        self.status = Some(format!(
-                            "{} installed in {} — restart to use it",
-                            release.tag,
-                            dir.display()
-                        ));
-                    }
-                    Err(message) => self.status = Some(message),
-                },
+                // The download is minutes of work on a slow line, so it goes
+                // to a thread and reports back into the status bar.
+                Some(release) if !self.installs.is_running() => {
+                    self.status = Some(format!(
+                        "installing {} — starting the download",
+                        release.tag
+                    ));
+                    let ctx = ctx.clone();
+                    self.installs.start(&release, move || ctx.request_repaint());
+                }
+                Some(_) => {}
                 None => self.status = Some("nothing to install; check for updates first".into()),
             },
             Command::Documentation => {
@@ -798,6 +803,14 @@ impl App {
     /// Picks up an update check that has finished.
     fn collect_update(&mut self) {
         let Some(answer) = self.updates.take() else {
+            // Nothing yet: keep the marker turning so the wait looks alive.
+            if self.updates.is_running() {
+                self.status = Some(format!(
+                    "{} checking for updates (this is {})…",
+                    crate::core::update::spinner(self.updates.tick()),
+                    crate::core::update::CURRENT
+                ));
+            }
             return;
         };
         match answer {
@@ -816,6 +829,30 @@ impl App {
                 ))
             }
             Err(message) => self.status = Some(format!("update check failed: {message}")),
+        }
+    }
+
+    /// Shows how an install is getting on. The work happens on a thread, so
+    /// this reads the newest step and writes it into the status bar, with a
+    /// turning marker in front of it while there is more to come.
+    fn collect_install(&mut self) {
+        if let Some(progress) = self.installs.poll() {
+            if progress.is_finished() {
+                if matches!(progress, crate::core::update::Progress::Done(_)) {
+                    self.update = None;
+                }
+                self.status = Some(progress.line(self.installs.tag()));
+                self.installing = None;
+                return;
+            }
+            self.installing = Some(progress);
+        }
+        if let Some(progress) = &self.installing {
+            self.status = Some(format!(
+                "{} {}",
+                crate::core::update::spinner(self.installs.tick()),
+                progress.line(self.installs.tag())
+            ));
         }
     }
 
@@ -1256,7 +1293,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("YARA CODE")
+                        egui::RichText::new("YCODE")
                             .color(color(theme.ui.accent_light))
                             .strong()
                             .size(12.0),
@@ -2193,6 +2230,12 @@ impl App {
         self.refresh_git_lines();
         self.refresh_blame();
         self.collect_update();
+        self.collect_install();
+        // A check or an install turns a marker, and a download fills a bar;
+        // neither moves unless there are frames to move them in.
+        if self.updates.is_running() || self.installs.is_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         // The window's close button is a Quit too: with unsaved work, hold
         // the window open and ask.
         if ctx.input(|i| i.viewport().close_requested())
@@ -2315,6 +2358,18 @@ impl App {
                                 .color(color(theme.ui.fg_faint))
                                 .size(11.5),
                         );
+                    }
+                    // A download says how far it has got as a bar as well as
+                    // in words; the steps after it have no length to measure.
+                    if let Some(fraction) = self.installing.as_ref().and_then(|p| p.fraction()) {
+                        ui.add_space(8.0);
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(80.0, 5.0), egui::Sense::hover());
+                        let painter = ui.painter();
+                        painter.rect_filled(rect, 2.0, color(theme.ui.fg_faint));
+                        let mut filled = rect;
+                        filled.set_width(rect.width() * fraction);
+                        painter.rect_filled(filled, 2.0, color(theme.ui.accent_light));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui

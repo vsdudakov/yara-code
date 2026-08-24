@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::core::pty::{Pty, Terminals};
+use crate::core::pty::{Pty, Selection, Terminals};
 
 pub struct Shell {
     pub sessions: Terminals,
@@ -55,6 +55,41 @@ impl Shell {
     /// Drops every session, so the next use starts one in the new directory.
     pub fn restart(&mut self) {
         self.sessions.clear();
+    }
+
+    // ----- selection -----------------------------------------------------
+
+    /// Starts a selection at a cell of the grid, counted from its top-left.
+    pub fn begin_selection(&mut self, row: u16, col: u16) {
+        if let Some(pty) = self.sessions.active_mut() {
+            pty.begin_selection(row, col);
+        }
+    }
+
+    /// Drags the open end of the selection to another cell.
+    pub fn extend_selection(&mut self, row: u16, col: u16) {
+        if let Some(pty) = self.sessions.active_mut() {
+            pty.extend_selection(row, col);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        if let Some(pty) = self.sessions.active_mut() {
+            pty.clear_selection();
+        }
+    }
+
+    pub fn selection(&self) -> Option<Selection> {
+        self.sessions.active()?.selection()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection().is_some()
+    }
+
+    /// What the selection covers, for the clipboard.
+    pub fn selected_text(&mut self) -> Option<String> {
+        self.sessions.active_mut()?.selected_text()
     }
 
     pub fn scroll(&mut self, delta: isize) {
@@ -131,14 +166,28 @@ impl Shell {
             }
             _ => return,
         }
-        // Any keypress returns the view to the live screen, as terminals do.
+        // Any keypress returns the view to the live screen, as terminals do,
+        // and drops a selection the way typing does in the editor.
         pty.set_scrollback(0);
+        pty.clear_selection();
         pty.write(&bytes);
     }
 
+    /// Pasted text, bracketed and with its line endings turned into returns —
+    /// see [`crate::core::pty::paste_bytes`].
     pub fn paste(&mut self, text: &str) {
         if let Some(pty) = self.sessions.active_mut() {
-            pty.write(text.as_bytes());
+            pty.paste(text);
+        }
+    }
+
+    /// Hands the raw Ctrl+V byte to the program in front. That is the last
+    /// resort when the editor found nothing to paste: an agent that reads the
+    /// clipboard itself still gets its turn.
+    pub fn send_paste_key(&mut self) {
+        if let Some(pty) = self.sessions.active_mut() {
+            pty.set_scrollback(0);
+            pty.write(&[0x16]);
         }
     }
 }

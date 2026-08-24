@@ -136,9 +136,99 @@ fn is_writable(dir: &Path) -> bool {
     }
 }
 
-/// Downloads the release and replaces the running binaries with it. Returns
-/// where they were written. Blocking, and slow: it is a download.
-pub fn install(release: &Release) -> Result<PathBuf, String> {
+/// How far an install has got. A download of several megabytes is long enough
+/// that the editor has to say what it is doing, so every step reports itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Progress {
+    /// Bytes on disk so far, and the whole size when the server declared one.
+    Downloading {
+        bytes: u64,
+        total: Option<u64>,
+    },
+    Verifying,
+    Unpacking,
+    Replacing,
+    /// Installed, in this directory.
+    Done(PathBuf),
+    Failed(String),
+}
+
+impl Progress {
+    /// Whether there is nothing more to come.
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Done(_) | Self::Failed(_))
+    }
+
+    /// How far along, between 0 and 1 — known only while downloading against
+    /// a declared size, which is nearly all of the wait.
+    pub fn fraction(&self) -> Option<f32> {
+        match self {
+            Self::Downloading {
+                bytes,
+                total: Some(total),
+            } if *total > 0 => Some((*bytes as f32 / *total as f32).clamp(0.0, 1.0)),
+            Self::Downloading { .. } => None,
+            Self::Verifying => Some(0.9),
+            Self::Unpacking => Some(0.95),
+            Self::Replacing => Some(0.99),
+            Self::Done(_) => Some(1.0),
+            Self::Failed(_) => None,
+        }
+    }
+
+    /// The line the status bar shows, for a release with this tag.
+    pub fn line(&self, tag: &str) -> String {
+        match self {
+            Self::Downloading {
+                bytes,
+                total: Some(total),
+            } if *total > 0 => format!(
+                "installing {tag} — {} of {} ({}%)",
+                human_bytes(*bytes),
+                human_bytes(*total),
+                (bytes * 100 / total).min(100)
+            ),
+            Self::Downloading { bytes, .. } if *bytes > 0 => {
+                format!("installing {tag} — {} downloaded", human_bytes(*bytes))
+            }
+            Self::Downloading { .. } => format!("installing {tag} — starting the download"),
+            Self::Verifying => format!("installing {tag} — checking the download"),
+            Self::Unpacking => format!("installing {tag} — unpacking"),
+            Self::Replacing => format!("installing {tag} — replacing the binaries"),
+            Self::Done(dir) => format!("{tag} installed in {} — restart to use it", dir.display()),
+            Self::Failed(message) => message.clone(),
+        }
+    }
+}
+
+/// Sizes as a person reads them, one decimal place and no more.
+fn human_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    const KB: f64 = 1024.0;
+    let n = bytes as f64;
+    if n >= MB {
+        format!("{:.1} MB", n / MB)
+    } else if n >= KB {
+        format!("{:.0} KB", n / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// One frame of the turning marker that says a slow thing is still going.
+pub fn spinner(tick: usize) -> char {
+    const FRAMES: [char; 8] = [
+        '\u{280b}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283c}', '\u{2834}', '\u{2826}',
+        '\u{2827}',
+    ];
+    FRAMES[tick % FRAMES.len()]
+}
+
+/// Downloads the release and replaces the running binaries with it, saying
+/// where it has got to as it goes. Returns where the binaries were written.
+/// Blocking, and slow: it is a download, so `Installer` runs it on a thread
+/// and `report` is called from there.
+pub fn install(release: &Release, report: &mut dyn FnMut(Progress)) -> Result<PathBuf, String> {
     if TARGET.is_empty() {
         return Err("no release is built for this platform".into());
     }
@@ -154,17 +244,13 @@ pub fn install(release: &Release) -> Result<PathBuf, String> {
     let asset = asset_name(&release.tag);
     let url = format!("{DOWNLOAD}/{}/{asset}", release.tag);
     let archive = staging.join(&asset);
-    curl(&[
-        "-fsSL",
-        "--max-time",
-        "300",
-        "-o",
-        &archive.to_string_lossy(),
-        &url,
-    ])?;
+    download(&url, &archive, report)?;
 
+    report(Progress::Verifying);
     verify_checksum(&archive, &url)?;
+    report(Progress::Unpacking);
     unpack(&archive, &staging)?;
+    report(Progress::Replacing);
 
     // The new binaries are one directory deep, named after the archive.
     let unpacked = staging.join(asset.trim_end_matches(".tar.gz").trim_end_matches(".zip"));
@@ -191,6 +277,63 @@ pub fn install(release: &Release) -> Result<PathBuf, String> {
     }
     let _ = std::fs::remove_dir_all(&staging);
     Ok(dir)
+}
+
+/// Fetches the archive, telling `report` how much of it has landed. `curl`
+/// writes its own progress to a terminal we do not have, so the size of the
+/// file on disk is what gets watched instead.
+fn download(url: &str, to: &Path, report: &mut dyn FnMut(Progress)) -> Result<(), String> {
+    let total = content_length(url);
+    report(Progress::Downloading { bytes: 0, total });
+    let mut child = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "--max-time",
+            "300",
+            "-o",
+            &to.to_string_lossy(),
+            url,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl unavailable: {e}"))?;
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) if status.success() => return Ok(()),
+            Some(_) => {
+                let mut message = String::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = stderr.read_to_string(&mut message);
+                }
+                return Err(message
+                    .lines()
+                    .next()
+                    .unwrap_or("the download failed")
+                    .to_string());
+            }
+            None => {
+                let bytes = std::fs::metadata(to).map(|m| m.len()).unwrap_or(0);
+                report(Progress::Downloading { bytes, total });
+                std::thread::sleep(std::time::Duration::from_millis(120));
+            }
+        }
+    }
+}
+
+/// How big the download is, if the server will say. Redirects are followed, so
+/// the last header block is the one that describes the archive itself.
+fn content_length(url: &str) -> Option<u64> {
+    let head = curl(&["-fsSLI", "--max-time", "15", url]).ok()?;
+    head.lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<u64>().ok())?
+        })
+        .next_back()
 }
 
 /// Both binaries, named as this platform names them.
@@ -426,6 +569,83 @@ mod tests {
     }
 
     #[test]
+    fn a_download_reads_its_size_the_way_a_person_would() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(2048), "2 KB");
+        assert_eq!(human_bytes(9_961_472), "9.5 MB");
+    }
+
+    #[test]
+    fn every_step_of_an_install_says_what_it_is_doing() {
+        let downloading = |bytes, total| Progress::Downloading { bytes, total };
+        // With a declared size the line carries a figure to watch.
+        let half = downloading(5_242_880, Some(10_485_760));
+        assert_eq!(
+            half.line("v0.5.0"),
+            "installing v0.5.0 — 5.0 MB of 10.0 MB (50%)"
+        );
+        assert_eq!(half.fraction(), Some(0.5));
+        // Without one, what has arrived is still worth saying.
+        assert_eq!(
+            downloading(2048, None).line("v0.5.0"),
+            "installing v0.5.0 — 2 KB downloaded"
+        );
+        assert_eq!(downloading(2048, None).fraction(), None);
+        assert_eq!(
+            downloading(0, None).line("v0.5.0"),
+            "installing v0.5.0 — starting the download"
+        );
+        // A server that answers zero is not divided by.
+        assert_eq!(downloading(0, Some(0)).fraction(), None);
+
+        for step in [
+            Progress::Verifying,
+            Progress::Unpacking,
+            Progress::Replacing,
+        ] {
+            assert!(step.line("v0.5.0").starts_with("installing v0.5.0 — "));
+            assert!(!step.is_finished());
+            assert!(step.fraction().is_some_and(|f| f > 0.5 && f < 1.0));
+        }
+
+        let done = Progress::Done(PathBuf::from("/usr/local/bin"));
+        assert_eq!(
+            done.line("v0.5.0"),
+            "v0.5.0 installed in /usr/local/bin — restart to use it"
+        );
+        assert!(done.is_finished());
+        assert_eq!(done.fraction(), Some(1.0));
+
+        let failed = Progress::Failed("checksum mismatch".into());
+        assert_eq!(failed.line("v0.5.0"), "checksum mismatch");
+        assert!(failed.is_finished());
+        assert_eq!(failed.fraction(), None);
+    }
+
+    #[test]
+    fn the_marker_turns_and_comes_back_round() {
+        let frames: Vec<char> = (0..8).map(spinner).collect();
+        assert_eq!(frames.len(), 8);
+        assert_eq!(spinner(8), frames[0], "it starts over");
+        assert_eq!(spinner(11), frames[3]);
+        assert!(frames.iter().all(|c| !c.is_whitespace()));
+    }
+
+    #[test]
+    fn nothing_is_reported_before_an_install_starts() {
+        let mut installer = Installer::default();
+        assert!(!installer.is_running());
+        assert_eq!(installer.poll(), None);
+        assert_eq!(installer.tick(), 0);
+        assert_eq!(installer.tag(), "");
+        let mut checker = Checker::default();
+        assert!(!checker.is_running());
+        assert_eq!(checker.tick(), 0);
+        assert!(checker.take().is_none());
+    }
+
+    #[test]
     fn advice_depends_on_where_the_binary_lives() {
         let advice = how_to_update();
         assert!(!advice.is_empty());
@@ -438,6 +658,7 @@ mod tests {
 pub struct Checker {
     state: std::sync::Arc<std::sync::Mutex<Option<Result<Release, String>>>>,
     running: bool,
+    started: Option<std::time::Instant>,
 }
 
 impl Checker {
@@ -448,6 +669,7 @@ impl Checker {
             return;
         }
         self.running = true;
+        self.started = Some(std::time::Instant::now());
         let state = std::sync::Arc::clone(&self.state);
         std::thread::spawn(move || {
             let answer = latest();
@@ -461,7 +683,90 @@ impl Checker {
         let answer = self.state.lock().unwrap().take();
         if answer.is_some() {
             self.running = false;
+            self.started = None;
         }
         answer
     }
+
+    /// Whether an answer is still being waited for.
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
+    /// Which spinner frame this waiting is up to.
+    pub fn tick(&self) -> usize {
+        tick_of(self.started)
+    }
+}
+
+/// The install as the frontends run it: on a thread, reporting as it goes, so
+/// a download of several megabytes never freezes the editor.
+#[derive(Default)]
+pub struct Installer {
+    state: std::sync::Arc<std::sync::Mutex<Option<Progress>>>,
+    running: bool,
+    started: Option<std::time::Instant>,
+    tag: String,
+}
+
+impl Installer {
+    /// Starts installing `release` unless an install is already going.
+    /// `notify` is called on every step, so a frontend that sleeps between
+    /// frames wakes up to draw the new figure.
+    pub fn start(&mut self, release: &Release, notify: impl Fn() + Send + 'static) {
+        if self.running {
+            return;
+        }
+        self.running = true;
+        self.started = Some(std::time::Instant::now());
+        self.tag = release.tag.clone();
+        let state = std::sync::Arc::clone(&self.state);
+        *state.lock().unwrap() = Some(Progress::Downloading {
+            bytes: 0,
+            total: None,
+        });
+        let release = release.clone();
+        std::thread::spawn(move || {
+            let mut report = |progress: Progress| {
+                *state.lock().unwrap() = Some(progress);
+                notify();
+            };
+            let outcome = install(&release, &mut report);
+            report(match outcome {
+                Ok(dir) => Progress::Done(dir),
+                Err(message) => Progress::Failed(message),
+            });
+        });
+    }
+
+    /// The newest step, if there has been one since this was last asked. Only
+    /// the latest is kept: a status line has no use for the ones it missed.
+    pub fn poll(&mut self) -> Option<Progress> {
+        let progress = self.state.lock().unwrap().take()?;
+        if progress.is_finished() {
+            self.running = false;
+            self.started = None;
+        }
+        Some(progress)
+    }
+
+    /// Whether an install is still going.
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
+    /// The release being installed, for the line that describes it.
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// Which spinner frame this install is up to.
+    pub fn tick(&self) -> usize {
+        tick_of(self.started)
+    }
+}
+
+/// A spinner frame per tenth of a second since the work began.
+fn tick_of(started: Option<std::time::Instant>) -> usize {
+    started.map_or(0, |at| (at.elapsed().as_millis() / 100) as usize)
 }

@@ -100,6 +100,7 @@ cargo build --release --no-default-features --features tui
 ```bash
 ycode                      # opens with no project — the start page lists the keys
 ycode ~/code/project       # opens that folder
+ycode ~/code/project/main.rs  # opens that file, its folder as the project
 ycode-gui ~/code/project   # the window
 ```
 

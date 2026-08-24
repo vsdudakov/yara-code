@@ -118,6 +118,36 @@ pub fn project_root(arg: Option<PathBuf>) -> Option<PathBuf> {
     arg.map(|root| root.canonicalize().unwrap_or(root))
 }
 
+/// What a launch path means: a folder is the project root, a file is opened in
+/// a tab with its folder as the root.
+#[derive(Default)]
+pub struct Launch {
+    pub root: Option<PathBuf>,
+    pub file: Option<PathBuf>,
+}
+
+/// Reads the launch argument as either a folder to open or a file to open.
+/// A path that names a file becomes that file in front, with its parent folder
+/// as the project; anything else — a folder, or a path that does not exist yet
+/// — is the project root, as `project_root` gives it.
+pub fn launch(arg: Option<PathBuf>) -> Launch {
+    let Some(path) = arg else {
+        return Launch::default();
+    };
+    let path = path.canonicalize().unwrap_or(path);
+    if path.is_file() {
+        Launch {
+            root: path.parent().map(std::path::Path::to_path_buf),
+            file: Some(path),
+        }
+    } else {
+        Launch {
+            root: Some(path),
+            file: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +199,31 @@ mod tests {
         // given rather than dropped — the editor reports it later.
         let missing = PathBuf::from("/definitely/not/here");
         assert_eq!(project_root(Some(missing.clone())), Some(missing));
+    }
+
+    #[test]
+    fn a_file_argument_opens_the_file_in_its_folder() {
+        let dir = crate::core::test_support::Dir::new("yara-launch-file");
+        let file = dir.file("main.rs", "fn main() {}\n");
+        let launched = launch(Some(file.clone()));
+        assert_eq!(
+            launched.file.as_deref(),
+            Some(file.canonicalize().unwrap().as_path())
+        );
+        assert_eq!(
+            launched.root,
+            file.canonicalize()
+                .unwrap()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        );
+    }
+
+    #[test]
+    fn a_folder_argument_is_the_root_and_opens_nothing() {
+        let dir = crate::core::test_support::Dir::new("yara-launch-dir");
+        let launched = launch(Some(dir.path().to_path_buf()));
+        assert_eq!(launched.root.as_deref(), Some(dir.path()));
+        assert!(launched.file.is_none());
     }
 }

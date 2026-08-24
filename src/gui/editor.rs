@@ -1,0 +1,761 @@
+//! Tabbed code editor: line numbers, themed syntax highlighting, smart indent
+//! and ⌘-click navigation.
+
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use crate::core::buffer::{word_at, Buffers};
+use crate::core::find::Find;
+use crate::core::fold::{self, Region};
+use crate::core::indent;
+use crate::core::settings::{Indent, Modifier};
+use crate::core::theme::Theme;
+use crate::gui::fold_view::Mapping;
+use crate::gui::highlight;
+use crate::gui::theme::{color, CODE_FONT_SIZE};
+
+#[derive(Default)]
+pub struct Editor {
+    pub buffers: Buffers,
+    /// (line, column), 1-based, of the primary cursor in the active buffer.
+    pub cursor: Option<(usize, usize)>,
+    /// Scroll to this 1-based line of this buffer on the next frame it is shown.
+    pub pending_jump: Option<(PathBuf, usize)>,
+    /// Identifier the user ⌘-clicked; the app resolves it to a definition.
+    pub goto_request: Option<String>,
+    /// Buffer whose close is awaiting the save/discard confirmation.
+    pub pending_close: Option<usize>,
+    /// Collapsed block headers, per file.
+    folds: HashMap<PathBuf, BTreeSet<usize>>,
+    /// Foldable blocks of the active buffer, recomputed when its text changes.
+    regions: Vec<Region>,
+    regions_key: Option<(PathBuf, usize)>,
+    /// The find bar's state, shared across buffers like the editor's own.
+    pub find: Find,
+    /// Character range to select on the next frame, from a find step.
+    pending_select: Option<(usize, usize)>,
+}
+
+impl Editor {
+    pub fn open(&mut self, path: PathBuf) {
+        self.buffers.open(path);
+    }
+
+    // ----- find in file --------------------------------------------------
+
+    /// Opens the bar, seeding it from the buffer and landing on the match
+    /// nearest the cursor.
+    pub fn open_find(&mut self) {
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return;
+        };
+        self.find.open = true;
+        self.find.focus_pending = true;
+        self.find.refresh(&text);
+        let cursor_chars = self.cursor_char_index();
+        self.find.select_near(cursor_chars);
+    }
+
+    /// Seeds the find bar from a project-search result so the file opens with
+    /// every match highlighted and the clicked one current.
+    pub fn seed_find(
+        &mut self,
+        query: String,
+        regex: bool,
+        case_sensitive: bool,
+        whole_word: bool,
+        line: usize,
+    ) {
+        if query.is_empty() {
+            return;
+        }
+        self.find.query = query;
+        self.find.regex = regex;
+        self.find.case_sensitive = case_sensitive;
+        self.find.whole_word = whole_word;
+        self.find.open = true;
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return;
+        };
+        self.find.refresh(&text);
+        if let Some(index) = self.find.hits.iter().position(|h| h.line + 1 == line) {
+            self.find.current = index;
+        }
+    }
+
+    fn cursor_char_index(&self) -> usize {
+        let Some(buf) = self.buffers.active() else {
+            return 0;
+        };
+        let (line, col) = self.cursor.unwrap_or((1, 1));
+        let mut index = 0;
+        for (n, text) in buf.text.split('\n').enumerate() {
+            if n + 1 == line {
+                return index + col.saturating_sub(1).min(text.chars().count());
+            }
+            index += text.chars().count() + 1;
+        }
+        index
+    }
+
+    /// Moves to the next or previous match and selects it.
+    pub fn find_step(&mut self, delta: isize) {
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return;
+        };
+        self.find.refresh(&text);
+        self.find.step(delta);
+        self.reveal_current_hit();
+    }
+
+    /// Expands any fold hiding the current match, then queues its selection.
+    fn reveal_current_hit(&mut self) {
+        let Some(hit) = self.find.hit() else { return };
+        self.refresh_regions();
+        if let Some(path) = self.buffers.active().map(|b| b.path.clone()) {
+            let enclosing = fold::context(&self.regions, hit.line, usize::MAX);
+            if let Some(folds) = self.folds.get_mut(&path) {
+                for header in enclosing {
+                    folds.remove(&header);
+                }
+            }
+        }
+        self.pending_select = Some((hit.start, hit.end));
+    }
+
+    pub fn find_replace_current(&mut self) {
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return;
+        };
+        self.find.refresh(&text);
+        if let Some((updated, cursor)) = self.find.replace_current(&text) {
+            if let Some(buf) = self.buffers.active_mut() {
+                buf.text = updated.clone();
+            }
+            self.find.refresh(&updated);
+            self.find.select_near(cursor);
+            self.reveal_current_hit();
+        }
+    }
+
+    pub fn find_replace_all(&mut self) -> usize {
+        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+            return 0;
+        };
+        self.find.refresh(&text);
+        match self.find.replace_all(&text) {
+            Some((updated, count)) => {
+                if let Some(buf) = self.buffers.active_mut() {
+                    buf.text = updated.clone();
+                }
+                self.find.refresh(&updated);
+                count
+            }
+            None => 0,
+        }
+    }
+
+    // ----- folding -------------------------------------------------------
+
+    /// Recomputes the active buffer's blocks when its text has changed, and
+    /// drops folds whose header no longer opens one.
+    fn refresh_regions(&mut self) {
+        let Some(buf) = self.buffers.active() else {
+            self.regions.clear();
+            self.regions_key = None;
+            return;
+        };
+        let key = (buf.path.clone(), buf.text.len());
+        if self.regions_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.regions = fold::regions(&buf.text, &buf.extension);
+        self.regions_key = Some(key);
+        let starts = fold::all_starts(&self.regions);
+        if let Some(folds) = self.folds.get_mut(&buf.path) {
+            folds.retain(|line| starts.contains(line));
+        }
+    }
+
+    pub fn toggle_fold(&mut self, line: usize) {
+        if fold::region_at(&self.regions, line).is_none() {
+            return;
+        }
+        let Some(path) = self.buffers.active().map(|b| b.path.clone()) else {
+            return;
+        };
+        let folds = self.folds.entry(path).or_default();
+        if !folds.remove(&line) {
+            folds.insert(line);
+        }
+    }
+
+    /// Folds the block at the cursor, or the innermost one around it.
+    pub fn toggle_fold_at_cursor(&mut self) {
+        self.refresh_regions();
+        let line = self.cursor.map_or(1, |(l, _)| l) - 1;
+        if fold::region_at(&self.regions, line).is_some() {
+            self.toggle_fold(line);
+        } else if let Some(header) = fold::context(&self.regions, line, 1).first().copied() {
+            self.toggle_fold(header);
+        }
+    }
+
+    pub fn fold_all(&mut self) {
+        self.refresh_regions();
+        let starts = fold::all_starts(&self.regions);
+        if let Some(path) = self.buffers.active().map(|b| b.path.clone()) {
+            self.folds.insert(path, starts);
+        }
+    }
+
+    pub fn unfold_all(&mut self) {
+        if let Some(path) = self.buffers.active().map(|b| b.path.clone()) {
+            self.folds.remove(&path);
+        }
+    }
+
+    /// Current (path, 1-based line) for the navigation history.
+    pub fn location(&self) -> Option<(PathBuf, usize)> {
+        let buf = self.buffers.active()?;
+        Some((buf.path.clone(), self.cursor.map_or(1, |(l, _)| l)))
+    }
+
+    pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+        let mut close: Option<usize> = None;
+        let mut activate: Option<usize> = None;
+        ui.spacing_mut().item_spacing.x = 1.0;
+        ui.horizontal(|ui| {
+            for (i, buf) in self.buffers.list.iter().enumerate() {
+                let selected = i == self.buffers.active;
+                let fill = if selected {
+                    color(theme.ui.tab_active_bg)
+                } else {
+                    color(theme.ui.tab_inactive_bg)
+                };
+                let frame = egui::Frame::default()
+                    .fill(fill)
+                    .inner_margin(egui::Margin::symmetric(10, 7));
+                frame.show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let fg = if selected {
+                        color(theme.ui.fg)
+                    } else {
+                        color(theme.ui.fg_dim)
+                    };
+                    let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
+                    let resp = ui
+                        .add(egui::Label::new(title).sense(egui::Sense::click()))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    // Modified dot / close cross, drawn as shapes so they show
+                    // up regardless of font coverage. Hovering the dot turns it
+                    // into a cross, like VS Code.
+                    let (icon_rect, close_resp) =
+                        ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
+                    let close_resp =
+                        close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if ui.is_rect_visible(icon_rect) {
+                        let hovered = close_resp.hovered();
+                        let mark = if hovered {
+                            color(theme.ui.fg)
+                        } else {
+                            color(theme.ui.fg_dim)
+                        };
+                        if hovered {
+                            ui.painter().rect_filled(
+                                icon_rect,
+                                egui::CornerRadius::same(3),
+                                color(theme.ui.hover_bg),
+                            );
+                        }
+                        if buf.modified() && !hovered {
+                            ui.painter().circle_filled(icon_rect.center(), 3.5, mark);
+                        } else {
+                            let r = 3.2;
+                            let c = icon_rect.center();
+                            let stroke = egui::Stroke::new(1.3, mark);
+                            ui.painter().line_segment(
+                                [c + egui::vec2(-r, -r), c + egui::vec2(r, r)],
+                                stroke,
+                            );
+                            ui.painter().line_segment(
+                                [c + egui::vec2(r, -r), c + egui::vec2(-r, r)],
+                                stroke,
+                            );
+                        }
+                    }
+                    if close_resp.clicked() {
+                        close = Some(i);
+                    } else if resp.clicked() {
+                        activate = Some(i);
+                    }
+                });
+            }
+        });
+        if let Some(i) = activate {
+            self.buffers.active = i;
+        }
+        if let Some(i) = close {
+            self.request_close(i);
+        }
+    }
+
+    /// Closes a buffer outright when it is clean; otherwise asks first.
+    pub fn request_close(&mut self, index: usize) {
+        if self.buffers.list.get(index).is_some_and(|b| b.modified()) {
+            self.pending_close = Some(index);
+        } else {
+            self.buffers.close(index);
+        }
+    }
+
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        indent_config: &Indent,
+        goto_modifiers: &[Modifier],
+        empty_hint: &str,
+    ) {
+        self.refresh_regions();
+        let Some(buf) = self.buffers.active() else {
+            self.cursor = None;
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new(empty_hint)
+                        .color(color(theme.ui.fg_faint))
+                        .size(13.0),
+                );
+            });
+            return;
+        };
+
+        let extension = buf.extension.clone();
+        let theme_name = theme.name.clone();
+        let path = buf.path.clone();
+        let folds = self.folds.get(&path).cloned().unwrap_or_default();
+        let hidden = fold::hidden_lines(&self.regions, &folds);
+        let regions = self.regions.clone();
+
+        // The widget edits one flat string, so folding shows a display copy
+        // with the hidden lines removed and maps edits back afterwards.
+        let mapping = Mapping::new(&buf.text, &hidden);
+        let mut shown = mapping.display.clone();
+        let visible = mapping.lines.clone();
+        let text_lines: Vec<String> = buf.text.split('\n').map(str::to_string).collect();
+
+        // Find hits, mapped from the real text into what is on screen, so
+        // every match is painted and the current one stands out.
+        let hits: Vec<(usize, usize, bool)> = if self.find.open {
+            let mut starts = vec![0usize; text_lines.len() + 1];
+            let mut display_start = vec![0usize; text_lines.len() + 1];
+            let mut real = 0usize;
+            let mut shown_at = 0usize;
+            for (n, line) in text_lines.iter().enumerate() {
+                starts[n] = real;
+                display_start[n] = shown_at;
+                let len = line.chars().count() + 1;
+                real += len;
+                if visible.contains(&n) {
+                    shown_at += len;
+                }
+            }
+            self.find
+                .hits
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| visible.contains(&h.line))
+                .map(|(i, h)| {
+                    let offset = display_start[h.line] + (h.start - starts[h.line]);
+                    (offset, offset + (h.end - h.start), i == self.find.current)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let layout_extension = extension.clone();
+        let layout_theme = theme_name.clone();
+        let match_bg = color(theme.ui.match_bg);
+        let current_bg = color(theme.ui.selected_bg);
+        let mut layouter = move |ui: &egui::Ui, text: &str, wrap_width: f32| -> Arc<egui::Galley> {
+            let mut job = highlight::highlight(ui.ctx(), &layout_theme, &layout_extension, text);
+            paint_matches(&mut job, text, &hits, match_bg, current_bg);
+            job.wrap.max_width = wrap_width;
+            ui.fonts(|f| f.layout_job(job))
+        };
+
+        let row_height = ui.fonts(|f| f.row_height(&egui::FontId::monospace(CODE_FONT_SIZE)));
+        let mut toggle: Option<usize> = None;
+
+        let scroll = egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let mut jumped_to: Option<usize> = None;
+                ui.spacing_mut().item_spacing.x = 14.0;
+                ui.horizontal_top(|ui| {
+                    // Gutter: real line numbers plus a fold marker per row.
+                    let (gutter, gutter_resp) = ui.allocate_exact_size(
+                        egui::vec2(62.0, visible.len() as f32 * row_height),
+                        egui::Sense::click(),
+                    );
+                    if ui.is_rect_visible(gutter) {
+                        for (row, line) in visible.iter().enumerate() {
+                            let y = gutter.min.y + row as f32 * row_height;
+                            let center_y = y + row_height / 2.0;
+                            ui.painter().text(
+                                egui::pos2(gutter.min.x + 40.0, center_y),
+                                egui::Align2::RIGHT_CENTER,
+                                (line + 1).to_string(),
+                                egui::FontId::monospace(CODE_FONT_SIZE),
+                                color(theme.ui.line_number),
+                            );
+                            if fold::region_at(&regions, *line).is_some() {
+                                let hovered = gutter_resp
+                                    .hover_pos()
+                                    .is_some_and(|p| p.y >= y && p.y < y + row_height);
+                                chevron(
+                                    ui.painter(),
+                                    egui::pos2(gutter.min.x + 52.0, center_y),
+                                    !folds.contains(line),
+                                    if hovered {
+                                        color(theme.ui.fg)
+                                    } else {
+                                        color(theme.ui.fg_faint)
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    if gutter_resp.clicked() {
+                        if let Some(pos) = gutter_resp.interact_pointer_pos() {
+                            let row = ((pos.y - gutter.min.y) / row_height).floor() as usize;
+                            if let Some(line) = visible.get(row) {
+                                toggle = Some(*line);
+                            }
+                        }
+                    }
+                    if gutter_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    let te_id = egui::Id::new(("buffer", &path));
+                    let jump = match &self.pending_jump {
+                        Some((p, line)) if *p == path => {
+                            let line = *line;
+                            self.pending_jump = None;
+                            Some(line)
+                        }
+                        _ => None,
+                    };
+                    if let Some(line) = jump {
+                        // Place the cursor at the start of the target row.
+                        let row = visible
+                            .binary_search(&line.saturating_sub(1))
+                            .unwrap_or_else(|i| i.min(visible.len().saturating_sub(1)));
+                        let mut idx = 0usize;
+                        for (n, l) in shown.split('\n').enumerate() {
+                            if n >= row {
+                                break;
+                            }
+                            idx += l.chars().count() + 1;
+                        }
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
+                            .unwrap_or_default();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(
+                            egui::text::CCursor::new(idx),
+                        )));
+                        state.store(ui.ctx(), te_id);
+                        ui.ctx().memory_mut(|m| m.request_focus(te_id));
+                        jumped_to = Some(row);
+                    }
+
+                    // A find step selects its match, unfolded above, so the
+                    // display offsets line up with the real ones.
+                    if let Some((from, to)) = self.pending_select.take() {
+                        let to_display = |real: usize| -> usize {
+                            let mut seen = 0usize;
+                            let mut display = 0usize;
+                            for (n, line) in text_lines.iter().enumerate() {
+                                let len = line.chars().count() + 1;
+                                if seen + len > real {
+                                    return if visible.contains(&n) {
+                                        display + (real - seen)
+                                    } else {
+                                        display
+                                    };
+                                }
+                                if visible.contains(&n) {
+                                    display += len;
+                                }
+                                seen += len;
+                            }
+                            display
+                        };
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
+                            .unwrap_or_default();
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(to_display(from)),
+                            egui::text::CCursor::new(to_display(to)),
+                        )));
+                        state.store(ui.ctx(), te_id);
+                        ui.ctx().memory_mut(|m| m.request_focus(te_id));
+                        let row = visible
+                            .binary_search(&line_of_char(&text_lines, from))
+                            .unwrap_or_else(|i| i.min(visible.len().saturating_sub(1)));
+                        jumped_to = Some(row);
+                    }
+
+                    // Smart indent: handle Enter ourselves so the new line
+                    // inherits (and adjusts) the current indentation.
+                    if ui.memory(|m| m.has_focus(te_id))
+                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                    {
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
+                            .unwrap_or_default();
+                        if let Some(range) = state.cursor.char_range() {
+                            let char_count = shown.chars().count();
+                            let (a, b) = (range.primary.index, range.secondary.index);
+                            let (start, end) =
+                                (a.min(b).min(char_count), a.max(b).min(char_count));
+                            let byte_of = |idx: usize, text: &str| {
+                                text.char_indices().nth(idx).map_or(text.len(), |(b, _)| b)
+                            };
+                            let (bs, be) = (byte_of(start, &shown), byte_of(end, &shown));
+                            if start != end {
+                                shown.replace_range(bs..be, "");
+                            }
+                            let edit =
+                                indent::newline_edit(&shown, start, &extension, indent_config);
+                            shown.insert_str(bs, &edit.insert);
+                            let new_cursor = egui::text::CCursor::new(start + edit.cursor_offset);
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::one(new_cursor)));
+                            state.store(ui.ctx(), te_id);
+                        }
+                    }
+
+                    let output = egui::TextEdit::multiline(&mut shown)
+                        .id(te_id)
+                        .code_editor()
+                        .frame(false)
+                        .margin(egui::Margin::ZERO)
+                        .desired_width(f32::INFINITY)
+                        .layouter(&mut layouter)
+                        .show(ui);
+
+                    if let Some(row) = jumped_to {
+                        let rect = output.response.rect;
+                        let y = rect.min.y + row as f32 * row_height;
+                        let target = egui::Rect::from_min_size(
+                            egui::pos2(rect.min.x, y),
+                            egui::vec2(1.0, row_height),
+                        );
+                        ui.scroll_to_rect(target, Some(egui::Align::Center));
+                    }
+
+                    // ⌘-hover underlines the identifier under the pointer;
+                    // ⌘-click asks the app to jump to its definition.
+                    let goto_held = ui.input(|i| {
+                        goto_modifiers.iter().any(|wanted| match wanted {
+                            Modifier::Cmd => i.modifiers.command,
+                            Modifier::Ctrl => i.modifiers.ctrl,
+                            Modifier::Alt => i.modifiers.alt,
+                            Modifier::Shift => i.modifiers.shift,
+                        })
+                    });
+                    if goto_held {
+                        if let Some(pos) = output.response.hover_pos() {
+                            let cursor = output.galley.cursor_from_pos(pos - output.galley_pos);
+                            if let Some((word, start, end)) =
+                                word_at(&shown, cursor.ccursor.index)
+                            {
+                                let rect_of = |idx: usize| {
+                                    let c =
+                                        output.galley.from_ccursor(egui::text::CCursor::new(idx));
+                                    output
+                                        .galley
+                                        .pos_from_cursor(&c)
+                                        .translate(output.galley_pos.to_vec2())
+                                };
+                                let (a, b) = (rect_of(start), rect_of(end));
+                                if (a.top() - b.top()).abs() < 0.5 {
+                                    ui.painter().hline(
+                                        a.left()..=b.left(),
+                                        b.bottom() - 1.0,
+                                        egui::Stroke::new(1.0, color(theme.ui.accent_light)),
+                                    );
+                                }
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                if ui.input(|i| i.pointer.primary_pressed()) {
+                                    self.goto_request = Some(word);
+                                }
+                            }
+                        }
+                    }
+
+                    // Cursor position is reported in real line numbers.
+                    self.cursor = output.cursor_range.map(|r| {
+                        let idx = r.primary.ccursor.index;
+                        let mut row = 0;
+                        let mut col = 1;
+                        for ch in shown.chars().take(idx) {
+                            if ch == '\n' {
+                                row += 1;
+                                col = 1;
+                            } else {
+                                col += 1;
+                            }
+                        }
+                        (visible.get(row).copied().unwrap_or(row) + 1, col)
+                    });
+                });
+            });
+
+        if let Some(line) = toggle {
+            self.toggle_fold(line);
+        }
+        // The edited display text goes back into the real buffer.
+        if let Some(buf) = self.buffers.list.get_mut(self.buffers.active) {
+            if hidden.is_empty() {
+                buf.text = shown;
+            } else {
+                mapping.splice(&mut buf.text, &shown);
+            }
+        }
+
+        // Sticky scroll: pin the headers enclosing the topmost visible row.
+        let first_row = (scroll.state.offset.y / row_height).floor() as usize;
+        let first_line = visible.get(first_row).copied().unwrap_or(0);
+        let sticky: Vec<usize> = fold::context(&self.regions, first_line, 3)
+            .into_iter()
+            .filter(|header| *header < first_line)
+            .collect();
+        if sticky.is_empty() {
+            return;
+        }
+        let viewport = scroll.inner_rect;
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("sticky_scroll"),
+        ));
+        let band = egui::Rect::from_min_size(
+            viewport.min,
+            egui::vec2(viewport.width(), sticky.len() as f32 * row_height),
+        );
+        painter.rect_filled(band, egui::CornerRadius::ZERO, color(theme.ui.status_bg));
+        painter.hline(
+            band.x_range(),
+            band.max.y,
+            egui::Stroke::new(1.0, color(theme.ui.border)),
+        );
+        let text = self
+            .buffers
+            .active()
+            .map(|b| b.text.clone())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.split('\n').collect();
+        for (row, header) in sticky.iter().enumerate() {
+            let y = band.min.y + row as f32 * row_height;
+            painter.text(
+                egui::pos2(band.min.x + 40.0, y + row_height / 2.0),
+                egui::Align2::RIGHT_CENTER,
+                (header + 1).to_string(),
+                egui::FontId::monospace(CODE_FONT_SIZE),
+                color(theme.ui.line_number),
+            );
+            let job = highlight::highlight(
+                ui.ctx(),
+                &theme_name,
+                &extension,
+                lines.get(*header).copied().unwrap_or(""),
+            );
+            let galley = ui.fonts(|f| f.layout_job(job));
+            painter.galley(egui::pos2(band.min.x + 76.0, y), galley, color(theme.ui.fg));
+        }
+    }
+}
+
+/// Gives every find hit a background, splitting the highlighter's sections at
+/// the hit boundaries so the colors survive syntax coloring.
+fn paint_matches(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    hits: &[(usize, usize, bool)],
+    normal: egui::Color32,
+    current: egui::Color32,
+) {
+    if hits.is_empty() {
+        return;
+    }
+    let byte_of = |chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(b, _)| b);
+    let ranges: Vec<(usize, usize, bool)> = hits
+        .iter()
+        .map(|(s, e, c)| (byte_of(*s), byte_of(*e), *c))
+        .collect();
+
+    let mut sections = Vec::with_capacity(job.sections.len());
+    for section in std::mem::take(&mut job.sections) {
+        let (start, end) = (section.byte_range.start, section.byte_range.end);
+        let mut cuts = vec![start, end];
+        for (from, to, _) in &ranges {
+            for point in [*from, *to] {
+                if point > start && point < end {
+                    cuts.push(point);
+                }
+            }
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for pair in cuts.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let mut format = section.format.clone();
+            if let Some((_, _, is_current)) =
+                ranges.iter().find(|(from, to, _)| a >= *from && b <= *to)
+            {
+                format.background = if *is_current { current } else { normal };
+            }
+            sections.push(egui::text::LayoutSection {
+                leading_space: if a == start { section.leading_space } else { 0.0 },
+                byte_range: a..b,
+                format,
+            });
+        }
+    }
+    job.sections = sections;
+}
+
+/// Which line a character offset falls on.
+fn line_of_char(lines: &[String], index: usize) -> usize {
+    let mut seen = 0usize;
+    for (n, line) in lines.iter().enumerate() {
+        let len = line.chars().count() + 1;
+        if seen + len > index {
+            return n;
+        }
+        seen += len;
+    }
+    lines.len().saturating_sub(1)
+}
+
+/// Fold marker, the same triangle the navigator draws.
+fn chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: egui::Color32) {
+    let r = 3.4;
+    let pts = if expanded {
+        vec![
+            center + egui::vec2(-r, -r * 0.6),
+            center + egui::vec2(r, -r * 0.6),
+            center + egui::vec2(0.0, r * 0.8),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-r * 0.6, -r),
+            center + egui::vec2(-r * 0.6, r),
+            center + egui::vec2(r * 0.8, 0.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}

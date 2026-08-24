@@ -1,0 +1,52 @@
+%YAML 1.2
+---
+name: TOML
+file_extensions: [toml, tml, Cargo.lock, Pipfile]
+scope: source.toml
+contexts:
+  main:
+    - match: '#'
+      scope: punctuation.definition.comment.toml
+      push:
+        - meta_scope: comment.line.number-sign.toml
+        - match: $\n?
+          pop: true
+    - match: '^\s*(\[\[?)([^\]]*)(\]\]?)'
+      captures:
+        1: punctuation.definition.table.toml
+        2: entity.name.section.toml
+        3: punctuation.definition.table.toml
+    - match: '^\s*([A-Za-z0-9_\-."]+)\s*(=)'
+      captures:
+        1: entity.name.tag.toml
+        2: keyword.operator.toml
+    - match: '"""'
+      push:
+        - meta_scope: string.quoted.triple.toml
+        - match: '"""'
+          pop: true
+    - match: "'''"
+      push:
+        - meta_scope: string.quoted.triple.toml
+        - match: "'''"
+          pop: true
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.toml
+        - match: \\.
+          scope: constant.character.escape.toml
+        - match: '"'
+          pop: true
+    - match: "'"
+      push:
+        - meta_scope: string.quoted.single.toml
+        - match: "'"
+          pop: true
+    - match: \b(true|false)\b
+      scope: constant.language.toml
+    - match: '\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})?)?'
+      scope: constant.numeric.date.toml
+    - match: '[+-]?(\d[\d_]*(\.[\d_]+)?([eE][+-]?\d+)?|0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|inf|nan)'
+      scope: constant.numeric.toml
+    - match: '[\[\],{}]'
+      scope: punctuation.toml

@@ -1,0 +1,32 @@
+%YAML 1.2
+---
+name: Dockerfile
+file_extensions: [dockerfile, Dockerfile, containerfile, Containerfile]
+scope: source.dockerfile
+contexts:
+  main:
+    - match: '#'
+      push:
+        - meta_scope: comment.line.number-sign.dockerfile
+        - match: $\n?
+          pop: true
+    - match: '^\s*(FROM|RUN|CMD|LABEL|MAINTAINER|EXPOSE|ENV|ADD|COPY|ENTRYPOINT|VOLUME|USER|WORKDIR|ARG|ONBUILD|STOPSIGNAL|HEALTHCHECK|SHELL)\b'
+      scope: keyword.control.dockerfile
+      captures:
+        1: keyword.control.dockerfile
+    - match: \b(AS|as)\b
+      scope: keyword.operator.dockerfile
+    - match: '\$\{?[A-Za-z_][\w]*\}?'
+      scope: variable.other.dockerfile
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.dockerfile
+        - match: \\.
+          scope: constant.character.escape.dockerfile
+        - match: '"'
+          pop: true
+    - match: "'"
+      push:
+        - meta_scope: string.quoted.single.dockerfile
+        - match: "'"
+          pop: true

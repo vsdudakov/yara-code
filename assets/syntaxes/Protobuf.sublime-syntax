@@ -1,0 +1,40 @@
+%YAML 1.2
+---
+name: Protocol Buffers
+file_extensions: [proto]
+scope: source.proto
+contexts:
+  main:
+    - match: //
+      push:
+        - meta_scope: comment.line.double-slash.proto
+        - match: $\n?
+          pop: true
+    - match: /\*
+      push:
+        - meta_scope: comment.block.proto
+        - match: \*/
+          pop: true
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.proto
+        - match: \\.
+          scope: constant.character.escape.proto
+        - match: '"'
+          pop: true
+    - match: \b(true|false)\b
+      scope: constant.language.proto
+    - match: \b\d+\b
+      scope: constant.numeric.proto
+    - match: \b(syntax|package|import|option|public|weak)\b
+      scope: keyword.control.import.proto
+    - match: \b(message|service|rpc|enum|oneof|extend|reserved|returns|stream|group|extensions|to|map)\b
+      scope: keyword.proto
+    - match: \b(required|optional|repeated)\b
+      scope: storage.modifier.proto
+    - match: \b(double|float|int32|int64|uint32|uint64|sint32|sint64|fixed32|fixed64|sfixed32|sfixed64|bool|string|bytes)\b
+      scope: support.type.proto
+    - match: \b([A-Z][A-Za-z0-9_]*)\b
+      scope: entity.name.type.proto
+    - match: '[{}()\[\];,.=]'
+      scope: punctuation.proto

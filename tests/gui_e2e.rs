@@ -316,10 +316,18 @@ fn find_and_replace_in_the_open_file_works_through_the_bar() {
     );
     harness.type_text("one");
     assert!(harness.shows("1 of 3"), "{}", harness.screen());
-    // Next and previous match.
-    harness.press(Key::G, Modifiers::COMMAND);
+    // Next and previous match, on the chords VS Code uses for the platform.
+    let (next, previous) = if cfg!(target_os = "macos") {
+        (
+            (Key::G, Modifiers::COMMAND),
+            (Key::G, Modifiers::COMMAND | Modifiers::SHIFT),
+        )
+    } else {
+        ((Key::F3, Modifiers::NONE), (Key::F3, Modifiers::SHIFT))
+    };
+    harness.press(next.0, next.1);
     assert!(harness.shows("2 of 3"), "{}", harness.screen());
-    harness.press(Key::G, Modifiers::COMMAND | Modifiers::SHIFT);
+    harness.press(previous.0, previous.1);
     assert!(harness.shows("1 of 3"), "{}", harness.screen());
     // Escape closes the bar.
     harness.press(Key::Escape, Modifiers::NONE);

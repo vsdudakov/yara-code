@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::core::git::{GitState, Worktree, REFRESH_EVERY};
+use crate::core::git::{Change, GitState, Worktree, REFRESH_EVERY};
 use crate::core::theme::Theme;
 use crate::gui::theme::{ansi_color, color};
 
@@ -19,8 +19,9 @@ impl GitPanel {
         self.state.invalidate();
     }
 
-    /// Draws the panel; returns a file the user clicked, to be opened.
-    pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme, root: &Path) -> Option<PathBuf> {
+    /// Draws the panel; returns the change the user clicked, to be shown as a
+    /// diff.
+    pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme, root: &Path) -> Option<Change> {
         self.state.tick(root);
         // Keep the list live while the view is on screen.
         ui.ctx().request_repaint_after(REFRESH_EVERY);
@@ -38,7 +39,7 @@ impl GitPanel {
             return None;
         }
 
-        let mut open: Option<PathBuf> = None;
+        let mut open: Option<Change> = None;
         egui::Frame::default()
             .inner_margin(egui::Margin::symmetric(10, 0))
             .show(ui, |ui| {
@@ -126,7 +127,6 @@ impl GitPanel {
             });
 
         ui.add_space(4.0);
-        let dir = self.state.dir();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -149,9 +149,7 @@ impl GitPanel {
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .clicked()
                     {
-                        if let Some(dir) = &dir {
-                            open = Some(dir.join(&change.path));
-                        }
+                        open = Some(change.clone());
                     }
                 }
             });

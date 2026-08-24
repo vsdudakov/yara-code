@@ -101,7 +101,7 @@ pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
             (e.path(), is_dir)
         })
-        .filter(|(p, _)| p.file_name().map_or(true, |n| n != ".git"))
+        .filter(|(p, _)| p.file_name().is_none_or(|n| n != ".git"))
         .collect();
     entries.sort_by(|(pa, da), (pb, db)| {
         db.cmp(da).then_with(|| {

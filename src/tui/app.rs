@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,10 +16,11 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use crate::core::buffer::{word_at, Buffers};
-use crate::core::command::{Chord, Command, Key, Mods};
+use crate::core::command::{Chord, Command, Key, Mods, FILE_MENU, HELP_MENU, VIEW_MENU};
 use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
-use crate::core::git::GitState;
+use crate::core::diff;
+use crate::core::git::{self as core_git, GitState};
 use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::project::Project;
@@ -49,7 +50,19 @@ pub enum Focus {
     Search,
     Git,
     Find,
+    /// The side-by-side diff, which takes the editor's place while it is open.
+    Diff,
     Shell,
+}
+
+/// A changed file shown side by side: what it was on the left, what it is now
+/// on the right.
+pub struct Diff {
+    /// Path as git reports it, relative to the worktree.
+    pub path: String,
+    pub rows: Vec<diff::Row>,
+    /// First row drawn.
+    pub scroll: usize,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -65,6 +78,14 @@ pub enum Pick {
     OpenFile,
     OpenFolder,
     AddFolder,
+}
+
+/// The menus in the top bar, in the order they are drawn.
+#[derive(Clone, Copy, PartialEq)]
+pub enum MenuBar {
+    File,
+    View,
+    Help,
 }
 
 /// Which strip a dragged tab came from — editor tabs and terminal tabs move
@@ -206,8 +227,10 @@ fn chord_of(key: KeyEvent) -> Option<Chord> {
         alt: key.modifiers.contains(KeyModifiers::ALT),
         shift: key.modifiers.contains(KeyModifiers::SHIFT),
     };
-    // A bare key press is ordinary typing, not a shortcut.
-    if !mods.ctrl && !mods.alt {
+    let named = !matches!(key.code, KeyCode::Char(_));
+    // A bare printable key is ordinary typing, not a shortcut; a named one
+    // (F2, Tab, Delete…) can be a binding on its own.
+    if !mods.ctrl && !mods.alt && !named {
         return None;
     }
     let key = match key.code {
@@ -289,6 +312,8 @@ pub struct Layout {
     /// (start_x, end_x, session index, is_close_button) for each shell tab in
     /// the panel header.
     pub shell_tabs: Vec<(u16, u16, usize, bool)>,
+    /// Diff tabs in the editor strip: (start, end, index, is_close).
+    pub diff_tabs: Vec<(u16, u16, usize, bool)>,
     /// The `+` button in the shell header that opens another session.
     pub shell_new: Rect,
     /// The theme name in the status bar; clicking it opens the theme picker,
@@ -330,6 +355,16 @@ pub struct App {
     pub edit: Vec<EditState>,
     pub search: Search,
     pub git: GitState,
+    /// Open diffs, tabs of their own beside the files.
+    pub diffs: Vec<Diff>,
+    /// Which diff tab is in front; `None` while a file is.
+    pub active_diff: Option<usize>,
+    /// Who last touched the line the cursor is on, and what it was read for.
+    pub blame: Option<core_git::Blame>,
+    blame_key: Option<(PathBuf, usize)>,
+    /// Changed lines of the file in front, for the gutter marks.
+    pub git_lines: BTreeMap<usize, core_git::LineState>,
+    git_lines_key: Option<(PathBuf, usize)>,
     /// Selected row in the git change list.
     pub git_selected: usize,
     pub shell: Shell,
@@ -361,7 +396,8 @@ pub struct App {
     pub settings: Settings,
     pub layout: Layout,
     /// Rect of the "File" label in the top bar, for clicking it.
-    pub file_button: Rect,
+    /// Where the top bar's menus sit, in `MenuBar` order.
+    pub menu_buttons: [Rect; 3],
     pub menu: Option<Menu>,
     /// Last pointer position, used for hover highlighting.
     pub mouse: Option<(u16, u16)>,
@@ -408,6 +444,12 @@ impl App {
             edit: Vec::new(),
             search: Search::default(),
             git: GitState::default(),
+            diffs: Vec::new(),
+            active_diff: None,
+            blame: None,
+            blame_key: None,
+            git_lines: BTreeMap::new(),
+            git_lines_key: None,
             git_selected: 0,
             shell: Shell::new(Arc::clone(&shell_dirty)),
             shell_dirty,
@@ -433,7 +475,7 @@ impl App {
             selecting: false,
             settings,
             layout: Layout::default(),
-            file_button: Rect::default(),
+            menu_buttons: [Rect::default(); 3],
             menu: None,
             mouse: None,
             link: None,
@@ -465,6 +507,7 @@ impl App {
             }
             if redraw || self.shell_dirty.swap(false, Ordering::Relaxed) {
                 self.refresh_highlight();
+                self.refresh_git_marks();
                 terminal.draw(|frame| ui::draw(frame, &mut self))?;
             }
             // Short poll so shell output appears promptly; the frame is only
@@ -483,7 +526,7 @@ impl App {
                             self.search.run(self.project.roots());
                         }
                         Focus::Find => self.find.query.push_str(&text),
-                        Focus::Tree | Focus::Git => {}
+                        Focus::Tree | Focus::Git | Focus::Diff => {}
                     },
                     Event::Resize(..) => {}
                     _ => redraw = false,
@@ -567,6 +610,38 @@ impl App {
         }
         if self.buffers.is_empty() {
             self.focus = Focus::Tree;
+        }
+    }
+
+    /// Keeps the gutter marks and the blame line in step with where the cursor
+    /// is. Both are a `git` call, so each is made only when something moved.
+    pub fn refresh_git_marks(&mut self) {
+        let (Some(buf), Some(dir)) = (self.buffers.active(), self.git.dir()) else {
+            self.git_lines.clear();
+            self.git_lines_key = None;
+            self.blame = None;
+            self.blame_key = None;
+            return;
+        };
+        let path = buf.path.clone();
+        let Ok(relative) = path.strip_prefix(&dir) else {
+            self.git_lines.clear();
+            self.blame = None;
+            return;
+        };
+        let relative = relative.to_string_lossy().into_owned();
+
+        let lines_key = (path.clone(), buf.text.len());
+        if self.git_lines_key.as_ref() != Some(&lines_key) {
+            self.git_lines_key = Some(lines_key);
+            self.git_lines = core_git::changed_lines(&dir, &relative);
+        }
+
+        let line = self.edit.get(self.buffers.active).map_or(0, |s| s.line) + 1;
+        let blame_key = (path, line);
+        if self.blame_key.as_ref() != Some(&blame_key) {
+            self.blame_key = Some(blame_key);
+            self.blame = core_git::blame(&dir, &relative, line);
         }
     }
 
@@ -1343,13 +1418,22 @@ impl App {
                 return;
             }
         }
-        if hits(self.file_button, x, y) {
-            if self.menu.is_some() {
+        for (i, which) in [MenuBar::File, MenuBar::View, MenuBar::Help]
+            .into_iter()
+            .enumerate()
+        {
+            if hits(self.menu_buttons[i], x, y) {
+                // A second click on the same button closes the menu again.
+                let open_here = self
+                    .menu
+                    .as_ref()
+                    .is_some_and(|m| m.x == self.menu_buttons[i].x && m.target.is_none());
                 self.menu = None;
-            } else {
-                self.open_file_menu();
+                if !open_here {
+                    self.open_menu_bar_menu(which);
+                }
+                return;
             }
-            return;
         }
         if hits(self.layout.tab_files, x, y) {
             self.sidebar_view = SidebarView::Files;
@@ -1441,12 +1525,24 @@ impl App {
         if hits(self.layout.tabs, x, y) {
             for (start, end, index, is_close) in self.layout.tab_spans.clone() {
                 if x >= start && x < end {
+                    self.active_diff = None;
                     if is_close {
                         self.buffers.active = index;
                         self.close_tab();
                     } else {
                         self.buffers.active = index;
                         self.focus = Focus::Editor;
+                    }
+                    return;
+                }
+            }
+            for (start, end, index, is_close) in self.layout.diff_tabs.clone() {
+                if x >= start && x < end {
+                    if is_close {
+                        self.close_diff(index);
+                    } else {
+                        self.active_diff = Some(index);
+                        self.focus = Focus::Diff;
                     }
                     return;
                 }
@@ -1674,6 +1770,7 @@ impl App {
                     self.remove_folder(&path);
                 }
             }
+            MenuItem::Note(_) => {}
             MenuItem::Command(command) => self.execute(command),
         }
     }
@@ -1745,8 +1842,10 @@ impl App {
         }
         // Anything bound in settings.json wins over pane-local handling.
         if let Some(command) = chord_of(key).and_then(|c| self.settings.tui_command(&c)) {
-            self.execute(command);
-            return;
+            if self.command_applies(command) {
+                self.execute(command);
+                return;
+            }
         }
 
         match key.code {
@@ -1768,8 +1867,37 @@ impl App {
                 Focus::Search => self.search_key(key),
                 Focus::Git => self.git_key(key),
                 Focus::Find => self.find_key(key),
+                Focus::Diff => self.diff_key(key),
                 Focus::Shell => self.shell_key(key),
             },
+        }
+    }
+
+    /// Whether a binding means anything where the keyboard currently is. Keys
+    /// like Tab and Enter carry a command *and* a job inside a pane; a pane
+    /// that needs the key keeps it.
+    fn command_applies(&self, command: Command) -> bool {
+        match command {
+            // Tab indents in the editor, switches fields in the find bar and
+            // completes in the shell.
+            Command::NextPane | Command::PrevPane => {
+                !matches!(self.focus, Focus::Editor | Focus::Find | Focus::Shell)
+            }
+            Command::Rename | Command::MoveTo | Command::Delete => self.focus == Focus::Tree,
+            Command::FindNext | Command::FindPrev | Command::ReplaceAll => self.find_showing(),
+            Command::PickRepository | Command::PickWorktree => self.focus == Focus::Git,
+            // The shell takes every ordinary key; only the panel's own
+            // bindings are reserved.
+            _ => {
+                self.focus != Focus::Shell
+                    || matches!(
+                        command,
+                        Command::ToggleTerminal
+                            | Command::NewTerminal
+                            | Command::CloseTerminal
+                            | Command::Quit
+                    )
+            }
         }
     }
 
@@ -1894,6 +2022,54 @@ impl App {
                 self.prompt = Some(Prompt::Themes);
             }
             Command::GotoDefinition => self.goto_definition(),
+            Command::NewFolder => match self.tree.target_dir() {
+                Some(dir) => {
+                    self.prompt_input.clear();
+                    self.prompt = Some(Prompt::NewDir(dir));
+                }
+                None => self.status = "no folder in the project yet".into(),
+            },
+            Command::Rename => {
+                if let Some(path) = self.tree.selected_path().map(Path::to_path_buf) {
+                    self.prompt_input = short(&path);
+                    self.prompt = Some(Prompt::Rename(path));
+                }
+            }
+            Command::MoveTo => {
+                if let Some(path) = self.tree.selected_path().map(Path::to_path_buf) {
+                    self.prompt_input.clear();
+                    self.prompt = Some(Prompt::MoveTo(path));
+                }
+            }
+            Command::Delete => {
+                if let Some(path) = self.tree.selected_path().map(Path::to_path_buf) {
+                    self.prompt = Some(Prompt::ConfirmDelete(path));
+                }
+            }
+            Command::FindNext => self.find_step(1),
+            Command::FindPrev => self.find_step(-1),
+            Command::ReplaceAll => self.find_replace_all(),
+            Command::NextPane => self.cycle_focus(1),
+            Command::PrevPane => self.cycle_focus(-1),
+            Command::PickRepository => {
+                if !self.git.repos.is_empty() {
+                    self.prompt_selected = self.git.repo;
+                    self.prompt = Some(Prompt::GitRepo);
+                }
+            }
+            Command::PickWorktree => {
+                if !self.git.worktrees.is_empty() {
+                    self.prompt_selected = self.git.worktree;
+                    self.prompt = Some(Prompt::GitWorktree);
+                }
+            }
+            // The window scales its own font; here the terminal does.
+            Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => {
+                self.status = "the terminal controls the font size".into()
+            }
+            Command::Documentation => {
+                self.status = format!("Yara {} — no documentation page yet", env!("CARGO_PKG_VERSION"))
+            }
             Command::Undo => self.step_history(true),
             Command::Redo => self.step_history(false),
             Command::SelectAll => self.select_all(),
@@ -1944,7 +2120,9 @@ impl App {
                 }
             }
             Command::ContextMenu => self.open_menu_on_selection(),
-            Command::FileMenu => self.open_file_menu(),
+            Command::FileMenu => self.open_menu_bar_menu(MenuBar::File),
+            Command::ViewMenu => self.open_menu_bar_menu(MenuBar::View),
+            Command::HelpMenu => self.open_menu_bar_menu(MenuBar::Help),
             Command::Help => {
                 self.prompt_selected = 0;
                 self.prompt = Some(Prompt::Help(self.help_entries()));
@@ -2048,13 +2226,25 @@ impl App {
         entries
     }
 
-    pub fn open_file_menu(&mut self) {
+    /// Drops one of the top bar's menus open under its button.
+    pub fn open_menu_bar_menu(&mut self, which: MenuBar) {
         let settings = self.settings.clone();
-        let x = self.file_button.x;
-        let y = self.file_button.y + 1;
-        self.menu = Some(Menu::file_menu(x, y, |command| {
-            settings.tui_chord(command).map(|c| c.to_string())
-        }));
+        let button = self.menu_buttons[which as usize];
+        let (entries, title) = match which {
+            MenuBar::File => (FILE_MENU, None),
+            MenuBar::View => (VIEW_MENU, None),
+            MenuBar::Help => (
+                HELP_MENU,
+                Some(format!("Yara {}", env!("CARGO_PKG_VERSION"))),
+            ),
+        };
+        self.menu = Some(Menu::commands(
+            entries,
+            title,
+            button.x,
+            button.y + 1,
+            |command| settings.tui_chord(command).map(|c| c.to_string()),
+        ));
     }
 
     fn cycle_focus(&mut self, delta: isize) {
@@ -2483,17 +2673,94 @@ impl App {
         }
     }
 
+    /// Shows a changed file side by side: what it was against what it is.
     fn open_git_change(&mut self) {
         let Some(dir) = self.git.dir() else { return };
-        let Some(change) = self.git.changes.get(self.git_selected) else {
+        let Some(change) = self.git.changes.get(self.git_selected).cloned() else {
             return;
         };
-        let path = dir.join(&change.path);
+        match core_git::diff(&dir, &change) {
+            Ok(rows) => {
+                let diff = Diff {
+                    path: change.path.clone(),
+                    rows,
+                    scroll: 0,
+                };
+                match self.diffs.iter().position(|d| d.path == diff.path) {
+                    Some(i) => {
+                        self.diffs[i] = diff;
+                        self.active_diff = Some(i);
+                    }
+                    None => {
+                        self.diffs.push(diff);
+                        self.active_diff = Some(self.diffs.len() - 1);
+                    }
+                }
+                self.focus = Focus::Diff;
+            }
+            Err(message) => self.status = message,
+        }
+    }
+
+    /// The diff tab in front, if one is.
+    pub fn active_diff(&self) -> Option<&Diff> {
+        self.active_diff.and_then(|i| self.diffs.get(i))
+    }
+
+    pub fn close_diff(&mut self, index: usize) {
+        if index >= self.diffs.len() {
+            return;
+        }
+        self.diffs.remove(index);
+        self.active_diff = match self.active_diff {
+            Some(active) if active == index => None,
+            Some(active) if active > index => Some(active - 1),
+            other => other,
+        };
+        if self.active_diff.is_none() && self.focus == Focus::Diff {
+            self.focus = Focus::Editor;
+        }
+    }
+
+    /// Opens the file the diff is showing, in the editor.
+    fn open_diff_file(&mut self) {
+        let (Some(dir), Some(index)) = (self.git.dir(), self.active_diff) else {
+            return;
+        };
+        let Some(relative) = self.diffs.get(index).map(|d| d.path.clone()) else {
+            return;
+        };
+        let path = dir.join(&relative);
+        self.close_diff(index);
         if path.is_file() {
             self.tree.reveal(&path);
             self.open(path);
         } else {
-            self.status = format!("gone: {}", change.path);
+            self.status = format!("gone: {relative}");
+        }
+    }
+
+    fn diff_key(&mut self, key: KeyEvent) {
+        let height = self.layout.editor.height as usize;
+        let Some(index) = self.active_diff else { return };
+        if key.code == KeyCode::Esc {
+            self.close_diff(index);
+            self.focus = Focus::Git;
+            return;
+        }
+        let Some(diff) = self.diffs.get_mut(index) else {
+            return;
+        };
+        let last = diff.rows.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Enter => self.open_diff_file(),
+            KeyCode::Down => diff.scroll = (diff.scroll + 1).min(last),
+            KeyCode::Up => diff.scroll = diff.scroll.saturating_sub(1),
+            KeyCode::PageDown => diff.scroll = (diff.scroll + height).min(last),
+            KeyCode::PageUp => diff.scroll = diff.scroll.saturating_sub(height),
+            KeyCode::Home => diff.scroll = 0,
+            KeyCode::End => diff.scroll = last,
+            _ => {}
         }
     }
 

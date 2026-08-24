@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::core::command::{Command, FILE_MENU, START_PAGE};
+use crate::core::command::{Command, FILE_MENU, HELP_MENU, START_PAGE, VIEW_MENU};
 use crate::core::fs_ops;
+use crate::core::git::{Blame, Change, LineState};
 /// Placeholder for an empty input; the heading above already names the field.
 const FIELD_HINT: &str = "…";
 use crate::core::project::Project;
@@ -11,10 +13,11 @@ use crate::core::theme::{self as core_theme, Theme};
 use crate::gui::keys;
 use crate::gui::editor::Editor;
 use crate::gui::file_tree::{FileTree, TreeEvent};
+use crate::gui::diff::{DiffEvent, DiffView};
 use crate::gui::git::GitPanel;
 use crate::gui::highlight;
 use crate::gui::terminal::Terminal;
-use crate::gui::theme::color;
+use crate::gui::theme::{ansi_color, color};
 
 #[derive(PartialEq, Clone, Copy)]
 enum SidebarView {
@@ -48,8 +51,18 @@ pub struct App {
     show_theme_picker: bool,
     /// Last file-operation error, shown in the status bar.
     status: Option<String>,
+    /// Who last touched the line the cursor is on.
+    blame: Option<Blame>,
+    /// What `blame` was read for.
+    blame_key: Option<(PathBuf, usize)>,
+    /// Changed lines of the file in front, for the gutter marks.
+    git_lines: BTreeMap<usize, LineState>,
+    /// What `git_lines` was read for, so it is re-read only when it must be.
+    git_lines_key: Option<(PathBuf, usize)>,
     settings: Settings,
     show_recent: bool,
+    /// The key bindings overlay, opened from Help.
+    show_help: bool,
     recent_selected: usize,
 }
 
@@ -66,7 +79,7 @@ impl App {
             .position(|t| t.name == settings.theme)
             .unwrap_or(0);
         let theme = themes.get(theme_index).cloned().unwrap_or_default();
-        crate::gui::theme::apply(&cc.egui_ctx, &theme);
+        crate::gui::theme::apply(&cc.egui_ctx, &theme, settings.font_size);
         highlight::set_theme(&theme);
         Self {
             tree: FileTree::with_roots(root.iter().cloned().collect()),
@@ -85,8 +98,13 @@ impl App {
             theme_index,
             show_theme_picker: false,
             status: settings_error,
+            blame: None,
+            blame_key: None,
+            git_lines: BTreeMap::new(),
+            git_lines_key: None,
             settings,
             show_recent: false,
+            show_help: false,
             recent_selected: 0,
         }
     }
@@ -101,7 +119,7 @@ impl App {
         }
         self.theme_index = index;
         let theme = self.themes[index].clone();
-        crate::gui::theme::apply(ctx, &theme);
+        crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
         highlight::set_theme(&theme);
     }
 
@@ -137,6 +155,67 @@ impl App {
                     None => {}
                 }
             }
+            Command::NewFolder => {
+                if let Some(path) = self.pick_save_path("New Folder", false) {
+                    let (dir, name) = match path.parent().zip(path.file_name()) {
+                        Some((dir, name)) => {
+                            (dir.to_path_buf(), name.to_string_lossy().into_owned())
+                        }
+                        None => (self.project.root_or_cwd(), path.display().to_string()),
+                    };
+                    match fs_ops::create_dir(&dir, &name) {
+                        Ok(created) => self.tree.reveal(&created),
+                        Err(e) => self.status = Some(format!("create failed: {e}")),
+                    }
+                }
+            }
+            Command::Rename => {
+                if !self.tree.start_rename() {
+                    self.status = Some("select a file in the navigator first".into());
+                }
+            }
+            Command::MoveTo => {
+                if !self.tree.start_move() {
+                    self.status = Some("select a file in the navigator first".into());
+                }
+            }
+            Command::Delete => match self.tree.selected() {
+                Some(path) => self.pending_delete = Some(path),
+                None => self.status = Some("select a file in the navigator first".into()),
+            },
+            Command::FindNext => self.editor.find_step(1),
+            Command::FindPrev => self.editor.find_step(-1),
+            Command::ReplaceAll => {
+                let replaced = self.editor.find_replace_all();
+                self.status = Some(format!("replaced {replaced} occurrence(s)"));
+            }
+            Command::PickRepository | Command::PickWorktree => {
+                self.sidebar_view = SidebarView::Git;
+                self.show_sidebar = true;
+            }
+            Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => {
+                self.settings.font_size = match command {
+                    Command::ZoomIn => (self.settings.font_size + 1.0).min(32.0),
+                    Command::ZoomOut => (self.settings.font_size - 1.0).max(8.0),
+                    _ => Settings::default().font_size,
+                };
+                let theme = self.theme().clone();
+                crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
+                let _ = self.settings.save();
+            }
+            Command::Documentation => {
+                self.status = Some(format!(
+                    "Yara {} — no documentation page yet",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            // The window's menus open from the bar itself.
+            Command::NextPane
+            | Command::PrevPane
+            | Command::ContextMenu
+            | Command::FileMenu
+            | Command::ViewMenu
+            | Command::HelpMenu => {}
             Command::Undo | Command::Redo => {
                 let back = command == Command::Undo;
                 if !self.editor.step_history(back) {
@@ -245,14 +324,14 @@ impl App {
             }
             // Selection and clipboard belong to the text widget itself, and
             // these three are mouse- or menu-driven in this frontend.
+            // The clipboard belongs to the text widget, go-to-definition to
+            // the mouse, and the bindings overlay is the Help menu itself.
             Command::SelectAll
             | Command::Copy
             | Command::Cut
             | Command::Paste
-            | Command::GotoDefinition
-            | Command::ContextMenu
-            | Command::FileMenu
-            | Command::Help => {}
+            | Command::GotoDefinition => {}
+            Command::Help => self.show_help = true,
         }
     }
 
@@ -290,8 +369,68 @@ impl App {
             Some(root) => Project::name_of(root),
             None => "no folder in the project".to_string(),
         };
+
+        // The groups are measured before anything is drawn, so the block can be
+        // centred as a whole instead of each column finding its own edge.
+        let chord_font = egui::FontId::monospace(11.5);
+        let label_font = egui::FontId::proportional(11.5);
+        let ctx = ui.ctx().clone();
+        let width_of = move |text: &str, font: &egui::FontId| {
+            ctx.fonts(|f| {
+                f.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE)
+                    .size()
+                    .x
+            })
+        };
+
+        struct Group {
+            name: String,
+            rows: Vec<(String, &'static str)>,
+            chords: f32,
+            width: f32,
+        }
+        const KEY_GAP: f32 = 16.0;
+        const COLUMN_GAP: f32 = 44.0;
+        let groups: Vec<Group> = START_PAGE
+            .iter()
+            .filter_map(|(name, commands)| {
+                let rows: Vec<(String, &'static str)> = commands
+                    .iter()
+                    .filter_map(|command| Some((chord(*command)?, command.label())))
+                    .collect();
+                if rows.is_empty() {
+                    return None;
+                }
+                let chords = rows
+                    .iter()
+                    .map(|(chord, _)| width_of(chord, &chord_font))
+                    .fold(0.0, f32::max);
+                let labels = rows
+                    .iter()
+                    .map(|(_, label)| width_of(label, &label_font))
+                    .fold(0.0, f32::max);
+                Some(Group {
+                    name: name.to_uppercase(),
+                    rows,
+                    chords,
+                    width: chords + KEY_GAP + labels,
+                })
+            })
+            .collect();
+        if groups.is_empty() {
+            return;
+        }
+        let block = groups.iter().map(|g| g.width).sum::<f32>()
+            + COLUMN_GAP * (groups.len() - 1) as f32;
+        let tallest = groups.iter().map(|g| g.rows.len()).max().unwrap_or(0);
+
+        const ROW_HEIGHT: f32 = 21.0;
+        const HEAD_HEIGHT: f32 = 96.0; // title, project name and the gap under
+        let content = HEAD_HEIGHT + 18.0 + tallest as f32 * ROW_HEIGHT;
+        let top = ((ui.available_height() - content) / 2.0).clamp(12.0, 160.0);
+
         ui.vertical_centered(|ui| {
-            ui.add_space((ui.available_height() * 0.12).min(80.0));
+            ui.add_space(top);
             ui.label(
                 egui::RichText::new("YARA")
                     .color(color(theme.ui.accent_light))
@@ -303,50 +442,49 @@ impl App {
                     .color(color(theme.ui.fg_faint))
                     .size(12.0),
             );
-            ui.add_space(22.0);
+        });
+        ui.add_space(26.0);
 
-            // Groups side by side, each a two-column key/label grid, so the
-            // whole thing reads as one list rather than a wall of text.
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 34.0;
-                for (name, commands) in START_PAGE {
-                    let entries: Vec<(String, &'static str)> = commands
-                        .iter()
-                        .filter_map(|command| Some((chord(*command)?, command.label())))
-                        .collect();
-                    if entries.is_empty() {
-                        continue;
-                    }
-                    ui.vertical(|ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            ui.add_space(((ui.available_width() - block) / 2.0).max(0.0));
+            for (i, group) in groups.iter().enumerate() {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(group.width, tallest as f32 * ROW_HEIGHT + 22.0),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 5.0;
                         ui.label(
-                            egui::RichText::new(name.to_uppercase())
+                            egui::RichText::new(&group.name)
                                 .color(color(theme.ui.fg_dim))
                                 .size(10.0)
                                 .strong(),
                         );
-                        ui.add_space(6.0);
-                        egui::Grid::new(("start_page", name))
-                            .num_columns(2)
-                            .spacing(egui::vec2(14.0, 5.0))
-                            .show(ui, |ui| {
-                                for (chord, label) in entries {
-                                    ui.label(
-                                        egui::RichText::new(chord)
-                                            .color(color(theme.ui.fg_bright))
-                                            .size(11.5)
-                                            .monospace(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(label)
-                                            .color(color(theme.ui.fg_faint))
-                                            .size(11.5),
-                                    );
-                                    ui.end_row();
-                                }
+                        for (key, label) in &group.rows {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.label(
+                                    egui::RichText::new(key)
+                                        .color(color(theme.ui.fg_bright))
+                                        .font(chord_font.clone()),
+                                );
+                                // The labels line up in a column of their own:
+                                // pad each chord out to the widest one.
+                                let used = width_of(key, &chord_font);
+                                ui.add_space(group.chords - used + KEY_GAP);
+                                ui.label(
+                                    egui::RichText::new(*label)
+                                        .color(color(theme.ui.fg_faint))
+                                        .font(label_font.clone()),
+                                );
                             });
-                    });
+                        }
+                    },
+                );
+                if i + 1 < groups.len() {
+                    ui.add_space(COLUMN_GAP);
                 }
-            });
+            }
         });
     }
 
@@ -439,6 +577,59 @@ impl App {
         } else {
             self.status = Some(format!("could not write {}", path.display()));
         }
+    }
+
+    /// Keeps the gutter marks in step with the file in front. Reading them is
+    /// a `git diff` of one file, so it is done only when something moved.
+    fn refresh_git_lines(&mut self) {
+        let Some(buf) = self.editor.buffers.active() else {
+            self.git_lines.clear();
+            self.git_lines_key = None;
+            return;
+        };
+        let key = (buf.path.clone(), buf.text.len());
+        if self.git_lines_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.git_lines_key = Some(key.clone());
+        self.git_lines = match self.git.state.dir() {
+            Some(dir) => match key.0.strip_prefix(&dir) {
+                Ok(relative) => {
+                    crate::core::git::changed_lines(&dir, &relative.to_string_lossy())
+                }
+                Err(_) => BTreeMap::new(),
+            },
+            None => BTreeMap::new(),
+        };
+    }
+
+    /// Reads who last touched the cursor's line, when the cursor moves to
+    /// another line or another file.
+    fn refresh_blame(&mut self) {
+        let Some((buf, (line, _))) = self.editor.buffers.active().zip(self.editor.cursor) else {
+            self.blame = None;
+            self.blame_key = None;
+            return;
+        };
+        let key = (buf.path.clone(), line);
+        if self.blame_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.blame_key = Some(key.clone());
+        self.blame = self.git.state.dir().and_then(|dir| {
+            let relative = key.0.strip_prefix(&dir).ok()?;
+            crate::core::git::blame(&dir, &relative.to_string_lossy(), line)
+        });
+    }
+
+    /// Opens the two-pane diff of a changed file as a tab of its own.
+    fn show_diff(&mut self, change: &Change) {
+        let Some(dir) = self.git.state.dir() else {
+            self.status = Some("not a git repository".into());
+            return;
+        };
+        let rows = crate::core::git::diff(&dir, change);
+        self.editor.open_diff(DiffView::new(change.path.clone(), rows));
     }
 
     // ----- project folders -------------------------------------------------
@@ -668,31 +859,106 @@ impl App {
                             .size(12.0),
                     );
                     ui.add_space(4.0);
-                    ui.menu_button(
-                        egui::RichText::new("File").color(color(theme.ui.fg)).size(13.0),
-                        |ui| {
-                            ui.set_min_width(240.0);
-                            for entry in FILE_MENU {
-                                let Some(command) = entry else {
+                    // The same three menus the terminal frontend carries.
+                    let menus: [MenuBarEntry; 3] = [
+                        ("File", FILE_MENU, None),
+                        ("View", VIEW_MENU, None),
+                        (
+                            "Help",
+                            HELP_MENU,
+                            Some(format!("Yara {}", env!("CARGO_PKG_VERSION"))),
+                        ),
+                    ];
+                    for (title, entries, note) in menus {
+                        ui.menu_button(
+                            egui::RichText::new(title).color(color(theme.ui.fg)).size(13.0),
+                            |ui| {
+                                ui.set_min_width(240.0);
+                                if let Some(note) = &note {
+                                    ui.label(
+                                        egui::RichText::new(note)
+                                            .color(color(theme.ui.fg_faint))
+                                            .size(12.0),
+                                    );
                                     ui.separator();
-                                    continue;
-                                };
-                                let shortcut = self
-                                    .settings
-                                    .gui_chord(*command)
-                                    .map(|c| c.to_string())
-                                    .unwrap_or_default();
-                                if command_row(ui, &theme, command.label(), &shortcut).clicked() {
-                                    chosen = Some(*command);
-                                    ui.close_menu();
                                 }
-                            }
-                        },
-                    );
+                                for entry in entries {
+                                    let Some(command) = entry else {
+                                        ui.separator();
+                                        continue;
+                                    };
+                                    let shortcut = self
+                                        .settings
+                                        .gui_chord(*command)
+                                        .map(|c| c.to_string())
+                                        .unwrap_or_default();
+                                    if command_row(ui, &theme, command.label(), &shortcut)
+                                        .clicked()
+                                    {
+                                        chosen = Some(*command);
+                                        ui.close_menu();
+                                    }
+                                }
+                            },
+                        );
+                    }
                 });
             });
         if let Some(command) = chosen {
             self.execute(ctx, command);
+        }
+    }
+
+    /// Every binding in effect, opened from Help → Show Key Bindings.
+    fn help_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_help {
+            return;
+        }
+        let theme = self.theme().clone();
+        egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.label(
+                egui::RichText::new(format!("Yara {} — key bindings", env!("CARGO_PKG_VERSION")))
+                    .color(color(theme.ui.fg))
+                    .size(13.5),
+            );
+            ui.add_space(6.0);
+            egui::ScrollArea::vertical()
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("help_grid")
+                        .num_columns(2)
+                        .spacing(egui::vec2(18.0, 4.0))
+                        .show(ui, |ui| {
+                            for command in crate::core::command::ALL {
+                                let Some(chord) = self.settings.gui_chord(*command) else {
+                                    continue;
+                                };
+                                ui.label(
+                                    egui::RichText::new(chord.to_string())
+                                        .color(color(theme.ui.fg_bright))
+                                        .monospace()
+                                        .size(11.5),
+                                );
+                                ui.label(
+                                    egui::RichText::new(command.label())
+                                        .color(color(theme.ui.fg_faint))
+                                        .size(11.5),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                });
+            ui.add_space(8.0);
+            if ui
+                .button(egui::RichText::new("Close").color(color(theme.ui.fg)))
+                .clicked()
+            {
+                self.show_help = false;
+            }
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_help = false;
         }
     }
 
@@ -1269,6 +1535,17 @@ impl App {
     }
 }
 
+/// Whether a status message reports something that failed, as opposed to
+/// something that merely happened or is worth knowing.
+fn is_failure(message: &str) -> bool {
+    const FAILED: [&str; 6] = ["failed", "could not", "cannot", "no such", "not a", "gone:"];
+    let lower = message.to_ascii_lowercase();
+    FAILED.iter().any(|word| lower.contains(word))
+}
+
+/// A menu in the top bar: its title, its entries, and a line about itself.
+type MenuBarEntry = (&'static str, &'static [Option<Command>], Option<String>);
+
 /// One dropdown row: label on the left, key chord greyed out on the right —
 /// the same shape the terminal frontend draws.
 fn command_row(
@@ -1320,6 +1597,8 @@ impl eframe::App for App {
         }
 
         let theme = self.theme().clone();
+        self.refresh_git_lines();
+        self.refresh_blame();
         self.menu_bar(ctx);
 
         // Navigator / search / git sidebar. Declared before the status bar so
@@ -1355,7 +1634,7 @@ impl eframe::App for App {
                                 }
                             });
                         });
-                    let mut open_from_git: Option<PathBuf> = None;
+                    let mut diff_from_git: Option<Change> = None;
                     egui::CentralPanel::default()
                         .frame(egui::Frame::default().fill(color(theme.ui.sidebar_bg)))
                         .show_inside(ui, |ui| {
@@ -1366,19 +1645,24 @@ impl eframe::App for App {
                                     egui::ScrollArea::vertical()
                                         .auto_shrink([false, false])
                                         .show(ui, |ui| {
-                                            self.tree.ui(ui, &theme, &mut events);
+                                            self.tree.ui(
+                                                ui,
+                                                &theme,
+                                                &self.git.state,
+                                                &mut events,
+                                            );
                                         });
                                     self.handle_tree_events(events);
                                 }
                                 SidebarView::Search => self.search_ui(ui, &theme),
                                 SidebarView::Git => {
-                                    open_from_git = self.git.ui(ui, &theme, &self.project.root_or_cwd());
+                                    diff_from_git =
+                                        self.git.ui(ui, &theme, &self.project.root_or_cwd());
                                 }
                             }
                         });
-                    if let Some(path) = open_from_git {
-                        self.tree.reveal(&path);
-                        self.editor.open(path);
+                    if let Some(change) = diff_from_git {
+                        self.show_diff(&change);
                     }
                 });
         }
@@ -1409,9 +1693,24 @@ impl eframe::App for App {
                         }
                     }
                     if let Some(message) = &self.status {
+                        // Most of what lands here — "saved as…", "added…", a
+                        // note about settings.json — is not a failure, so the
+                        // status bar speaks in the theme's warning yellow and
+                        // keeps red for what actually went wrong.
                         ui.label(
                             egui::RichText::new(message)
-                                .color(color(theme.ui.danger))
+                                .color(if is_failure(message) {
+                                    color(theme.ui.danger)
+                                } else {
+                                    ansi_color(&theme, 3)
+                                })
+                                .size(11.5),
+                        );
+                    } else if let Some(blame) = &self.blame {
+                        // Who last touched the line the cursor is on.
+                        ui.label(
+                            egui::RichText::new(blame.line())
+                                .color(color(theme.ui.fg_faint))
                                 .size(11.5),
                         );
                     }
@@ -1508,8 +1807,9 @@ impl eframe::App for App {
                 });
         }
 
-        // Tab bar.
-        if !self.editor.buffers.is_empty() {
+        // Tab bar: files and diffs share it, so it stands whenever either is
+        // open.
+        if !self.editor.buffers.is_empty() || !self.editor.diffs.is_empty() {
             egui::TopBottomPanel::top("tabs")
                 .exact_height(34.0)
                 .frame(egui::Frame::default().fill(color(theme.ui.status_bg)))
@@ -1531,6 +1831,26 @@ impl eframe::App for App {
                     }),
             )
             .show(ctx, |ui| {
+                // A diff tab shows its two panes in place of the text.
+                if let Some(index) = self.editor.active_diff {
+                    let Some(diff) = self.editor.diffs.get(index) else {
+                        self.editor.active_diff = None;
+                        return;
+                    };
+                    match diff.ui(ui, &theme) {
+                        DiffEvent::Close => self.editor.close_diff(index),
+                        DiffEvent::Open => {
+                            let path = self.git.state.dir().map(|dir| dir.join(&diff.path));
+                            self.editor.close_diff(index);
+                            if let Some(path) = path {
+                                self.tree.reveal(&path);
+                                self.editor.open(path);
+                            }
+                        }
+                        DiffEvent::None => {}
+                    }
+                    return;
+                }
                 self.find_bar(ui, &theme);
                 if self.editor.buffers.is_empty() {
                     self.start_page(ui, &theme);
@@ -1540,12 +1860,14 @@ impl eframe::App for App {
                         &theme,
                         &self.settings.indent,
                         &self.settings.goto_modifiers.gui,
+                        &self.git_lines,
                     );
                 }
             });
 
         self.handle_goto();
         self.recent_modal(ctx);
+        self.help_modal(ctx);
         self.goto_modal(ctx);
         self.theme_modal(ctx);
         self.delete_modal(ctx);

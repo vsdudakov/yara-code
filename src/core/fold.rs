@@ -67,10 +67,10 @@ pub fn regions(text: &str, extension: &str) -> Vec<Region> {
         }
         // The block runs while lines are blank or deeper than the header.
         let mut end = next;
-        for j in next..lines.len() {
-            match indents[j] {
+        for (j, depth) in indents.iter().enumerate().skip(next) {
+            match depth {
                 None => continue,
-                Some(depth) if depth > indent => end = j,
+                Some(depth) if *depth > indent => end = j,
                 Some(_) => break,
             }
         }

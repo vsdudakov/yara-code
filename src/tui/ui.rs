@@ -13,6 +13,9 @@ const FIND_ROWS: u16 = 5;
 use crate::core::command::{Command, START_PAGE};
 use crate::core::fold;
 use crate::core::search::Field as SearchField;
+use crate::core::diff;
+use crate::core::git as core_git;
+use crate::core::theme as core_theme;
 use crate::tui::app::{App, Focus, Prompt, SidebarView, Splitter, TabStrip};
 use crate::tui::theme::{color, on};
 
@@ -144,7 +147,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.layout.tab_git = Rect::default();
         reset_git_rects(app);
     }
-    draw_editor(frame, app, tab_row, editor_area);
+    draw_tab_strip(frame, app, tab_row);
+    if app.active_diff().is_some() {
+        draw_diff(frame, app, editor_area);
+    } else {
+        draw_editor(frame, app, editor_area);
+    }
     if app.find_showing() {
         draw_find(frame, app, find_area);
     } else {
@@ -203,49 +211,52 @@ fn draw_splitters(frame: &mut Frame, app: &App, vertical: Rect, horizontal: Rect
     }
 }
 
-/// The top bar: the app name, a clickable File menu, then the project.
+/// The top bar: the app name, then the File, View and Help menus.
 fn draw_menu_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme().clone();
     let name = " YARA ";
-    let label = " File ";
-    app.file_button = Rect {
-        x: area.x + name.chars().count() as u16,
-        y: area.y,
-        width: label.chars().count() as u16,
-        height: 1,
-    };
-    let open = app
-        .menu
-        .as_ref()
-        .is_some_and(|m| m.target.is_none() && m.y == area.y + 1);
-    let hovered = app.mouse.is_some_and(|(x, y)| {
-        y == area.y && x >= app.file_button.x && x < app.file_button.x + app.file_button.width
-    });
-    let file_style = if open || hovered {
+    let labels = [" File ", " View ", " Help "];
+    let mut spans = vec![Span::styled(
+        name,
         Style::default()
-            .fg(color(theme.ui.fg_bright))
-            .bg(color(theme.ui.selected_bg))
-    } else {
-        on(theme.ui.fg, theme.ui.status_bg)
-    };
-    let tail = pad(
-        "",
-        (area.width as usize).saturating_sub(name.chars().count() + label.chars().count()),
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                name,
+            .fg(color(theme.ui.accent_light))
+            .bg(color(theme.ui.status_bg))
+            .add_modifier(Modifier::BOLD),
+    )];
+    let mut x = area.x + name.chars().count() as u16;
+    for (i, label) in labels.iter().enumerate() {
+        let button = Rect {
+            x,
+            y: area.y,
+            width: label.chars().count() as u16,
+            height: 1,
+        };
+        app.menu_buttons[i] = button;
+        let open = app
+            .menu
+            .as_ref()
+            .is_some_and(|m| m.target.is_none() && m.x == button.x && m.y == area.y + 1);
+        let hovered = app
+            .mouse
+            .is_some_and(|(mx, my)| my == area.y && mx >= button.x && mx < button.x + button.width);
+        spans.push(Span::styled(
+            *label,
+            if open || hovered {
                 Style::default()
-                    .fg(color(theme.ui.accent_light))
-                    .bg(color(theme.ui.status_bg))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(label, file_style),
-            Span::styled(tail, on(theme.ui.fg_faint, theme.ui.status_bg)),
-        ])),
-        area,
-    );
+                    .fg(color(theme.ui.fg_bright))
+                    .bg(color(theme.ui.selected_bg))
+            } else {
+                on(theme.ui.fg, theme.ui.status_bg)
+            },
+        ));
+        x += button.width;
+    }
+    let used = (x - area.x) as usize;
+    spans.push(Span::styled(
+        pad("", (area.width as usize).saturating_sub(used)),
+        on(theme.ui.fg_faint, theme.ui.status_bg),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn reset_git_rects(app: &mut App) {
@@ -643,10 +654,24 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 theme.ui.sidebar_bg
             };
+            let git_tint = app.git.state_of(&row.path).map(|state| match state {
+                core_git::FileState::Added | core_git::FileState::Untracked => {
+                    core_theme::ansi256(&theme, 2)
+                }
+                core_git::FileState::Deleted => core_theme::ansi256(&theme, 1),
+                core_git::FileState::Modified => core_theme::ansi256(&theme, 3),
+            });
+            // A folder wears the tint too while something under it has changed.
+            let git_tint = git_tint.or_else(|| {
+                (row.is_dir && app.git.folder_touched(&row.path))
+                    .then(|| core_theme::ansi256(&theme, 3))
+            });
             let fg = if is_drop_target || is_selected {
                 theme.ui.fg_bright
             } else if is_dragged {
                 theme.ui.accent_light
+            } else if let Some(tint) = git_tint {
+                tint
             } else if row.is_root {
                 // A project folder heads its own subtree; it reads as a title,
                 // not as one more directory.
@@ -1288,12 +1313,119 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), action_row);
 }
 
-fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
+/// A changed file side by side: the old version on the left, the new on the
+/// right, changed lines washed in the theme's own red and green.
+fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
     let theme = app.theme().clone();
+    let focused = app.focus == Focus::Diff;
+    let header = Rect {
+        height: 1,
+        ..whole
+    };
+    let area = Rect {
+        y: whole.y + 1,
+        height: whole.height.saturating_sub(1),
+        ..whole
+    };
+    let Some(diff) = app.active_diff() else { return };
+
+    let added = core_theme::ansi256(&theme, 2);
+    let removed = core_theme::ansi256(&theme, 1);
+    let counts = diff
+        .rows
+        .iter()
+        .fold((0usize, 0usize), |(plus, minus), row| match row.kind {
+            diff::Kind::Added => (plus + 1, minus),
+            diff::Kind::Removed => (plus, minus + 1),
+            diff::Kind::Changed => (plus + 1, minus + 1),
+            diff::Kind::Same => (plus, minus),
+        });
+    let title = format!(" {} ", diff.path);
+    let width = header.width as usize;
+    let tail = format!("+{}  -{}   esc close · ⏎ open file ", counts.0, counts.1);
+    let gap = width.saturating_sub(title.chars().count() + tail.chars().count());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                title,
+                if focused {
+                    Style::default()
+                        .fg(color(theme.ui.fg_bright))
+                        .bg(color(theme.ui.status_bg))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    on(theme.ui.fg_dim, theme.ui.status_bg)
+                },
+            ),
+            Span::styled(pad("", gap), on(theme.ui.fg_faint, theme.ui.status_bg)),
+            Span::styled(tail, on(theme.ui.fg_faint, theme.ui.status_bg)),
+        ])),
+        header,
+    );
+
     frame.render_widget(
         Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
         area,
     );
+    let half = (area.width / 2) as usize;
+    let number_width = 5usize;
+    let text_width = half.saturating_sub(number_width + 2);
+    let lines: Vec<Line> = diff
+        .rows
+        .iter()
+        .skip(diff.scroll)
+        .take(area.height as usize)
+        .map(|row| {
+            let side = |cell: Option<&diff::Side>, tint: Option<(u8, u8, u8)>| {
+                let bg = match tint {
+                    Some(rgb) => wash(rgb, theme.ui.editor_bg),
+                    None => theme.ui.editor_bg,
+                };
+                match cell {
+                    Some(cell) => vec![
+                        Span::styled(
+                            format!("{:>width$} ", cell.line, width = number_width),
+                            on(tint.unwrap_or(theme.ui.line_number), bg),
+                        ),
+                        Span::styled(
+                            pad(&clip(&cell.text, text_width), text_width + 1),
+                            on(theme.ui.fg, bg),
+                        ),
+                    ],
+                    // The blank half beside an added or removed line.
+                    None => vec![Span::styled(
+                        pad("", number_width + text_width + 2),
+                        on(theme.ui.fg_faint, theme.ui.sidebar_bg),
+                    )],
+                }
+            };
+            let (left_tint, right_tint) = match row.kind {
+                diff::Kind::Same => (None, None),
+                diff::Kind::Changed => (Some(removed), Some(added)),
+                diff::Kind::Added => (None, Some(added)),
+                diff::Kind::Removed => (Some(removed), None),
+            };
+            let mut spans = side(row.left.as_ref(), left_tint);
+            spans.push(Span::styled(
+                "│",
+                on(theme.ui.border, theme.ui.editor_bg),
+            ));
+            spans.extend(side(row.right.as_ref(), right_tint));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// A changed line's background: the tint laid thinly over the editor's own.
+fn wash(tint: (u8, u8, u8), base: (u8, u8, u8)) -> (u8, u8, u8) {
+    let mix = |t: u8, b: u8| ((t as u16 * 22 + b as u16 * 78) / 100) as u8;
+    (mix(tint.0, base.0), mix(tint.1, base.1), mix(tint.2, base.2))
+}
+
+/// The tab strip over the editor: the open files, then any open diffs.
+fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
+    let theme = app.theme().clone();
     app.layout.tabs = tab_area;
     let icons = app.icons;
     let hover = app.mouse.filter(|(_, y)| *y == tab_area.y).map(|(x, _)| x);
@@ -1305,7 +1437,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
         _ => None,
     };
     for (i, buf) in app.buffers.list.iter().enumerate() {
-        let selected = i == app.buffers.active;
+        let selected = i == app.buffers.active && app.active_diff.is_none();
         let style = if drop_on == Some(i) {
             on(theme.ui.fg_bright, theme.ui.accent)
         } else if selected {
@@ -1349,7 +1481,29 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
         tab_spans.push((x + label_width, x + label_width + 2, i, true));
         x += label_width + 2;
     }
+    // Diffs are tabs too, after the files, marked so the two never read alike.
+    let mut diff_spans: Vec<(u16, u16, usize, bool)> = Vec::new();
+    for (i, diff) in app.diffs.iter().enumerate() {
+        let selected = app.active_diff == Some(i);
+        let name = diff.path.rsplit('/').next().unwrap_or(&diff.path);
+        let label = format!(" ≠ {name} ");
+        let label_width = label.chars().count() as u16;
+        let (fg, bg) = if selected {
+            (theme.ui.fg_bright, theme.ui.tab_active_bg)
+        } else {
+            (theme.ui.fg_dim, theme.ui.tab_inactive_bg)
+        };
+        spans.push(Span::styled(label, on(fg, bg)));
+        spans.push(Span::styled(
+            format!("{} ", icons.close),
+            on(theme.ui.fg_faint, bg),
+        ));
+        diff_spans.push((x, x + label_width, i, false));
+        diff_spans.push((x + label_width, x + label_width + 2, i, true));
+        x += label_width + 2;
+    }
     app.layout.tab_spans = tab_spans;
+    app.layout.diff_tabs = diff_spans;
     if spans.is_empty() {
         // No tab strip at all when nothing is open, as in the window.
         frame.render_widget(
@@ -1362,7 +1516,14 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
             tab_area,
         );
     }
+}
 
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme().clone();
+    frame.render_widget(
+        Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
+        area,
+    );
     let text_area = area;
     app.layout.editor = text_area;
     if app.buffers.is_empty() {
@@ -1446,8 +1607,23 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
                 theme.ui.editor_bg,
             )
         });
+        let git_mark = app.git_lines.get(&(n + 1)).map(|state| match state {
+            core_git::LineState::Added => ("\u{2502}", core_theme::ansi256(&theme, 2)),
+            core_git::LineState::Modified => ("\u{2502}", core_theme::ansi256(&theme, 3)),
+            core_git::LineState::Removed => ("\u{2577}", core_theme::ansi256(&theme, 1)),
+        });
         let mut spans = vec![
-            Span::styled(format!("{:>5} ", n + 1), number_style),
+            Span::styled(
+                match git_mark {
+                    Some((mark, _)) => mark.to_string(),
+                    None => " ".to_string(),
+                },
+                match git_mark {
+                    Some((_, tint)) => on(tint, theme.ui.editor_bg),
+                    None => on(theme.ui.editor_bg, theme.ui.editor_bg),
+                },
+            ),
+            Span::styled(format!("{:>4} ", n + 1), number_style),
             Span::styled(
                 marker.to_string(),
                 row_style.unwrap_or_else(|| on(theme.ui.fg_faint, theme.ui.editor_bg)),
@@ -1779,6 +1955,12 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             left.push_str("   ");
         }
         left.push_str(&app.status);
+    } else if let Some(blame) = &app.blame {
+        // Who last touched the line the cursor is on.
+        if !left.is_empty() {
+            left.push_str("   ");
+        }
+        left.push_str(&blame.line());
     }
 
     // The theme name closes the row and is clickable, so it is kept apart.
@@ -2035,7 +2217,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = rect.width.saturating_sub(2) as usize;
     let lines: Vec<Line> = menu
         .rows()
-        .into_iter()
+        .iter()
         .enumerate()
         .map(|(i, row)| {
             let Some(item) = row else {

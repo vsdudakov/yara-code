@@ -271,8 +271,10 @@ mod tests {
     #[test]
     fn hits_are_character_offsets_not_bytes() {
         let text = "фыва total\nещё total\n";
-        let mut f = Find::default();
-        f.query = "total".into();
+        let mut f = Find {
+            query: "total".into(),
+            ..Find::default()
+        };
         f.refresh(text);
         assert_eq!(f.hits[0].start, 5, "five characters precede the first hit");
         let chars: String = text.chars().skip(f.hits[0].start).take(5).collect();
@@ -311,10 +313,12 @@ mod tests {
 
     #[test]
     fn regex_replacement_expands_groups() {
-        let mut f = Find::default();
-        f.query = r"let (\w+) = 1;".into();
-        f.regex = true;
-        f.replace = "const $1 = 1;".into();
+        let mut f = Find {
+            query: r"let (\w+) = 1;".into(),
+            regex: true,
+            replace: "const $1 = 1;".into(),
+            ..Find::default()
+        };
         f.refresh(TEXT);
         let (updated, _) = f.replace_current(TEXT).unwrap();
         assert!(updated.starts_with("const total = 1;"), "{updated}");

@@ -142,13 +142,15 @@ fn default_map(chord_for: fn(Command) -> Option<&'static str>) -> KeyMap {
         .collect()
 }
 
+/// Defaults follow VS Code on macOS, which Zed also broadly matches, so the
+/// keys are the ones a hand already knows.
 fn gui_default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Cmd+N",
         Command::OpenFile => "Cmd+O",
         Command::OpenFolder => "Cmd+Shift+O",
         Command::AddFolder => "Cmd+Shift+A",
-        Command::OpenRecent => "Cmd+Alt+O",
+        Command::OpenRecent => "Cmd+R",
         Command::Save => "Cmd+S",
         Command::SaveAs => "Cmd+Shift+S",
         Command::SaveAll => "Cmd+Alt+S",
@@ -162,68 +164,109 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::FindInFile => "Cmd+F",
         Command::FocusSearch => "Cmd+Shift+F",
         Command::FocusFiles => "Cmd+Shift+E",
-        Command::FocusGit => "Cmd+Shift+G",
+        // VS Code keeps source control on Ctrl+Shift+G even on macOS, which
+        // leaves Cmd+Shift+G where it belongs: the previous match.
+        Command::FocusGit => "Ctrl+Shift+G",
+        Command::PickRepository => "Cmd+Alt+G",
+        Command::PickWorktree => "Cmd+Alt+K",
         Command::ThemePicker => "Cmd+Shift+T",
+        Command::GotoDefinition => "F12",
         Command::GoBack => "Ctrl+-",
+        Command::NewFolder => "Cmd+Alt+N",
+        Command::Rename => "F2",
+        Command::Delete => "Cmd+Backspace",
+        Command::MoveTo => "Cmd+Alt+M",
+        Command::FindNext => "Cmd+G",
+        Command::FindPrev => "Cmd+Shift+G",
+        Command::ReplaceAll => "Cmd+Alt+Enter",
+        // Panes are switched with the mouse in the window.
+        Command::NextPane | Command::PrevPane => return None,
         Command::Undo => "Cmd+Z",
         Command::Redo => "Cmd+Shift+Z",
         // Select all, copy, cut and paste are the text widget's own; binding
         // them here would take them away from it.
         Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => return None,
+        // VS Code folds with two-key chords (⌘K ⌘0); these are the single-chord
+        // shape of the same three actions.
         Command::ToggleFold => "Cmd+Alt+F",
         Command::FoldAll => "Cmd+Alt+0",
         Command::UnfoldAll => "Cmd+Alt+9",
-        Command::NextTab => "Alt+Right",
-        Command::PrevTab => "Alt+Left",
+        Command::NextTab => "Ctrl+PageDown",
+        Command::PrevTab => "Ctrl+PageUp",
+        Command::Help => "F1",
+        Command::ZoomIn => "Cmd+=",
+        Command::ZoomOut => "Cmd+-",
+        Command::ResetZoom => "Cmd+0",
         // Driven by the mouse and the menu bar in the window frontend.
-        Command::GotoDefinition | Command::ContextMenu | Command::FileMenu | Command::Help => {
+        Command::ContextMenu | Command::FileMenu | Command::ViewMenu | Command::HelpMenu => {
             return None
         }
+        // No page to open yet.
+        Command::Documentation => return None,
     })
 }
 
-/// Terminals cannot tell `Ctrl+Shift+X` from `Ctrl+X` unless they speak the
-/// kitty keyboard protocol, so nothing here relies on that distinction — the
-/// second tier of shortcuts uses Alt instead.
+/// The same bindings with Ctrl in place of Cmd, and Ctrl+Shift where VS Code
+/// uses Cmd+Shift. Telling Ctrl+Shift+X from Ctrl+X needs the kitty keyboard
+/// protocol, which [`crate::tui::run`] asks for; in a terminal without it,
+/// rebind those few in `settings.json`.
 fn tui_default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Ctrl+N",
         Command::OpenFile => "Ctrl+O",
-        Command::OpenFolder => "Alt+O",
-        Command::AddFolder => "Alt+P",
+        Command::OpenFolder => "Ctrl+Shift+O",
+        Command::AddFolder => "Ctrl+Shift+A",
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
-        Command::SaveAs => "Alt+S",
-        Command::SaveAll => "Alt+A",
-        Command::Settings => "Ctrl+P",
+        Command::SaveAs => "Ctrl+Shift+S",
+        Command::SaveAll => "Ctrl+Alt+S",
+        Command::Settings => "Ctrl+,",
         Command::CloseEditor => "Ctrl+W",
         Command::Quit => "Ctrl+Q",
         Command::ToggleSidebar => "Ctrl+B",
         Command::ToggleTerminal => "Ctrl+J",
-        Command::NewTerminal => "Alt+T",
-        Command::CloseTerminal => "Alt+W",
+        Command::NewTerminal => "Ctrl+Alt+T",
+        Command::CloseTerminal => "Ctrl+Alt+W",
         Command::FindInFile => "Ctrl+F",
-        Command::FocusSearch => "Alt+F",
-        Command::FocusFiles => "Ctrl+E",
-        Command::FocusGit => "Alt+G",
-        Command::ThemePicker => "Ctrl+T",
-        Command::GotoDefinition => "Ctrl+G",
-        Command::GoBack => "Ctrl+Y",
-        // Terminals cannot report Ctrl+Shift, so redo takes the Alt tier.
+        Command::FocusSearch => "Ctrl+Shift+F",
+        Command::FocusFiles => "Ctrl+Shift+E",
+        Command::FocusGit => "Ctrl+Shift+G",
+        Command::PickRepository => "Ctrl+Alt+G",
+        Command::PickWorktree => "Ctrl+Alt+K",
+        Command::ThemePicker => "Ctrl+Shift+T",
+        Command::GotoDefinition => "F12",
+        // VS Code's own back on Windows and Linux, where ⌃- does not exist.
+        Command::GoBack => "Alt+Left",
+        Command::NewFolder => "Ctrl+Alt+N",
+        Command::Rename => "F2",
+        Command::Delete => "Shift+Delete",
+        Command::MoveTo => "Ctrl+Alt+M",
+        Command::FindNext => "F3",
+        Command::FindPrev => "Shift+F3",
+        Command::ReplaceAll => "Ctrl+Alt+Enter",
+        Command::NextPane => "Tab",
+        Command::PrevPane => "Shift+Tab",
         Command::Undo => "Ctrl+Z",
-        Command::Redo => "Alt+U",
+        Command::Redo => "Ctrl+Shift+Z",
         Command::SelectAll => "Ctrl+A",
         Command::Copy => "Ctrl+C",
         Command::Cut => "Ctrl+X",
         Command::Paste => "Ctrl+V",
-        Command::ToggleFold => "Alt+Z",
-        Command::FoldAll => "Alt+0",
-        Command::UnfoldAll => "Alt+9",
-        Command::NextTab => "Alt+Right",
-        Command::PrevTab => "Alt+Left",
-        Command::ContextMenu => "Ctrl+K",
-        Command::FileMenu => "Alt+M",
-        Command::Help => "Ctrl+H",
+        Command::ToggleFold => "Ctrl+Alt+F",
+        Command::FoldAll => "Ctrl+Alt+0",
+        Command::UnfoldAll => "Ctrl+Alt+9",
+        Command::NextTab => "Ctrl+PageDown",
+        Command::PrevTab => "Ctrl+PageUp",
+        // The keyboard's own menu keys, which no terminal claims.
+        Command::ContextMenu => "Shift+F10",
+        Command::FileMenu => "F10",
+        Command::ViewMenu => "Alt+F10",
+        Command::HelpMenu => "Shift+F1",
+        Command::Help => "F1",
+        // The terminal owns its own font size, and there is no page yet.
+        Command::ZoomIn | Command::ZoomOut | Command::ResetZoom | Command::Documentation => {
+            return None
+        }
     })
 }
 
@@ -279,12 +322,32 @@ impl Settings {
             return (Self::default(), None);
         };
         match serde_json::from_str::<Self>(&text) {
-            Ok(settings) => (settings, None),
+            Ok(settings) => {
+                let clash = settings.clashing_binding();
+                (settings, clash)
+            }
             Err(e) => (
                 Self::default(),
                 Some(format!("settings.json ignored: {e}")),
             ),
         }
+    }
+
+    /// The first chord bound to two commands, if the file rebound one onto
+    /// another. Only one of them could ever run, so it is worth saying.
+    fn clashing_binding(&self) -> Option<String> {
+        for (frontend, map) in [("gui", &self.keys.gui), ("tui", &self.keys.tui)] {
+            let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+            for (id, chord) in map {
+                let text = chord.to_string();
+                if let Some(other) = seen.insert(text.clone(), id) {
+                    return Some(format!(
+                        "settings.json: {frontend} {text} is bound to both {other} and {id}"
+                    ));
+                }
+            }
+        }
+        None
     }
 
     pub fn save(&self) -> std::io::Result<PathBuf> {
@@ -416,15 +479,61 @@ mod tests {
     }
 
     #[test]
-    fn terminal_defaults_avoid_ctrl_shift() {
-        // Ordinary terminals deliver Ctrl+Shift+F as plain Ctrl+F, so such a
-        // binding would be unreachable and would shadow another command.
-        let settings = Settings::default();
-        for (id, chord) in &settings.keys.tui {
+    fn every_command_is_bound_out_of_the_box() {
+        // The window leaves the clipboard keys to the text widget and opens its
+        // menus with the mouse; everything else answers to a key in both.
+        let widget_owned = [
+            Command::SelectAll,
+            Command::Copy,
+            Command::Cut,
+            Command::Paste,
+            Command::ContextMenu,
+            Command::FileMenu,
+            Command::ViewMenu,
+            Command::HelpMenu,
+            Command::NextPane,
+            Command::PrevPane,
+        ];
+        // The terminal has no font of its own to scale, and neither frontend
+        // has a documentation page to open yet.
+        let unbound_in_tui = [
+            Command::ZoomIn,
+            Command::ZoomOut,
+            Command::ResetZoom,
+            Command::Documentation,
+        ];
+        for command in ALL {
             assert!(
-                !(chord.mods.ctrl && chord.mods.shift),
-                "{id} is bound to {chord}, which most terminals cannot report"
+                unbound_in_tui.contains(command) || tui_default_chord(*command).is_some(),
+                "{} has no terminal binding",
+                command.id()
             );
+            if *command == Command::Documentation {
+                continue;
+            }
+            if widget_owned.contains(command) {
+                continue;
+            }
+            assert!(
+                gui_default_chord(*command).is_some(),
+                "{} has no window binding",
+                command.id()
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_commands_share_a_chord() {
+        let settings = Settings::default();
+        for (name, map) in [("window", &settings.keys.gui), ("terminal", &settings.keys.tui)] {
+            let mut seen: Vec<(String, String)> = Vec::new();
+            for (id, chord) in map {
+                let text = chord.to_string();
+                if let Some((other, _)) = seen.iter().find(|(_, c)| *c == text) {
+                    panic!("{name}: {id} and {other} are both bound to {text}");
+                }
+                seen.push((id.clone(), text));
+            }
         }
     }
 

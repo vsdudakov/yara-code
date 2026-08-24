@@ -1,6 +1,7 @@
 //! GPU-accelerated window frontend (egui on wgpu).
 
 pub mod app;
+pub mod diff;
 pub mod editor;
 pub mod file_tree;
 pub mod fold_view;

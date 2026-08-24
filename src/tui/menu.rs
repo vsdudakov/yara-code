@@ -15,6 +15,9 @@ pub enum MenuItem {
     Delete,
     /// Drops a folder from the project, leaving it on disk.
     RemoveFolder,
+    /// A line that says something rather than doing something — the Help
+    /// menu's version.
+    Note(&'static str),
     /// An entry of the File menu, carrying the command it runs.
     Command(Command),
 }
@@ -30,6 +33,7 @@ impl MenuItem {
             Self::Move => "Move To...",
             Self::Delete => "Delete",
             Self::RemoveFolder => "Remove Folder from Project",
+            Self::Note(text) => text,
         }
     }
 
@@ -116,11 +120,25 @@ impl Menu {
         }
     }
 
-    /// The File menu, with each entry's current key chord shown on the right.
-    pub fn file_menu(x: u16, y: u16, chord_for: impl Fn(Command) -> Option<String>) -> Self {
+    /// One of the top bar's menus, with each entry's current key chord shown
+    /// on the right. `title` heads the list where a menu has something to say
+    /// about itself — the Help menu's version line.
+    pub fn commands(
+        entries: &'static [Option<Command>],
+        title: Option<String>,
+        x: u16,
+        y: u16,
+        chord_for: impl Fn(Command) -> Option<String>,
+    ) -> Self {
         let mut rows = Vec::new();
         let mut shortcuts = Vec::new();
-        for entry in FILE_MENU {
+        if let Some(title) = title {
+            rows.push(Some(MenuItem::Note(Box::leak(title.into_boxed_str()))));
+            shortcuts.push(String::new());
+            rows.push(None);
+            shortcuts.push(String::new());
+        }
+        for entry in entries {
             match entry {
                 Some(command) => {
                     rows.push(Some(MenuItem::Command(*command)));
@@ -141,11 +159,17 @@ impl Menu {
             x,
             y,
         };
-        // Start on the first real entry, not a separator.
-        if menu.item_at_row(0).is_none() {
+        // Start on the first real entry, not a separator or the note.
+        if !matches!(menu.item_at_row(0), Some(MenuItem::Command(_))) {
             menu.move_selection(1);
         }
         menu
+    }
+
+    /// The File menu, kept as its own name because the top bar and the key
+    /// binding both reach for it.
+    pub fn file_menu(x: u16, y: u16, chord_for: impl Fn(Command) -> Option<String>) -> Self {
+        Self::commands(FILE_MENU, None, x, y, chord_for)
     }
 
     pub fn shortcut_at_row(&self, row: usize) -> &str {
@@ -192,6 +216,9 @@ impl Menu {
             next += delta.signum();
             if next < 0 || next > last {
                 return;
+            }
+            if matches!(rows[next as usize], Some(MenuItem::Note(_))) {
+                continue;
             }
             if rows[next as usize].is_some() {
                 self.selected = next as usize;

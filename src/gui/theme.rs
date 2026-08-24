@@ -4,7 +4,18 @@ use egui::{Color32, FontFamily, FontId, TextStyle};
 
 use crate::core::theme::{self as core_theme, Rgb, Theme};
 
+/// Fallback code font size; the live one comes from settings and is what
+/// Zoom In and Zoom Out change.
 pub const CODE_FONT_SIZE: f32 = 13.5;
+
+/// The code font actually in effect, so measurements follow the zoom.
+pub fn code_font(ui: &egui::Ui) -> FontId {
+    ui.style()
+        .text_styles
+        .get(&TextStyle::Monospace)
+        .cloned()
+        .unwrap_or_else(|| FontId::new(CODE_FONT_SIZE, FontFamily::Monospace))
+}
 
 pub fn color(c: Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
@@ -16,7 +27,7 @@ pub fn ansi_color(theme: &Theme, idx: u8) -> Color32 {
 
 /// Applies the theme to egui's global style. Called on startup and whenever the
 /// user switches themes.
-pub fn apply(ctx: &egui::Context, theme: &Theme) {
+pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
     let mut style = (*ctx.style()).clone();
 
     style.text_styles = [
@@ -26,7 +37,7 @@ pub fn apply(ctx: &egui::Context, theme: &Theme) {
         (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
         (
             TextStyle::Monospace,
-            FontId::new(CODE_FONT_SIZE, FontFamily::Monospace),
+            FontId::new(code_size, FontFamily::Monospace),
         ),
     ]
     .into();

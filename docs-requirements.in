@@ -1,0 +1,3 @@
+# Documentation toolchain, installed by .github/workflows/docs.yml and
+# `make docs-install`.
+mkdocs-material[imaging]>=9.5

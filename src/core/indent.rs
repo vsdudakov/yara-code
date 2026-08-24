@@ -62,7 +62,7 @@ fn strip_trailing_comment(line: &str, extension: &str) -> String {
         let idx = search_from + rel;
         let before = &line[..idx];
         let quotes = before.matches('"').count() + before.matches('\'').count();
-        if quotes % 2 == 0 {
+        if quotes.is_multiple_of(2) {
             return before.to_string();
         }
         search_from = idx + marker.len();

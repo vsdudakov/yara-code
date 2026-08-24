@@ -4,24 +4,26 @@ version = "0.2.0"
 edition = "2021"
 description = "Minimal code editor: a GPU-accelerated window and a terminal UI, sharing one core"
 license = "MIT"
-repository = "https://github.com/vsdudakov/yara-ide"
+repository = "https://github.com/vsdudakov/yara-code"
 readme = "README.md"
 
 [lib]
 name = "yara"
 path = "src/lib.rs"
 
+# Terminal UI — the default `ycode`. Builds and runs on a headless server.
+# The commands are `ycode` and `ycode-gui` rather than `yara`, which every
+# package manager already gives to VirusTotal's YARA scanner.
+[[bin]]
+name = "ycode"
+path = "src/bin/ycode.rs"
+required-features = ["tui"]
+
 # GPU window. Needs a display server; not usable over plain SSH.
 [[bin]]
-name = "yara"
-path = "src/bin/yara.rs"
+name = "ycode-gui"
+path = "src/bin/ycode-gui.rs"
 required-features = ["gui"]
-
-# Terminal UI. Builds and runs on a headless server.
-[[bin]]
-name = "yara-tui"
-path = "src/bin/yara-tui.rs"
-required-features = ["tui"]
 
 [features]
 default = ["gui", "tui"]
@@ -50,6 +52,37 @@ rfd = { version = "0.15", optional = true }
 # TUI only.
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
+
+# Debian package, built by cargo-deb in the release workflow.
+[package.metadata.deb]
+name = "ycode"
+maintainer = "Seva D <vsdudakov@gmail.com>"
+copyright = "2026, Yara contributors"
+license-file = ["LICENSE", "0"]
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/ycode", "usr/bin/", "755"],
+    ["target/release/ycode-gui", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/ycode/README.md", "644"],
+    ["packaging/linux/ycode-gui.desktop", "usr/share/applications/", "644"],
+    ["assets/icon/icon-512.png", "usr/share/icons/hicolor/512x512/apps/ycode.png", "644"],
+    ["assets/icon/icon-128.png", "usr/share/icons/hicolor/128x128/apps/ycode.png", "644"],
+]
+
+# RPM package, built by cargo-generate-rpm in the release workflow.
+[package.metadata.generate-rpm]
+name = "ycode"
+summary = "Lightweight code editor with a terminal UI and a GPU window"
+license = "MIT"
+assets = [
+    { source = "target/release/ycode", dest = "/usr/bin/ycode", mode = "755" },
+    { source = "target/release/ycode-gui", dest = "/usr/bin/ycode-gui", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/ycode/README.md", mode = "644" },
+    { source = "packaging/linux/ycode-gui.desktop", dest = "/usr/share/applications/ycode-gui.desktop", mode = "644" },
+    { source = "assets/icon/icon-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/ycode.png", mode = "644" },
+    { source = "assets/icon/icon-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/ycode.png", mode = "644" },
+]
 
 [profile.release]
 lto = "thin"

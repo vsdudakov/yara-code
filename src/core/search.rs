@@ -370,9 +370,7 @@ fn word_occurrences<'a>(line: &'a str, word: &'a str) -> impl Iterator<Item = us
 fn is_definition_line(line: &str, word: &str) -> bool {
     for idx in word_occurrences(line, word) {
         let last_token = line[..idx]
-            .split(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | ',' | ':' | '{'))
-            .filter(|t| !t.is_empty())
-            .last();
+            .split(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | ',' | ':' | '{')).rfind(|t| !t.is_empty());
         if last_token.is_some_and(|t| DEF_KEYWORDS.contains(&t)) {
             return true;
         }

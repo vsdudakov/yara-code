@@ -1,0 +1,159 @@
+name: Release
+
+# Build the two binaries for every platform on a version tag, attach them to a
+# GitHub release, and point the Homebrew tap at it.
+# Trigger by pushing a tag like `v0.2.0`.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
+          - { os: macos-13, target: x86_64-apple-darwin, archive: tar.gz }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          staging="ycode-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$staging"
+          cp target/${{ matrix.target }}/release/ycode target/${{ matrix.target }}/release/ycode-gui "$staging/"
+          cp README.md LICENSE "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+          shasum -a 256 "$staging.tar.gz" > "$staging.tar.gz.sha256"
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $staging = "ycode-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/ycode.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/ycode-gui.exe" $staging
+          Copy-Item README.md, LICENSE $staging
+          Compress-Archive -Path $staging -DestinationPath "$staging.zip"
+          (Get-FileHash "$staging.zip" -Algorithm SHA256).Hash.ToLower() + "  $staging.zip" `
+            | Out-File -Encoding ascii "$staging.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ycode-${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+            *.zip
+            *.zip.sha256
+
+  linux-packages:
+    name: Debian and RPM packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev
+      - name: Install the packagers
+        run: cargo install cargo-deb cargo-generate-rpm --locked
+      - name: Build
+        run: cargo build --release --locked
+      - name: Build the .deb
+        run: cargo deb --no-build --output dist/
+      - name: Build the .rpm
+        run: |
+          mkdir -p dist
+          cargo generate-rpm --output dist/
+      - name: Checksums
+        run: |
+          cd dist
+          for f in *.deb *.rpm; do shasum -a 256 "$f" > "$f.sha256"; done
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ycode-linux-packages
+          path: dist/*
+
+  release:
+    name: Publish the GitHub release
+    needs: [build, linux-packages]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach the binaries to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+
+  homebrew:
+    name: Update the Homebrew tap and the AUR PKGBUILD
+    needs: release
+    runs-on: ubuntu-latest
+    # The tap lives in its own repository; a token with write access to it is
+    # the only secret this job needs. Skipped when the secret is absent, so a
+    # fork's release still works.
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Render the formula from the release's checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          arm_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz.sha256)
+          intel_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz.sha256)
+          linux_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256)
+          sed -e "s/@VERSION@/$version/g" \
+              -e "s/@TAG@/$GITHUB_REF_NAME/g" \
+              -e "s/@ARM_SHA@/$arm_sha/g" \
+              -e "s/@INTEL_SHA@/$intel_sha/g" \
+              -e "s/@LINUX_SHA@/$linux_sha/g" \
+              packaging/homebrew/yara-gui.rb.tmpl > yara-gui.rb
+          cat yara-gui.rb
+      - name: Push it to the tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        if: env.TAP_TOKEN != ''
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/vsdudakov/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp yara-gui.rb tap/Formula/yara-gui.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/yara-gui.rb
+          git commit -m "yara-gui ${GITHUB_REF_NAME#v}"
+          git push

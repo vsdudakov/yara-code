@@ -1,1 +1,12 @@
 /target
+
+# MkDocs build output and the docs toolchain's cache
+/site
+.cache/
+
+# macOS Finder metadata
+.DS_Store
+
+# Claude Code local config
+/.claude/
+/CLAUDE.md

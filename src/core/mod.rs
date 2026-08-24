@@ -2,6 +2,7 @@
 
 pub mod buffer;
 pub mod command;
+pub mod diff;
 pub mod find;
 pub mod fold;
 pub mod fs_ops;

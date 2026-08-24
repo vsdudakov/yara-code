@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Yara
+GenericName=Code Editor
+Comment=Lightweight code editor for agent-driven development
+Exec=ycode-gui %F
+Icon=ycode
+Terminal=false
+Categories=Development;TextEditor;IDE;
+MimeType=text/plain;inode/directory;
+StartupWMClass=ycode-gui

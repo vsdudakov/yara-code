@@ -1,0 +1,101 @@
+# MkDocs Material configuration for the Yara documentation site.
+# Built and deployed to GitHub Pages by .github/workflows/docs.yml.
+site_name: Yara
+site_description: >-
+  A minimal code editor with two frontends over one core — a GPU-accelerated
+  window and a terminal UI that runs over SSH. Syntax highlighting, folding,
+  project search, git and a real shell, in about 15k lines of Rust.
+site_author: Yara contributors
+site_url: https://vsdudakov.github.io/yara-code/
+repo_name: vsdudakov/yara-code
+repo_url: https://github.com/vsdudakov/yara-code
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 Yara contributors — MIT License
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/code-braces-box
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+
+plugins:
+  - search
+  # Open Graph / Twitter cards; needs the `[imaging]` extra and system Cairo,
+  # which only CI installs — `mkdocs serve` works without it.
+  - social:
+      enabled: !ENV [CI, false]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/vsdudakov/yara-code
+  generator: false
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - First run: getting-started/first-run.md
+  - Guides:
+      - Project folders: guides/project-folders.md
+      - Editing: guides/editing.md
+      - Search & replace: guides/search.md
+      - Git: guides/git.md
+      - Terminal: guides/terminal.md
+      - Themes & syntax: guides/themes.md
+      - Key bindings: guides/keys.md
+      - Settings: guides/settings.md
+  - Architecture: architecture.md
+  - Contributing: contributing.md

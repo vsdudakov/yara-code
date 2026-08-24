@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::core::fs_ops;
+use crate::core::git::GitState;
 use crate::core::theme::Theme;
 use crate::gui::theme::color;
 
@@ -63,6 +64,49 @@ pub struct FileTree {
     editing: Option<Editing>,
     /// Set while a drag hovers a folder that would accept the drop.
     valid_drop_target: bool,
+    /// What git says about the paths on screen, refreshed each frame.
+    git_colors: GitColors,
+}
+
+/// A snapshot of the git view's state, so a row can be painted without
+/// borrowing the whole panel.
+#[derive(Default, Clone)]
+struct GitColors {
+    changed: Vec<(PathBuf, egui::Color32)>,
+}
+
+impl GitColors {
+    fn of(&self, path: &Path) -> Option<egui::Color32> {
+        self.changed
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, color)| *color)
+    }
+}
+
+/// The color a changed path is drawn in — VS Code's own reading of the status
+/// letters, taken from the theme's terminal palette.
+fn git_colors(git: &GitState, theme: &Theme) -> GitColors {
+    let Some(dir) = git.dir() else {
+        return GitColors::default();
+    };
+    let mut changed = Vec::new();
+    for change in &git.changes {
+        let path = dir.join(&change.path);
+        let tint = crate::gui::git::letter_color(change.letter(), theme);
+        // Every folder above a changed file is tinted too, so a collapsed tree
+        // still shows where the changes are.
+        let mut at = path.parent();
+        while let Some(dir_path) = at {
+            if dir_path == dir {
+                break;
+            }
+            changed.push((dir_path.to_path_buf(), tint));
+            at = dir_path.parent();
+        }
+        changed.push((path, tint));
+    }
+    GitColors { changed }
 }
 
 impl FileTree {
@@ -77,6 +121,7 @@ impl FileTree {
             selected: None,
             editing: None,
             valid_drop_target: false,
+            git_colors: GitColors::default(),
         };
         tree.expand_roots();
         tree
@@ -99,6 +144,35 @@ impl FileTree {
 
     fn root(&self) -> Option<&Path> {
         self.roots.first().map(PathBuf::as_path)
+    }
+
+    /// The highlighted row, which is what the Rename, Move and Delete
+    /// bindings act on.
+    pub fn selected(&self) -> Option<PathBuf> {
+        self.selected.clone()
+    }
+
+    /// Starts the inline rename box on the selected row; false when nothing is
+    /// selected.
+    pub fn start_rename(&mut self) -> bool {
+        let Some(path) = self.selected.clone() else {
+            return false;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.start_editing(Pending::Rename(path), name);
+        true
+    }
+
+    /// Starts the inline "move to" box on the selected row.
+    pub fn start_move(&mut self) -> bool {
+        let Some(path) = self.selected.clone() else {
+            return false;
+        };
+        self.start_editing(Pending::MoveTo(path), String::new());
+        true
     }
 
     /// Expands every ancestor of `path` and highlights it — used when a jump
@@ -126,8 +200,10 @@ impl FileTree {
         &mut self,
         ui: &mut egui::Ui,
         theme: &Theme,
+        git: &GitState,
         events: &mut Vec<TreeEvent>,
     ) {
+        self.git_colors = git_colors(git, theme);
         self.valid_drop_target = false;
         let roots = self.roots.clone();
         match roots.len() {
@@ -518,6 +594,8 @@ impl FileTree {
                 }
                 let fg = if drop_hover || is_selected {
                     color(theme.ui.fg_bright)
+                } else if let Some(tint) = self.git_colors.of(&path) {
+                    tint
                 } else if is_dir {
                     color(theme.ui.fg_dim)
                 } else {

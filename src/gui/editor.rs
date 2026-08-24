@@ -1,24 +1,30 @@
 //! Tabbed code editor: line numbers, themed syntax highlighting, smart indent
 //! and ⌘-click navigation.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::buffer::{word_at, Buffers};
 use crate::core::find::Find;
 use crate::core::fold::{self, Region};
+use crate::core::git::LineState;
 use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::settings::{Indent, Modifier};
 use crate::core::theme::Theme;
+use crate::gui::diff::DiffView;
 use crate::gui::fold_view::Mapping;
 use crate::gui::highlight;
-use crate::gui::theme::{color, CODE_FONT_SIZE};
+use crate::gui::theme::{ansi_color, color, CODE_FONT_SIZE};
 
 #[derive(Default)]
 pub struct Editor {
     pub buffers: Buffers,
+    /// Open diffs, tabs of their own beside the files.
+    pub diffs: Vec<DiffView>,
+    /// Which diff tab is in front; `None` while a file is.
+    pub active_diff: Option<usize>,
     /// (line, column), 1-based, of the primary cursor in the active buffer.
     pub cursor: Option<(usize, usize)>,
     /// Scroll to this 1-based line of this buffer on the next frame it is shown.
@@ -278,15 +284,45 @@ impl Editor {
         Some((buf.path.clone(), self.cursor.map_or(1, |(l, _)| l)))
     }
 
-    /// The tab strip. Tabs can be dragged onto one another to reorder them.
+    /// Opens a diff as a tab of its own, or brings the one already open for
+    /// that path to the front.
+    pub fn open_diff(&mut self, view: DiffView) {
+        match self.diffs.iter().position(|d| d.path == view.path) {
+            Some(i) => {
+                self.diffs[i] = view;
+                self.active_diff = Some(i);
+            }
+            None => {
+                self.diffs.push(view);
+                self.active_diff = Some(self.diffs.len() - 1);
+            }
+        }
+    }
+
+    pub fn close_diff(&mut self, index: usize) {
+        if index >= self.diffs.len() {
+            return;
+        }
+        self.diffs.remove(index);
+        self.active_diff = match self.active_diff {
+            Some(active) if active == index => None,
+            Some(active) if active > index => Some(active - 1),
+            other => other,
+        };
+    }
+
+    /// The tab strip: the open files, then any open diffs. Tabs can be dragged
+    /// onto one another to reorder them.
     pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         let mut close: Option<usize> = None;
         let mut activate: Option<usize> = None;
         let mut moved: Option<(usize, usize)> = None;
+        let mut close_diff: Option<usize> = None;
+        let mut show_diff: Option<usize> = None;
         ui.spacing_mut().item_spacing.x = 1.0;
         ui.horizontal(|ui| {
             for (i, buf) in self.buffers.list.iter().enumerate() {
-                let selected = i == self.buffers.active;
+                let selected = i == self.buffers.active && self.active_diff.is_none();
                 let fill = if selected {
                     color(theme.ui.tab_active_bg)
                 } else {
@@ -372,16 +408,87 @@ impl Editor {
                     moved = Some((src, i));
                 }
             }
+            for (i, diff) in self.diffs.iter().enumerate() {
+                let name = diff
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&diff.path)
+                    .to_string();
+                let (tab, cross) =
+                    Self::diff_tab(ui, theme, &name, self.active_diff == Some(i));
+                if cross.clicked() {
+                    close_diff = Some(i);
+                } else if tab.clicked() {
+                    show_diff = Some(i);
+                }
+            }
         });
         if let Some((from, to)) = moved {
             self.buffers.reorder(from, to);
         }
         if let Some(i) = activate {
             self.buffers.active = i;
+            self.active_diff = None;
         }
         if let Some(i) = close {
             self.request_close(i);
         }
+        if let Some(i) = show_diff {
+            self.active_diff = Some(i);
+        }
+        if let Some(i) = close_diff {
+            self.close_diff(i);
+        }
+    }
+
+    /// A diff's own tab, drawn after the files it sits beside.
+    fn diff_tab(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        label: &str,
+        selected: bool,
+    ) -> (egui::Response, egui::Response) {
+        let fill = if selected {
+            color(theme.ui.tab_active_bg)
+        } else {
+            color(theme.ui.tab_inactive_bg)
+        };
+        let mut clicks = None;
+        egui::Frame::default()
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(10, 7))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let fg = if selected {
+                    color(theme.ui.fg)
+                } else {
+                    color(theme.ui.fg_dim)
+                };
+                let title = egui::RichText::new(format!("≠ {label}")).color(fg).size(13.0);
+                let tab = ui
+                    .add(egui::Label::new(title).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                let (icon_rect, cross) =
+                    ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
+                let cross = cross.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if ui.is_rect_visible(icon_rect) {
+                    let mark = if cross.hovered() {
+                        color(theme.ui.fg)
+                    } else {
+                        color(theme.ui.fg_dim)
+                    };
+                    let r = 3.2;
+                    let c = icon_rect.center();
+                    let stroke = egui::Stroke::new(1.3, mark);
+                    ui.painter()
+                        .line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
+                    ui.painter()
+                        .line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+                }
+                clicks = Some((tab, cross));
+            });
+        clicks.unwrap()
     }
 
     /// Closes a buffer outright when it is clean; otherwise asks first.
@@ -419,6 +526,7 @@ impl Editor {
         theme: &Theme,
         indent_config: &Indent,
         goto_modifiers: &[Modifier],
+        git_lines: &BTreeMap<usize, LineState>,
     ) {
         self.refresh_regions();
         // Nothing open: the app draws its start page instead.
@@ -504,6 +612,23 @@ impl Editor {
                         for (row, line) in visible.iter().enumerate() {
                             let y = gutter.min.y + row as f32 * row_height;
                             let center_y = y + row_height / 2.0;
+                            // A bar at the gutter's edge where git says this
+                            // line is new, changed, or closed over a removal.
+                            if let Some(state) = git_lines.get(&(line + 1)) {
+                                let (tint, height) = match state {
+                                    LineState::Added => (ansi_color(theme, 2), row_height),
+                                    LineState::Modified => (ansi_color(theme, 3), row_height),
+                                    LineState::Removed => (ansi_color(theme, 1), 2.0),
+                                };
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(gutter.min.x, y),
+                                        egui::vec2(2.5, height),
+                                    ),
+                                    egui::CornerRadius::ZERO,
+                                    tint,
+                                );
+                            }
                             ui.painter().text(
                                 egui::pos2(gutter.min.x + 40.0, center_y),
                                 egui::Align2::RIGHT_CENTER,

@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -32,12 +33,26 @@ pub fn run(root: Option<PathBuf>) -> io::Result<()> {
         EnableMouseCapture,
         EnableBracketedPaste
     )?;
+    // Without the kitty keyboard protocol a terminal cannot tell Ctrl+Shift+S
+    // from Ctrl+S. Where it is available, ask for it: that is what makes the
+    // VS Code-style second tier of bindings work.
+    let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    if enhanced {
+        execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )?;
+    }
+
     let backend = ratatui::backend::CrosstermBackend::new(out);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let result = app::App::new(root).run(&mut terminal);
 
     disable_raw_mode()?;
+    if enhanced {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,

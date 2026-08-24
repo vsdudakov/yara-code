@@ -56,6 +56,10 @@ pub fn key(key: &Key) -> Option<egui::Key> {
             "pagedown" => K::PageDown,
             "delete" => K::Delete,
             "backspace" => K::Backspace,
+            // Function keys are written `f1`..`f12`; egui names them `F1`.
+            other if other.starts_with('f') && other[1..].parse::<u8>().is_ok() => {
+                K::from_name(&other.to_ascii_uppercase())?
+            }
             other => K::from_name(other)?,
         },
     })

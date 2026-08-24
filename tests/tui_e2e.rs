@@ -1172,5 +1172,12 @@ fn a_folder_row_offers_to_leave_the_project() {
     );
     let entry = harness.row_of("Remove Folder from Project").unwrap();
     harness.click(6, entry);
-    assert!(!harness.shows(&name), "{}", harness.screen());
+    // The folder is gone from the navigator. The status bar still names it
+    // ("removed …"), so look at the rows, not the whole screen.
+    let in_navigator = harness
+        .screen()
+        .lines()
+        .any(|line| line.starts_with(" ▾") && line.contains(&name));
+    assert!(!in_navigator, "{}", harness.screen());
+    assert!(harness.shows("removed"), "{}", harness.screen());
 }

@@ -1,3 +1,7 @@
+---
+description: Open a folder, read the start page, and learn the panes of the Yara Code code editor in the terminal and in the window.
+---
+
 # First run
 
 ```bash
@@ -8,7 +12,7 @@ ycode-gui ~/code/project   # the same editor, in a window
 
 ## The start page
 
-Launched without a path, Yara opens with **no project**. The editor shows a
+Launched without a path, Yara Code opens with **no project**. The editor shows a
 start page: the name, the folder in play (or "no folder in the project"), and
 the key bindings actually in effect, grouped — Project, Edit, Panels, More.
 Because it is built from your `settings.json`, it never shows a chord you
@@ -32,7 +36,7 @@ typing the path instead.
 
 Both frontends draw the same thing:
 
-- A **top bar** with the Yara label and the File, View and Help menus.
+- A **top bar** with the Yara Code label and the File, View and Help menus.
 - A **sidebar** on the left with three views — `FILES`, `SEARCH`, `GIT` —
   switched in its footer or with `Cmd+Shift+E` / `Cmd+Shift+F` /
   `Ctrl+Shift+G`.

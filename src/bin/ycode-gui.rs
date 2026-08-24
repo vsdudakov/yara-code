@@ -16,14 +16,14 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_icon(icon)
-            .with_title("Yara")
+            .with_title("Yara Code")
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([700.0, 400.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Yara",
+        "Yara Code",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, root)))),
     )

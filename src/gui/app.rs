@@ -10,12 +10,12 @@ use crate::core::project::Project;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
 use crate::core::settings::Settings;
 use crate::core::theme::{self as core_theme, Theme};
-use crate::gui::keys;
+use crate::gui::diff::{DiffEvent, DiffView};
 use crate::gui::editor::Editor;
 use crate::gui::file_tree::{FileTree, TreeEvent};
-use crate::gui::diff::{DiffEvent, DiffView};
 use crate::gui::git::GitPanel;
 use crate::gui::highlight;
+use crate::gui::keys;
 use crate::gui::terminal::Terminal;
 use crate::gui::theme::{ansi_color, color};
 
@@ -246,9 +246,7 @@ impl App {
                 let mut saved = 0;
                 for i in 0..self.editor.buffers.list.len() {
                     self.editor.buffers.active = i;
-                    if self.editor.buffers.list[i].modified()
-                        && self.editor.buffers.save_active()
-                    {
+                    if self.editor.buffers.list[i].modified() && self.editor.buffers.save_active() {
                         saved += 1;
                     }
                 }
@@ -420,8 +418,8 @@ impl App {
         if groups.is_empty() {
             return;
         }
-        let block = groups.iter().map(|g| g.width).sum::<f32>()
-            + COLUMN_GAP * (groups.len() - 1) as f32;
+        let block =
+            groups.iter().map(|g| g.width).sum::<f32>() + COLUMN_GAP * (groups.len() - 1) as f32;
         let tallest = groups.iter().map(|g| g.rows.len()).max().unwrap_or(0);
 
         const ROW_HEIGHT: f32 = 21.0;
@@ -432,7 +430,7 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.add_space(top);
             ui.label(
-                egui::RichText::new("YARA")
+                egui::RichText::new("YARA CODE")
                     .color(color(theme.ui.accent_light))
                     .size(30.0)
                     .strong(),
@@ -594,9 +592,7 @@ impl App {
         self.git_lines_key = Some(key.clone());
         self.git_lines = match self.git.state.dir() {
             Some(dir) => match key.0.strip_prefix(&dir) {
-                Ok(relative) => {
-                    crate::core::git::changed_lines(&dir, &relative.to_string_lossy())
-                }
+                Ok(relative) => crate::core::git::changed_lines(&dir, &relative.to_string_lossy()),
                 Err(_) => BTreeMap::new(),
             },
             None => BTreeMap::new(),
@@ -629,7 +625,8 @@ impl App {
             return;
         };
         let rows = crate::core::git::diff(&dir, change);
-        self.editor.open_diff(DiffView::new(change.path.clone(), rows));
+        self.editor
+            .open_diff(DiffView::new(change.path.clone(), rows));
     }
 
     // ----- project folders -------------------------------------------------
@@ -753,31 +750,33 @@ impl App {
                     .size(13.5),
             );
             ui.add_space(6.0);
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for c in &picker.candidates {
-                    let mut job = egui::text::LayoutJob::default();
-                    let fmt = |c| egui::text::TextFormat {
-                        font_id: egui::FontId::monospace(11.5),
-                        color: c,
-                        ..Default::default()
-                    };
-                    job.append(
-                        &format!("{}:{}  ", self.project.display(&c.path), c.line),
-                        0.0,
-                        fmt(color(theme.ui.accent_light)),
-                    );
-                    job.append(&c.text, 0.0, fmt(color(theme.ui.fg_dim)));
-                    job.wrap.max_rows = 1;
-                    job.wrap.break_anywhere = true;
-                    if ui
-                        .add(egui::Button::new(job).frame(false))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        chosen = Some((c.path.clone(), c.line));
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for c in &picker.candidates {
+                        let mut job = egui::text::LayoutJob::default();
+                        let fmt = |c| egui::text::TextFormat {
+                            font_id: egui::FontId::monospace(11.5),
+                            color: c,
+                            ..Default::default()
+                        };
+                        job.append(
+                            &format!("{}:{}  ", self.project.display(&c.path), c.line),
+                            0.0,
+                            fmt(color(theme.ui.accent_light)),
+                        );
+                        job.append(&c.text, 0.0, fmt(color(theme.ui.fg_dim)));
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        if ui
+                            .add(egui::Button::new(job).frame(false))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            chosen = Some((c.path.clone(), c.line));
+                        }
                     }
-                }
-            });
+                });
         });
         if let Some((path, line)) = chosen {
             self.jump_to(path, line);
@@ -853,7 +852,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("YARA")
+                        egui::RichText::new("YARA CODE")
                             .color(color(theme.ui.accent_light))
                             .strong()
                             .size(12.0),
@@ -871,7 +870,9 @@ impl App {
                     ];
                     for (title, entries, note) in menus {
                         ui.menu_button(
-                            egui::RichText::new(title).color(color(theme.ui.fg)).size(13.0),
+                            egui::RichText::new(title)
+                                .color(color(theme.ui.fg))
+                                .size(13.0),
                             |ui| {
                                 ui.set_min_width(240.0);
                                 if let Some(note) = &note {
@@ -892,8 +893,7 @@ impl App {
                                         .gui_chord(*command)
                                         .map(|c| c.to_string())
                                         .unwrap_or_default();
-                                    if command_row(ui, &theme, command.label(), &shortcut)
-                                        .clicked()
+                                    if command_row(ui, &theme, command.label(), &shortcut).clicked()
                                     {
                                         chosen = Some(*command);
                                         ui.close_menu();
@@ -1119,9 +1119,10 @@ impl App {
                     self.pending_delete = None;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let delete =
-                        egui::Button::new(egui::RichText::new("Delete").color(egui::Color32::WHITE))
-                            .fill(color(theme.ui.danger));
+                    let delete = egui::Button::new(
+                        egui::RichText::new("Delete").color(egui::Color32::WHITE),
+                    )
+                    .fill(color(theme.ui.danger));
                     if ui
                         .add(delete)
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -1161,48 +1162,41 @@ impl App {
                     })
                 };
                 let heading = |ui: &mut egui::Ui, text: &str, focused: bool| {
-                    ui.label(
-                        egui::RichText::new(text).size(10.0).color(if focused {
-                            color(theme.ui.accent_light)
-                        } else {
-                            color(theme.ui.fg_faint)
-                        }),
-                    );
+                    ui.label(egui::RichText::new(text).size(10.0).color(if focused {
+                        color(theme.ui.accent_light)
+                    } else {
+                        color(theme.ui.fg_faint)
+                    }));
                 };
 
                 ui.horizontal(|ui| {
-                    let query_focused =
-                        ui.memory(|m| m.has_focus(field_id(SearchField::Query)));
+                    let query_focused = ui.memory(|m| m.has_focus(field_id(SearchField::Query)));
                     heading(ui, "SEARCH", query_focused);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let mut toggle = |ui: &mut egui::Ui,
-                                          on: &mut bool,
-                                          label: &str,
-                                          hint: &str| {
-                            let text = egui::RichText::new(label)
-                                .color(if *on {
-                                    color(theme.ui.fg_bright)
-                                } else {
-                                    color(theme.ui.fg_faint)
-                                })
-                                .size(11.0);
-                            let button = egui::Button::new(text)
-                                .frame(true)
-                                .fill(if *on {
+                        let mut toggle =
+                            |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
+                                let text = egui::RichText::new(label)
+                                    .color(if *on {
+                                        color(theme.ui.fg_bright)
+                                    } else {
+                                        color(theme.ui.fg_faint)
+                                    })
+                                    .size(11.0);
+                                let button = egui::Button::new(text).frame(true).fill(if *on {
                                     color(theme.ui.selected_bg)
                                 } else {
                                     egui::Color32::TRANSPARENT
                                 });
-                            if ui
-                                .add(button)
-                                .on_hover_text(hint)
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .clicked()
-                            {
-                                *on = !*on;
-                                rerun = true;
-                            }
-                        };
+                                if ui
+                                    .add(button)
+                                    .on_hover_text(hint)
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    *on = !*on;
+                                    rerun = true;
+                                }
+                            };
                         toggle(ui, &mut self.search.regex, ".*", "Use Regular Expression");
                         toggle(ui, &mut self.search.whole_word, "ab", "Match Whole Word");
                         toggle(ui, &mut self.search.case_sensitive, "Aa", "Match Case");
@@ -1272,22 +1266,19 @@ impl App {
                     };
                     ui.label(egui::RichText::new(summary).color(color(tone)).size(11.0));
                     if !self.search.results.is_empty() {
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .button(
-                                        egui::RichText::new("Replace All")
-                                            .color(color(theme.ui.fg))
-                                            .size(11.0),
-                                    )
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    replace_all = true;
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(
+                                    egui::RichText::new("Replace All")
+                                        .color(color(theme.ui.fg))
+                                        .size(11.0),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                replace_all = true;
+                            }
+                        });
                     }
                 });
             });
@@ -1301,7 +1292,8 @@ impl App {
             match self.search.replace_all(self.project.roots()) {
                 Ok((count, files)) => {
                     self.reload_unmodified();
-                    self.status = Some(format!("replaced {count} occurrence(s) in {files} file(s)"));
+                    self.status =
+                        Some(format!("replaced {count} occurrence(s) in {files} file(s)"));
                 }
                 Err(message) => self.status = Some(message),
             }
@@ -1315,7 +1307,9 @@ impl App {
                 for file in &self.search.results {
                     let rel = self.project.display(&file.path);
                     egui::CollapsingHeader::new(
-                        egui::RichText::new(rel).color(color(theme.ui.fg)).size(12.5),
+                        egui::RichText::new(rel)
+                            .color(color(theme.ui.fg))
+                            .size(12.5),
                     )
                     .id_salt(&file.path)
                     .default_open(true)
@@ -1402,13 +1396,11 @@ impl App {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 let heading = |ui: &mut egui::Ui, text: &str, focused: bool| {
-                    ui.label(
-                        egui::RichText::new(text).size(10.0).color(if focused {
-                            color(theme.ui.accent_light)
-                        } else {
-                            color(theme.ui.fg_faint)
-                        }),
-                    );
+                    ui.label(egui::RichText::new(text).size(10.0).color(if focused {
+                        color(theme.ui.accent_light)
+                    } else {
+                        color(theme.ui.fg_faint)
+                    }));
                 };
 
                 // Heading row: FIND on the left, the option toggles at the
@@ -1421,31 +1413,40 @@ impl App {
                         if ui.button(egui::RichText::new("×").size(11.0)).clicked() {
                             close = true;
                         }
-                        let toggle =
-                            |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
-                                let text = egui::RichText::new(label)
-                                    .color(if *on {
-                                        color(theme.ui.fg_bright)
-                                    } else {
-                                        color(theme.ui.fg_faint)
-                                    })
-                                    .size(11.0);
-                                let button = egui::Button::new(text).frame(true).fill(if *on {
-                                    color(theme.ui.selected_bg)
+                        let toggle = |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
+                            let text = egui::RichText::new(label)
+                                .color(if *on {
+                                    color(theme.ui.fg_bright)
                                 } else {
-                                    egui::Color32::TRANSPARENT
-                                });
-                                if ui
-                                    .add(button)
-                                    .on_hover_text(hint)
-                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .clicked()
-                                {
-                                    *on = !*on;
-                                }
-                            };
-                        toggle(ui, &mut self.editor.find.regex, ".*", "Use Regular Expression");
-                        toggle(ui, &mut self.editor.find.whole_word, "ab", "Match Whole Word");
+                                    color(theme.ui.fg_faint)
+                                })
+                                .size(11.0);
+                            let button = egui::Button::new(text).frame(true).fill(if *on {
+                                color(theme.ui.selected_bg)
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            });
+                            if ui
+                                .add(button)
+                                .on_hover_text(hint)
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                *on = !*on;
+                            }
+                        };
+                        toggle(
+                            ui,
+                            &mut self.editor.find.regex,
+                            ".*",
+                            "Use Regular Expression",
+                        );
+                        toggle(
+                            ui,
+                            &mut self.editor.find.whole_word,
+                            "ab",
+                            "Match Whole Word",
+                        );
                         toggle(ui, &mut self.editor.find.case_sensitive, "Aa", "Match Case");
                     });
                 });
@@ -1548,12 +1549,7 @@ type MenuBarEntry = (&'static str, &'static [Option<Command>], Option<String>);
 
 /// One dropdown row: label on the left, key chord greyed out on the right —
 /// the same shape the terminal frontend draws.
-fn command_row(
-    ui: &mut egui::Ui,
-    theme: &Theme,
-    label: &str,
-    shortcut: &str,
-) -> egui::Response {
+fn command_row(ui: &mut egui::Ui, theme: &Theme, label: &str, shortcut: &str) -> egui::Response {
     let mut job = egui::text::LayoutJob::default();
     job.append(
         label,
@@ -1645,12 +1641,7 @@ impl eframe::App for App {
                                     egui::ScrollArea::vertical()
                                         .auto_shrink([false, false])
                                         .show(ui, |ui| {
-                                            self.tree.ui(
-                                                ui,
-                                                &theme,
-                                                &self.git.state,
-                                                &mut events,
-                                            );
+                                            self.tree.ui(ui, &theme, &self.git.state, &mut events);
                                         });
                                     self.handle_tree_events(events);
                                 }
@@ -1688,7 +1679,8 @@ impl eframe::App for App {
                         );
                         if modified {
                             let c = egui::pos2(resp.rect.right() + 7.0, resp.rect.center().y);
-                            ui.painter().circle_filled(c, 3.0, color(theme.ui.accent_light));
+                            ui.painter()
+                                .circle_filled(c, 3.0, color(theme.ui.accent_light));
                             ui.add_space(10.0);
                         }
                     }
@@ -1774,13 +1766,14 @@ impl eframe::App for App {
                         .inner_margin(egui::Margin::symmetric(10, 3))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                let mut text = egui::RichText::new("TERMINAL")
-                                    .size(11.0)
-                                    .color(if focused {
-                                        color(theme.ui.accent_light)
-                                    } else {
-                                        color(theme.ui.fg_faint)
-                                    });
+                                let mut text =
+                                    egui::RichText::new("TERMINAL")
+                                        .size(11.0)
+                                        .color(if focused {
+                                            color(theme.ui.accent_light)
+                                        } else {
+                                            color(theme.ui.fg_faint)
+                                        });
                                 if focused {
                                     text = text.strong();
                                 }
@@ -1918,10 +1911,7 @@ fn nav_tab(
         SidebarView::Files => {
             // A file list: three lines.
             for dy in [-3.5, 0.0, 3.5] {
-                p.line_segment(
-                    [c + egui::vec2(-4.5, dy), c + egui::vec2(4.5, dy)],
-                    stroke,
-                );
+                p.line_segment([c + egui::vec2(-4.5, dy), c + egui::vec2(4.5, dy)], stroke);
             }
         }
         SidebarView::Search => {
@@ -1936,7 +1926,10 @@ fn nav_tab(
             let bottom = c + egui::vec2(-2.5, 4.0);
             p.circle_stroke(top, r, stroke);
             p.circle_stroke(bottom, r, stroke);
-            p.line_segment([top + egui::vec2(0.0, r), bottom - egui::vec2(0.0, r)], stroke);
+            p.line_segment(
+                [top + egui::vec2(0.0, r), bottom - egui::vec2(0.0, r)],
+                stroke,
+            );
             p.line_segment(
                 [c + egui::vec2(-2.5, -1.0), c + egui::vec2(3.5, -3.2)],
                 stroke,

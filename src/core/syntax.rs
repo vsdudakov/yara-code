@@ -16,14 +16,38 @@ use crate::core::theme::{Rgb, Theme};
 
 /// Grammars for languages the default set omits, compiled into the binary.
 const BUNDLED: &[(&str, &str)] = &[
-    ("TypeScript", include_str!("../../assets/syntaxes/TypeScript.sublime-syntax")),
-    ("TOML", include_str!("../../assets/syntaxes/TOML.sublime-syntax")),
-    ("Kotlin", include_str!("../../assets/syntaxes/Kotlin.sublime-syntax")),
-    ("Swift", include_str!("../../assets/syntaxes/Swift.sublime-syntax")),
-    ("Dart", include_str!("../../assets/syntaxes/Dart.sublime-syntax")),
-    ("Dockerfile", include_str!("../../assets/syntaxes/Dockerfile.sublime-syntax")),
-    ("Protobuf", include_str!("../../assets/syntaxes/Protobuf.sublime-syntax")),
-    ("GraphQL", include_str!("../../assets/syntaxes/GraphQL.sublime-syntax")),
+    (
+        "TypeScript",
+        include_str!("../../assets/syntaxes/TypeScript.sublime-syntax"),
+    ),
+    (
+        "TOML",
+        include_str!("../../assets/syntaxes/TOML.sublime-syntax"),
+    ),
+    (
+        "Kotlin",
+        include_str!("../../assets/syntaxes/Kotlin.sublime-syntax"),
+    ),
+    (
+        "Swift",
+        include_str!("../../assets/syntaxes/Swift.sublime-syntax"),
+    ),
+    (
+        "Dart",
+        include_str!("../../assets/syntaxes/Dart.sublime-syntax"),
+    ),
+    (
+        "Dockerfile",
+        include_str!("../../assets/syntaxes/Dockerfile.sublime-syntax"),
+    ),
+    (
+        "Protobuf",
+        include_str!("../../assets/syntaxes/Protobuf.sublime-syntax"),
+    ),
+    (
+        "GraphQL",
+        include_str!("../../assets/syntaxes/GraphQL.sublime-syntax"),
+    ),
 ];
 
 /// Extensions with no grammar of their own, pointed at the closest relative.
@@ -62,14 +86,14 @@ const ALIASES: &[(&str, &str)] = &[
 ];
 
 /// Where user grammars live: `$XDG_CONFIG_HOME/yara/syntaxes` or
-/// `~/.config/yara/syntaxes`. Any `.sublime-syntax` there is loaded at startup.
+/// `~/.config/yara-code/syntaxes`. Any `.sublime-syntax` there is loaded at startup.
 pub fn user_syntax_dir() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
         })?;
-    Some(base.join("yara").join("syntaxes"))
+    Some(base.join("yara-code").join("syntaxes"))
 }
 
 /// The added grammars live in their own set: folding them into the default one
@@ -210,17 +234,12 @@ impl Syntax {
         let (set, syntax) = self.syntax_for(extension);
         let mut hl = HighlightLines::new(syntax, &self.theme);
         for line in LinesWithEndings::from(code) {
-            let styled: Vec<(Style, &'a str)> =
-                hl.highlight_line(line, set).unwrap_or_default();
+            let styled: Vec<(Style, &'a str)> = hl.highlight_line(line, set).unwrap_or_default();
             emit(
                 styled
                     .into_iter()
                     .map(|(style, text)| Region {
-                        color: (
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                        ),
+                        color: (style.foreground.r, style.foreground.g, style.foreground.b),
                         italic: style.font_style.contains(FontStyle::ITALIC),
                         text,
                     })

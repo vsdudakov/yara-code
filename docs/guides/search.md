@@ -1,6 +1,10 @@
+---
+description: Project-wide search with VS Code-style exclude globs, and find and replace inside the open file.
+---
+
 # Search & replace
 
-Yara has two searches built from the same parts, so they look and behave alike:
+Yara Code has two searches built from the same parts, so they look and behave alike:
 **project search** in the sidebar, and **find in file** over the editor.
 
 ## Project search

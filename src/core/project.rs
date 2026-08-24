@@ -126,7 +126,11 @@ impl Project {
         let Some(root) = self.owner(path) else {
             return path.display().to_string();
         };
-        let rest = path.strip_prefix(root).unwrap_or(path).display().to_string();
+        let rest = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
         if !self.is_multi_root() {
             return rest;
         }

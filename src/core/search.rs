@@ -272,7 +272,9 @@ fn walk(dir: &Path, root: &Path, excludes: &[String], visit: &mut dyn FnMut(&Pat
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy().into_owned();
-        let Ok(kind) = entry.file_type() else { continue };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
         // Excluded paths are skipped whole, so an excluded directory is never
         // even walked.
         let relative = path
@@ -349,9 +351,30 @@ pub struct Candidate {
 /// Definition-introducing keywords across common languages; the token right
 /// before a clicked identifier is checked against this list.
 const DEF_KEYWORDS: &[&str] = &[
-    "fn", "struct", "enum", "trait", "type", "mod", "const", "static", "impl", "macro_rules!",
-    "def", "class", "function", "func", "fun", "interface", "let", "var", "val", "protocol",
-    "module", "object", "message", "service",
+    "fn",
+    "struct",
+    "enum",
+    "trait",
+    "type",
+    "mod",
+    "const",
+    "static",
+    "impl",
+    "macro_rules!",
+    "def",
+    "class",
+    "function",
+    "func",
+    "fun",
+    "interface",
+    "let",
+    "var",
+    "val",
+    "protocol",
+    "module",
+    "object",
+    "message",
+    "service",
 ];
 
 fn is_ident_char(c: char) -> bool {
@@ -362,7 +385,10 @@ fn is_ident_char(c: char) -> bool {
 fn word_occurrences<'a>(line: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
     line.match_indices(word).filter_map(move |(i, _)| {
         let before_ok = i == 0 || !line[..i].chars().last().is_some_and(is_ident_char);
-        let after_ok = !line[i + word.len()..].chars().next().is_some_and(is_ident_char);
+        let after_ok = !line[i + word.len()..]
+            .chars()
+            .next()
+            .is_some_and(is_ident_char);
         (before_ok && after_ok).then_some(i)
     })
 }
@@ -370,7 +396,8 @@ fn word_occurrences<'a>(line: &'a str, word: &'a str) -> impl Iterator<Item = us
 fn is_definition_line(line: &str, word: &str) -> bool {
     for idx in word_occurrences(line, word) {
         let last_token = line[..idx]
-            .split(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | ',' | ':' | '{')).rfind(|t| !t.is_empty());
+            .split(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | ',' | ':' | '{'))
+            .rfind(|t| !t.is_empty());
         if last_token.is_some_and(|t| DEF_KEYWORDS.contains(&t)) {
             return true;
         }

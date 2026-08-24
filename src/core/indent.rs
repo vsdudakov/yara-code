@@ -10,8 +10,8 @@ use crate::core::settings::Indent;
 const COLON_LANGS: &[&str] = &["py", "pyi", "pyx", "pyw", "yaml", "yml", "toml"];
 /// Languages using `#` for line comments.
 const HASH_COMMENT_LANGS: &[&str] = &[
-    "py", "pyi", "pyx", "pyw", "yaml", "yml", "toml", "rb", "sh", "bash", "zsh", "fish", "pl",
-    "r", "nim", "ex", "exs", "cr",
+    "py", "pyi", "pyx", "pyw", "yaml", "yml", "toml", "rb", "sh", "bash", "zsh", "fish", "pl", "r",
+    "nim", "ex", "exs", "cr",
 ];
 /// Python statements after which the next line dedents.
 const PY_DEDENT_AFTER: &[&str] = &["return", "pass", "break", "continue", "raise"];
@@ -82,12 +82,7 @@ fn strip_one_unit<'a>(indent: &'a str, unit: &str) -> &'a str {
 }
 
 /// Computes the replacement for a newline typed at char index `cursor`.
-pub fn newline_edit(
-    text: &str,
-    cursor: usize,
-    extension: &str,
-    config: &Indent,
-) -> NewlineEdit {
+pub fn newline_edit(text: &str, cursor: usize, extension: &str, config: &Indent) -> NewlineEdit {
     let unit = unit(text, config);
     let byte = char_to_byte(text, cursor);
     let line_start = text[..byte].rfind('\n').map_or(0, |i| i + 1);

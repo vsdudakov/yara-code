@@ -139,7 +139,11 @@ impl GitPanel {
                         color: c,
                         ..Default::default()
                     };
-                    job.append(&format!(" {letter}  "), 0.0, fmt(letter_color(letter, theme)));
+                    job.append(
+                        &format!(" {letter}  "),
+                        0.0,
+                        fmt(letter_color(letter, theme)),
+                    );
                     job.append(&change.path, 0.0, fmt(color(theme.ui.fg_dim)));
                     job.wrap.max_rows = 1;
                     job.wrap.break_anywhere = true;

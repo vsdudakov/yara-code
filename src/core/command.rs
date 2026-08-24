@@ -286,10 +286,7 @@ pub const VIEW_MENU: &[Option<Command>] = &[
 
 /// What the Help menu lists. The version stands above it, drawn by each
 /// frontend from the crate's own version.
-pub const HELP_MENU: &[Option<Command>] = &[
-    Some(Command::Help),
-    Some(Command::Documentation),
-];
+pub const HELP_MENU: &[Option<Command>] = &[Some(Command::Help), Some(Command::Documentation)];
 
 /// The start page's key list: what to reach for first, in groups. Both
 /// frontends draw the same groups, each with the chord actually bound.

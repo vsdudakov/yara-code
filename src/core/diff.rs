@@ -44,7 +44,13 @@ pub fn from_unified(diff: &str) -> Vec<Row> {
 
     for line in diff.lines() {
         if let Some(header) = line.strip_prefix("@@") {
-            flush(&mut rows, &mut removed, &mut added, &mut old_line, &mut new_line);
+            flush(
+                &mut rows,
+                &mut removed,
+                &mut added,
+                &mut old_line,
+                &mut new_line,
+            );
             if let Some((old, new)) = hunk_start(header) {
                 old_line = old;
                 new_line = new;
@@ -59,7 +65,13 @@ pub fn from_unified(diff: &str) -> Vec<Row> {
             Some('-') => removed.push(line[1..].to_string()),
             Some('+') => added.push(line[1..].to_string()),
             Some(' ') => {
-                flush(&mut rows, &mut removed, &mut added, &mut old_line, &mut new_line);
+                flush(
+                    &mut rows,
+                    &mut removed,
+                    &mut added,
+                    &mut old_line,
+                    &mut new_line,
+                );
                 rows.push(Row {
                     kind: Kind::Same,
                     left: Some(Side {
@@ -78,7 +90,13 @@ pub fn from_unified(diff: &str) -> Vec<Row> {
             _ => {}
         }
     }
-    flush(&mut rows, &mut removed, &mut added, &mut old_line, &mut new_line);
+    flush(
+        &mut rows,
+        &mut removed,
+        &mut added,
+        &mut old_line,
+        &mut new_line,
+    );
     rows
 }
 

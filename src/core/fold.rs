@@ -78,9 +78,7 @@ pub fn regions(text: &str, extension: &str) -> Vec<Region> {
         if close_too {
             if let Some(after) = (end + 1..lines.len()).find(|&j| indents[j].is_some()) {
                 let trimmed = lines[after].trim_start();
-                if indents[after] == Some(indent)
-                    && trimmed.starts_with(BRACE_CLOSERS)
-                {
+                if indents[after] == Some(indent) && trimmed.starts_with(BRACE_CLOSERS) {
                     end = after;
                 }
             }

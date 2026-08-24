@@ -1,6 +1,10 @@
+---
+description: How to build, test and contribute to Yara Code — the CI gate, the house rules, and how the terminal frontend is tested under a pty.
+---
+
 # Contributing
 
-Yara is one Rust crate with two frontends. Everything below is what CI enforces,
+Yara Code is one Rust crate with two frontends. Everything below is what CI enforces,
 so a green local run is a green pull request.
 
 ## Getting set up
@@ -23,7 +27,7 @@ make test     # cargo test --all-features
 
 CI runs both on Linux, macOS and Windows, and separately builds the terminal
 frontend with `--no-default-features --features tui` — that configuration must
-keep compiling with no graphics stack at all, because that is how Yara is used
+keep compiling with no graphics stack at all, because that is how Yara Code is used
 over SSH.
 
 ## House rules

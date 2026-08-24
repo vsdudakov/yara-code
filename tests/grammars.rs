@@ -16,14 +16,23 @@ fn colored(ext: &str, code: &str) -> usize {
 #[test]
 fn bundled_and_aliased_languages_highlight() {
     let cases: &[(&str, &str)] = &[
-        ("ts", "export const x: number = 1; // note\nfunction f(a: string) { return `hi ${a}`; }"),
+        (
+            "ts",
+            "export const x: number = 1; // note\nfunction f(a: string) { return `hi ${a}`; }",
+        ),
         ("tsx", "const A = () => <div/>; // jsx"),
         ("toml", "[package]\nname = \"yara\" # comment\nversion = 2"),
         ("kt", "fun main() { val s: String = \"hi\" } // note"),
-        ("swift", "func f() -> Int { let s = \"hi\"; return 1 } // note"),
+        (
+            "swift",
+            "func f() -> Int { let s = \"hi\"; return 1 } // note",
+        ),
         ("dart", "class A { void f() { var s = 'hi'; } } // note"),
         ("Dockerfile", "FROM rust:1 AS build\nRUN cargo build # note"),
-        ("proto", "syntax = \"proto3\";\nmessage M { int32 id = 1; } // note"),
+        (
+            "proto",
+            "syntax = \"proto3\";\nmessage M { int32 id = 1; } // note",
+        ),
         ("graphql", "type Query { user(id: ID!): User } # note"),
         // Aliased to a close relative rather than falling back to plain text.
         ("mjs", "export const a = 1; // note"),
@@ -33,7 +42,10 @@ fn bundled_and_aliased_languages_highlight() {
     ];
     for (ext, code) in cases {
         let n = colored(ext, code);
-        assert!(n > 1, "{ext} produced {n} distinct colors — no grammar matched");
+        assert!(
+            n > 1,
+            "{ext} produced {n} distinct colors — no grammar matched"
+        );
     }
 }
 

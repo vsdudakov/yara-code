@@ -1,3 +1,7 @@
+---
+description: Hold several folders in one window; search, go-to-definition and the navigator treat them as one project.
+---
+
 # Project folders
 
 A window opens on the folders you give it. Launched with a path, that path is
@@ -20,7 +24,7 @@ tools/src/main.rs
 ```
 
 Overlapping folders are refused: one inside another would list and search the
-same files twice, so Yara says `already inside core` rather than doing it.
+same files twice, so Yara Code says `already inside core` rather than doing it.
 
 ## Removing one
 

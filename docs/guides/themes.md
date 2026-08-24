@@ -1,3 +1,7 @@
+---
+description: Three built-in themes, any VS Code color theme, and 75 syntect grammars for syntax highlighting.
+---
+
 # Themes & syntax
 
 ## Themes
@@ -8,7 +12,7 @@ Switch with `Cmd+Shift+T` / `Ctrl+Shift+T`, or from **View → Color Theme…**.
 Any VS Code color theme works: drop its `.json` into
 
 ```
-~/.config/yara/themes/
+~/.config/yara-code/themes/
 ```
 
 and it appears in the picker. The loader reads the `colors` map (chrome and the
@@ -17,7 +21,7 @@ falls back to the built-in Dark+ or Light+ value, per the theme's `type`.
 
 The terminal palette is not decoration: git status letters, diff tints and the
 editor's gutter marks are all taken from it, so a theme colors them sanely
-without knowing anything about Yara.
+without knowing anything about Yara Code.
 
 ## Syntax
 
@@ -29,7 +33,7 @@ JavaScript, `.ex` → Ruby, `.zig` → C, `.ini` → TOML…).
 Drop any `.sublime-syntax` into
 
 ```
-~/.config/yara/syntaxes/
+~/.config/yara-code/syntaxes/
 ```
 
 to add or replace a language; user grammars win. They load into their own set,

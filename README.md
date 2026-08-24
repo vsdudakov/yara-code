@@ -1,6 +1,6 @@
 <div align="center">
 
-# Yara
+# Yara Code
 
 **A lightweight code editor for agent-driven development — a terminal UI and a
 GPU window that mirror each other, in one small Rust binary.**
@@ -13,13 +13,13 @@ GPU window that mirror each other, in one small Rust binary.**
 
 📖 **Documentation: [vsdudakov.github.io/yara-code](https://vsdudakov.github.io/yara-code/)**
 
-![Yara, the terminal frontend](assets/tui.gif)
+![Yara Code, the terminal frontend](assets/tui.gif)
 
 </div>
 
 ---
 
-## Why Yara exists
+## Why Yara Code exists
 
 You write code with an agent now — **Claude Code**, **Cursor CLI**, **Codex
 CLI**, **Aider** — and the agent lives in a terminal. What you actually do all
@@ -28,7 +28,7 @@ wrong, run the tests. A full IDE is the wrong tool for that job — it spends it
 startup time, its memory and its screen on a language server, a debugger, a
 marketplace and a git GUI you no longer use.
 
-Yara is the small editor for that loop. It **views files and diffs, edits a few
+Yara Code is the small editor for that loop. It **views files and diffs, edits a few
 lines, and stays out of the way** — with the agent right there in the built-in
 terminal.
 
@@ -62,7 +62,7 @@ ycode-gui ~/code/project           # the same editor, in a window
 
 Every install — Homebrew, `.deb`, `.rpm`, the AUR package, the plain archives —
 puts **both** `ycode` and `ycode-gui` on your `PATH`. The editor is called
-Yara; the commands are `ycode`, because `yara` already belongs to VirusTotal's
+Yara Code; the commands are `ycode`, because `yara` already belongs to VirusTotal's
 malware scanner in every package manager.
 
 On Linux, every release also carries a `.deb`, an `.rpm` and a `PKGBUILD`:

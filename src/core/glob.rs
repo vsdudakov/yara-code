@@ -53,9 +53,7 @@ fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
             (0..=path.len()).any(|skip| segments_match(rest, &path[skip..]))
         }
         Some((head, rest)) => match path.split_first() {
-            Some((first, tail)) if component_matches(head, first) => {
-                segments_match(rest, tail)
-            }
+            Some((first, tail)) if component_matches(head, first) => segments_match(rest, tail),
             _ => false,
         },
     }
@@ -67,10 +65,7 @@ fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
 /// `target` excludes `target/` anywhere in the tree — the behavior people
 /// expect from an exclude box.
 pub fn matches(pattern: &str, relative_path: &str) -> bool {
-    let path: Vec<&str> = relative_path
-        .split('/')
-        .filter(|c| !c.is_empty())
-        .collect();
+    let path: Vec<&str> = relative_path.split('/').filter(|c| !c.is_empty()).collect();
     if path.is_empty() {
         return false;
     }

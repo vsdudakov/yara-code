@@ -92,10 +92,7 @@ impl Menu {
         // deleted on disk, and it can also just leave the project.
         if is_root {
             items.retain(|item| {
-                !matches!(
-                    item,
-                    MenuItem::Rename | MenuItem::Move | MenuItem::Delete
-                )
+                !matches!(item, MenuItem::Rename | MenuItem::Move | MenuItem::Delete)
             });
             items.push(MenuItem::RemoveFolder);
         }

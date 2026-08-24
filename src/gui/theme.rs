@@ -31,10 +31,19 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
     let mut style = (*ctx.style()).clone();
 
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(15.0, FontFamily::Proportional)),
+        (
+            TextStyle::Heading,
+            FontId::new(15.0, FontFamily::Proportional),
+        ),
         (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
-        (TextStyle::Button, FontId::new(13.0, FontFamily::Proportional)),
-        (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
+        (
+            TextStyle::Button,
+            FontId::new(13.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Small,
+            FontId::new(11.0, FontFamily::Proportional),
+        ),
         (
             TextStyle::Monospace,
             FontId::new(code_size, FontFamily::Monospace),

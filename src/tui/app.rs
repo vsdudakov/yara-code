@@ -1,8 +1,8 @@
 //! TUI state and event loop.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,16 +17,16 @@ use ratatui::Terminal;
 
 use crate::core::buffer::{word_at, Buffers};
 use crate::core::command::{Chord, Command, Key, Mods, FILE_MENU, HELP_MENU, VIEW_MENU};
+use crate::core::diff;
+use crate::core::find::Find;
 use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
-use crate::core::diff;
 use crate::core::git::{self as core_git, GitState};
 use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::project::Project;
-use crate::core::settings::{Modifier, Settings};
-use crate::core::find::Find;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
+use crate::core::settings::{Modifier, Settings};
 use crate::core::syntax::Syntax;
 use crate::core::theme::{self as core_theme, Theme};
 use crate::tui::clipboard::Clipboard;
@@ -104,7 +104,10 @@ pub enum Prompt {
     MoveTo(PathBuf),
     ConfirmDelete(PathBuf),
     /// Closing buffer `index`, which has unsaved changes.
-    ConfirmClose { index: usize, name: String },
+    ConfirmClose {
+        index: usize,
+        name: String,
+    },
     GitRepo,
     GitWorktree,
     OpenPath,
@@ -155,7 +158,10 @@ impl Prompt {
                     Pick::OpenFolder => "Open folder as project",
                     Pick::AddFolder => "Add folder to project",
                 };
-                format!("{what} — {}  (→ enter · ← up · ⏎ pick · tab type)", short(dir))
+                format!(
+                    "{what} — {}  (→ enter · ← up · ⏎ pick · tab type)",
+                    short(dir)
+                )
             }
             Self::SaveAs => "Save as (path relative to the project)".to_string(),
             Self::Themes => "Color theme".to_string(),
@@ -668,13 +674,7 @@ impl App {
                 lines.push(
                     regions
                         .into_iter()
-                        .map(|r| {
-                            (
-                                r.color,
-                                r.italic,
-                                r.text.trim_end_matches('\n').to_string(),
-                            )
-                        })
+                        .map(|r| (r.color, r.italic, r.text.trim_end_matches('\n').to_string()))
                         .collect(),
                 );
             });
@@ -705,7 +705,9 @@ impl App {
     /// Real line numbers in display order, folded blocks removed.
     pub fn visible_lines(&self) -> Vec<usize> {
         let hidden = self.hidden_lines();
-        (0..self.lines_count()).filter(|l| !hidden.contains(l)).collect()
+        (0..self.lines_count())
+            .filter(|l| !hidden.contains(l))
+            .collect()
     }
 
     pub fn is_folded(&self, line: usize) -> bool {
@@ -834,7 +836,11 @@ impl App {
         let Some(buf) = self.buffers.active_mut() else {
             return;
         };
-        let moved = if back { buf.undo(cursor) } else { buf.redo(cursor) };
+        let moved = if back {
+            buf.undo(cursor)
+        } else {
+            buf.redo(cursor)
+        };
         let Some(at) = moved else {
             self.status = if back {
                 "nothing to undo".into()
@@ -1213,15 +1219,15 @@ impl App {
                 if self.drag.is_none() {
                     if let (Some(pressed), Some(index)) = (self.press, self.tree_row_at(x, y)) {
                         if pressed != index {
-                            self.drag =
-                                self.tree.rows().get(pressed).map(|r| r.path.clone());
+                            self.drag = self.tree.rows().get(pressed).map(|r| r.path.clone());
                         }
                     }
                 }
                 self.drag_over = self.drop_target_at(x, y);
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if let (Some((strip, from)), Some(to)) = (self.tab_drag.take(), self.tab_drag_over.take())
+                if let (Some((strip, from)), Some(to)) =
+                    (self.tab_drag.take(), self.tab_drag_over.take())
                 {
                     match strip {
                         TabStrip::Editor => self.buffers.reorder(from, to),
@@ -1735,7 +1741,8 @@ impl App {
     /// First list row the prompt overlay renders, mirroring `ui::draw_prompt`.
     fn prompt_list_offset(&self) -> usize {
         let height = self.layout.prompt_list.height as usize;
-        self.prompt_selected.saturating_sub(height.saturating_sub(1))
+        self.prompt_selected
+            .saturating_sub(height.saturating_sub(1))
     }
 
     fn activate_menu_item(&mut self, item: MenuItem) {
@@ -2068,7 +2075,10 @@ impl App {
                 self.status = "the terminal controls the font size".into()
             }
             Command::Documentation => {
-                self.status = format!("Yara {} — no documentation page yet", env!("CARGO_PKG_VERSION"))
+                self.status = format!(
+                    "Yara {} — no documentation page yet",
+                    env!("CARGO_PKG_VERSION")
+                )
             }
             Command::Undo => self.step_history(true),
             Command::Redo => self.step_history(false),
@@ -2742,7 +2752,9 @@ impl App {
 
     fn diff_key(&mut self, key: KeyEvent) {
         let height = self.layout.editor.height as usize;
-        let Some(index) = self.active_diff else { return };
+        let Some(index) = self.active_diff else {
+            return;
+        };
         if key.code == KeyCode::Esc {
             self.close_diff(index);
             self.focus = Focus::Git;

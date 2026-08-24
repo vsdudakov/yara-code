@@ -297,12 +297,12 @@ pub fn builtin() -> Vec<Theme> {
 }
 
 /// Where user themes live: `$XDG_CONFIG_HOME/yara/themes` or
-/// `~/.config/yara/themes`.
+/// `~/.config/yara-code/themes`.
 pub fn user_theme_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("yara").join("themes"))
+    Some(base.join("yara-code").join("themes"))
 }
 
 /// Built-in themes plus every `*.json` in the user theme directory. User themes
@@ -522,7 +522,10 @@ mod tests {
         assert_eq!(theme.ui.fg, dark_plus().ui.fg);
         assert_eq!(theme.ansi[1], (0xFF, 0x55, 0x55));
         assert_eq!(theme.tokens.len(), 1);
-        assert_eq!(theme.tokens[0].scope, "comment, punctuation.definition.comment");
+        assert_eq!(
+            theme.tokens[0].scope,
+            "comment, punctuation.definition.comment"
+        );
         assert!(theme.tokens[0].italic);
     }
 

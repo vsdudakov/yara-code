@@ -1,3 +1,7 @@
+---
+description: Tabs, undo and redo, smart indentation, folding with sticky scroll, and go-to-definition without a language server.
+---
+
 # Editing
 
 ## Tabs

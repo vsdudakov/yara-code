@@ -1,6 +1,10 @@
+---
+description: Read what your agent changed: git status in the navigator, changed lines in the gutter, side-by-side diffs in tabs, and blame for the line under the cursor.
+---
+
 # Git
 
-Yara talks to the `git` CLI — no libgit2, no extra dependency. Everything below
+Yara Code talks to the `git` CLI — no libgit2, no extra dependency. Everything below
 works in both frontends.
 
 ## The panel

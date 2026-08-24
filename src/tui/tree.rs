@@ -150,12 +150,7 @@ impl Tree {
 
     /// Expands every ancestor of `path` so it becomes visible, then selects it.
     pub fn reveal(&mut self, path: &Path) {
-        let Some(root) = self
-            .roots
-            .iter()
-            .find(|r| path.starts_with(r))
-            .cloned()
-        else {
+        let Some(root) = self.roots.iter().find(|r| path.starts_with(r)).cloned() else {
             return;
         };
         self.expanded.insert(root.clone());

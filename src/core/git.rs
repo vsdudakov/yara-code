@@ -238,7 +238,10 @@ fn parse_worktrees(out: &str) -> Vec<Worktree> {
             });
         } else if let Some(branch) = line.strip_prefix("branch ") {
             if let Some(w) = &mut current {
-                w.branch = branch.strip_prefix("refs/heads/").unwrap_or(branch).to_string();
+                w.branch = branch
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch)
+                    .to_string();
             }
         } else if line == "detached" {
             if let Some(w) = &mut current {
@@ -349,11 +352,7 @@ impl Blame {
 /// not committed yet, or outside a repository.
 pub fn blame(dir: &Path, path: &str, line: usize) -> Option<Blame> {
     let range = format!("{line},{line}");
-    let out = git(
-        dir,
-        &["blame", "--porcelain", "-L", &range, "--", path],
-    )
-    .ok()?;
+    let out = git(dir, &["blame", "--porcelain", "-L", &range, "--", path]).ok()?;
     let mut lines = out.lines();
     let header = lines.next()?;
     let commit = header.split_whitespace().next()?.to_string();
@@ -425,7 +424,15 @@ pub fn changed_lines(dir: &Path, path: &str) -> BTreeMap<usize, LineState> {
     let mut marks = BTreeMap::new();
     let Ok(out) = git(
         dir,
-        &["diff", "--no-color", "--no-ext-diff", "-U0", "HEAD", "--", path],
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "-U0",
+            "HEAD",
+            "--",
+            path,
+        ],
     ) else {
         return marks;
     };
@@ -498,7 +505,10 @@ fn unquote(path: &str) -> String {
 mod tests {
     #[test]
     fn a_pull_request_is_read_out_of_the_summary() {
-        assert_eq!(super::pull_request("Fix the thing (#412)").as_deref(), Some("412"));
+        assert_eq!(
+            super::pull_request("Fix the thing (#412)").as_deref(),
+            Some("412")
+        );
         assert_eq!(
             super::pull_request("Merge pull request #7 from a/b").as_deref(),
             Some("7")

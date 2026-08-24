@@ -103,7 +103,10 @@ impl DiffView {
                         continue;
                     }
                     let painter = ui.painter_at(rect);
-                    let side = |x: f32, w: f32, line: Option<&crate::core::diff::Side>, tint: Option<egui::Color32>| {
+                    let side = |x: f32,
+                                w: f32,
+                                line: Option<&crate::core::diff::Side>,
+                                tint: Option<egui::Color32>| {
                         let area = egui::Rect::from_min_size(
                             egui::pos2(x, rect.min.y),
                             egui::vec2(w, row_h),
@@ -152,7 +155,12 @@ impl DiffView {
                         Kind::Removed => (Some(removed), None),
                     };
                     side(rect.min.x, half, row.left.as_ref(), left_tint);
-                    side(rect.min.x + half, width - half, row.right.as_ref(), right_tint);
+                    side(
+                        rect.min.x + half,
+                        width - half,
+                        row.right.as_ref(),
+                        right_tint,
+                    );
                     // The seam between the two versions.
                     painter.line_segment(
                         [

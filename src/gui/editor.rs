@@ -352,8 +352,7 @@ impl Editor {
                     // into a cross, like VS Code.
                     let (icon_rect, close_resp) =
                         ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
-                    let close_resp =
-                        close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let close_resp = close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                     if ui.is_rect_visible(icon_rect) {
                         let hovered = close_resp.hovered();
                         let mark = if hovered {
@@ -415,8 +414,7 @@ impl Editor {
                     .next()
                     .unwrap_or(&diff.path)
                     .to_string();
-                let (tab, cross) =
-                    Self::diff_tab(ui, theme, &name, self.active_diff == Some(i));
+                let (tab, cross) = Self::diff_tab(ui, theme, &name, self.active_diff == Some(i));
                 if cross.clicked() {
                     close_diff = Some(i);
                 } else if tab.clicked() {
@@ -465,7 +463,9 @@ impl Editor {
                 } else {
                     color(theme.ui.fg_dim)
                 };
-                let title = egui::RichText::new(format!("≠ {label}")).color(fg).size(13.0);
+                let title = egui::RichText::new(format!("≠ {label}"))
+                    .color(fg)
+                    .size(13.0);
                 let tab = ui
                     .add(egui::Label::new(title).sense(egui::Sense::click()))
                     .on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -688,9 +688,11 @@ impl Editor {
                         }
                         let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
                             .unwrap_or_default();
-                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(
-                            egui::text::CCursor::new(idx),
-                        )));
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(
+                                egui::text::CCursor::new(idx),
+                            )));
                         state.store(ui.ctx(), te_id);
                         ui.ctx().memory_mut(|m| m.request_focus(te_id));
                         jumped_to = Some(row);
@@ -720,10 +722,12 @@ impl Editor {
                         };
                         let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
                             .unwrap_or_default();
-                        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                            egui::text::CCursor::new(to_display(from)),
-                            egui::text::CCursor::new(to_display(to)),
-                        )));
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(to_display(from)),
+                                egui::text::CCursor::new(to_display(to)),
+                            )));
                         state.store(ui.ctx(), te_id);
                         ui.ctx().memory_mut(|m| m.request_focus(te_id));
                         let row = visible
@@ -742,8 +746,7 @@ impl Editor {
                         if let Some(range) = state.cursor.char_range() {
                             let char_count = shown.chars().count();
                             let (a, b) = (range.primary.index, range.secondary.index);
-                            let (start, end) =
-                                (a.min(b).min(char_count), a.max(b).min(char_count));
+                            let (start, end) = (a.min(b).min(char_count), a.max(b).min(char_count));
                             let byte_of = |idx: usize, text: &str| {
                                 text.char_indices().nth(idx).map_or(text.len(), |(b, _)| b)
                             };
@@ -794,8 +797,7 @@ impl Editor {
                     if goto_held {
                         if let Some(pos) = output.response.hover_pos() {
                             let cursor = output.galley.cursor_from_pos(pos - output.galley_pos);
-                            if let Some((word, start, end)) =
-                                word_at(&shown, cursor.ccursor.index)
+                            if let Some((word, start, end)) = word_at(&shown, cursor.ccursor.index)
                             {
                                 let rect_of = |idx: usize| {
                                     let c =
@@ -940,7 +942,11 @@ fn paint_matches(
     if hits.is_empty() {
         return;
     }
-    let byte_of = |chars: usize| text.char_indices().nth(chars).map_or(text.len(), |(b, _)| b);
+    let byte_of = |chars: usize| {
+        text.char_indices()
+            .nth(chars)
+            .map_or(text.len(), |(b, _)| b)
+    };
     let ranges: Vec<(usize, usize, bool)> = hits
         .iter()
         .map(|(s, e, c)| (byte_of(*s), byte_of(*e), *c))
@@ -968,7 +974,11 @@ fn paint_matches(
                 format.background = if *is_current { current } else { normal };
             }
             sections.push(egui::text::LayoutSection {
-                leading_space: if a == start { section.leading_space } else { 0.0 },
+                leading_space: if a == start {
+                    section.leading_space
+                } else {
+                    0.0
+                },
                 byte_range: a..b,
                 format,
             });

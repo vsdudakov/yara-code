@@ -1,3 +1,7 @@
+---
+description: Every key binding in Yara Code, following VS Code on macOS, with Ctrl for Cmd in the terminal — and how to rebind any of them in settings.json.
+---
+
 # Key bindings
 
 Defaults follow **VS Code on macOS** (which Zed broadly matches); the terminal

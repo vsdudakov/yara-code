@@ -122,7 +122,6 @@ impl Drop for Pty {
     }
 }
 
-
 /// Several shells behind one panel, with a tab strip on top — the frontends
 /// draw the strip and render whichever session is active.
 #[derive(Default)]

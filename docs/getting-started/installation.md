@@ -1,6 +1,10 @@
+---
+description: Install Yara Code with Homebrew, a .deb or .rpm package, the AUR, prebuilt binaries, or from source. One install gives you both the ycode terminal editor and the ycode-gui window.
+---
+
 # Installation
 
-Yara ships two binaries from one crate: **`ycode`** (the terminal frontend) and
+Yara Code ships two binaries from one crate: **`ycode`** (the terminal frontend) and
 **`ycode-gui`** (the window). Every install method below installs **both at
 once** — one `brew install`, one `.deb`, one archive — because the point of the
 two frontends is that you can move between them without thinking about it.
@@ -71,7 +75,7 @@ makepkg -si
 
 !!! note "About apt and dnf repositories"
 
-    Yara is not served from an APT or DNF repository yet — the packages above
+    Yara Code is not served from an APT or DNF repository yet — the packages above
     install straight from the release, which is why the commands name a file
     rather than `apt install ycode`. A signed repository is planned; until then
     `brew`, the `.deb`/`.rpm` files and the tarballs are the supported paths.

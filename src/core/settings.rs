@@ -308,7 +308,7 @@ impl Settings {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("yara").join("settings.json"))
+        Some(base.join("yara-code").join("settings.json"))
     }
 
     /// Loads the settings file, falling back to defaults for anything missing
@@ -326,10 +326,7 @@ impl Settings {
                 let clash = settings.clashing_binding();
                 (settings, clash)
             }
-            Err(e) => (
-                Self::default(),
-                Some(format!("settings.json ignored: {e}")),
-            ),
+            Err(e) => (Self::default(), Some(format!("settings.json ignored: {e}"))),
         }
     }
 
@@ -525,7 +522,10 @@ mod tests {
     #[test]
     fn no_two_commands_share_a_chord() {
         let settings = Settings::default();
-        for (name, map) in [("window", &settings.keys.gui), ("terminal", &settings.keys.tui)] {
+        for (name, map) in [
+            ("window", &settings.keys.gui),
+            ("terminal", &settings.keys.tui),
+        ] {
             let mut seen: Vec<(String, String)> = Vec::new();
             for (id, chord) in map {
                 let text = chord.to_string();

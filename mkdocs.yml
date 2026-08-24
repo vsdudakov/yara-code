@@ -1,16 +1,18 @@
-# MkDocs Material configuration for the Yara documentation site.
+# MkDocs Material configuration for the Yara Code documentation site.
 # Built and deployed to GitHub Pages by .github/workflows/docs.yml.
-site_name: Yara
+site_name: Yara Code
 site_description: >-
-  A minimal code editor with two frontends over one core — a GPU-accelerated
-  window and a terminal UI that runs over SSH. Syntax highlighting, folding,
-  project search, git and a real shell, in about 15k lines of Rust.
-site_author: Yara contributors
+  Yara Code is a lightweight code editor for agent-driven development: a terminal UI
+  and a GPU window that mirror each other, written in Rust. No language server,
+  no plugins, no Electron — read the files and diffs your AI coding agent
+  wrote, fix a line, and run it over SSH. A small alternative to VS Code and
+  Zed for the Claude Code / Cursor CLI loop.
+site_author: Yara Code contributors
 site_url: https://vsdudakov.github.io/yara-code/
 repo_name: vsdudakov/yara-code
 repo_url: https://github.com/vsdudakov/yara-code
 edit_uri: edit/main/docs/
-copyright: Copyright &copy; 2026 Yara contributors — MIT License
+copyright: Copyright &copy; 2026 Yara Code contributors — MIT License
 
 theme:
   name: material

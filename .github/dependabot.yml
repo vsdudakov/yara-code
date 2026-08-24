@@ -14,7 +14,10 @@ updates:
         patterns:
           - "*"
 
-  # Rust crates.
+  # Rust crates. Patch and minor bumps travel together — they are the ones that
+  # merge on a green CI. A major bump of egui, ratatui or portable-pty is an API
+  # migration, so it comes as a pull request of its own rather than dragging the
+  # rest of the tree with it.
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -25,3 +28,6 @@ updates:
       rust:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch

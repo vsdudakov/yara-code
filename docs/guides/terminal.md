@@ -1,8 +1,12 @@
+---
+description: The built-in shell where your coding agent runs, in both the terminal UI and the window.
+---
+
 # Terminal
 
 Both frontends carry a real login shell on a pseudo-terminal, sharing one
 `core::pty` implementation. Tab completion, Ctrl-C and full-screen programs
-behave as they do outside Yara, with 5000 lines of scrollback (mouse wheel).
+behave as they do outside Yara Code, with 5000 lines of scrollback (mouse wheel).
 The frontends differ only in how they paint the grid.
 
 `Cmd+J` / `Ctrl+J` toggles the panel. `Cmd+Alt+T` / `Ctrl+Alt+T` opens another

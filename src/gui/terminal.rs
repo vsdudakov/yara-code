@@ -55,13 +55,14 @@ impl Terminal {
                 continue;
             }
             let selected = i == self.sessions.active_index();
-            let mut text = egui::RichText::new(self.sessions.name(i))
-                .size(11.0)
-                .color(if selected {
-                    color(theme.ui.fg)
-                } else {
-                    color(theme.ui.fg_faint)
-                });
+            let mut text =
+                egui::RichText::new(self.sessions.name(i))
+                    .size(11.0)
+                    .color(if selected {
+                        color(theme.ui.fg)
+                    } else {
+                        color(theme.ui.fg_faint)
+                    });
             if selected {
                 text = text.strong();
             }
@@ -184,12 +185,7 @@ impl Terminal {
         };
 
         let font_id = egui::FontId::monospace(CODE_FONT_SIZE);
-        let (cell_w, cell_h) = ui.fonts(|f| {
-            (
-                f.glyph_width(&font_id, ' '),
-                f.row_height(&font_id),
-            )
-        });
+        let (cell_w, cell_h) = ui.fonts(|f| (f.glyph_width(&font_id, ' '), f.row_height(&font_id)));
 
         let avail = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
@@ -306,11 +302,8 @@ fn mark_button(ui: &mut egui::Ui, theme: &Theme, mark: Mark, size: f32) -> egui:
             color(theme.ui.fg_dim)
         };
         if hovered {
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(3),
-                color(theme.ui.hover_bg),
-            );
+            ui.painter()
+                .rect_filled(rect, egui::CornerRadius::same(3), color(theme.ui.hover_bg));
         }
         let r = size * 0.28;
         let c = rect.center();
@@ -399,7 +392,11 @@ fn default_format(font_id: &egui::FontId, theme: &Theme) -> egui::text::TextForm
     }
 }
 
-fn cell_format(cell: &vt100::Cell, font_id: &egui::FontId, theme: &Theme) -> egui::text::TextFormat {
+fn cell_format(
+    cell: &vt100::Cell,
+    font_id: &egui::FontId,
+    theme: &Theme,
+) -> egui::text::TextFormat {
     let mut fg = vt_color(cell.fgcolor(), color(theme.ui.terminal_fg), theme);
     let mut bg = vt_color(cell.bgcolor(), egui::Color32::TRANSPARENT, theme);
     if cell.inverse() {

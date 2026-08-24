@@ -18,7 +18,10 @@ pub enum TreeEvent {
     RemoveFolder(PathBuf),
     /// User picked "Delete"; the app confirms before touching the disk.
     RequestDelete(PathBuf),
-    Moved { from: PathBuf, to: PathBuf },
+    Moved {
+        from: PathBuf,
+        to: PathBuf,
+    },
     /// A file operation failed; the app shows this in the status bar.
     Failed(String),
 }
@@ -435,10 +438,8 @@ impl FileTree {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string());
         let is_expanded = self.expanded.contains(root);
-        let (row_rect, resp) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), 24.0),
-            egui::Sense::click(),
-        );
+        let (row_rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
         let drop_hover = resp.dnd_hover_payload::<PathBuf>().is_some();
         if drop_hover {
             self.valid_drop_target = true;
@@ -559,8 +560,8 @@ impl FileTree {
             let is_selected = self.selected.as_deref() == Some(path.as_path());
 
             let full_width = ui.available_width();
-            let (row_rect, resp) = ui
-                .allocate_exact_size(egui::vec2(full_width, 22.0), egui::Sense::click_and_drag());
+            let (row_rect, resp) =
+                ui.allocate_exact_size(egui::vec2(full_width, 22.0), egui::Sense::click_and_drag());
 
             // Drag source: any row can be picked up and dropped onto a folder.
             resp.dnd_set_drag_payload(path.clone());

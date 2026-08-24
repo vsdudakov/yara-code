@@ -11,10 +11,10 @@ use std::path::Path;
 /// Rows the find bar takes: heading, field, heading, field, actions.
 const FIND_ROWS: u16 = 5;
 use crate::core::command::{Command, START_PAGE};
-use crate::core::fold;
-use crate::core::search::Field as SearchField;
 use crate::core::diff;
+use crate::core::fold;
 use crate::core::git as core_git;
+use crate::core::search::Field as SearchField;
 use crate::core::theme as core_theme;
 use crate::tui::app::{App, Focus, Prompt, SidebarView, Splitter, TabStrip};
 use crate::tui::theme::{color, on};
@@ -62,7 +62,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ])
         .split(body);
     let (sidebar, v_split, right) = (cols[0], cols[1], cols[2]);
-    app.layout.sidebar = if app.show_sidebar { sidebar } else { Rect::default() };
+    app.layout.sidebar = if app.show_sidebar {
+        sidebar
+    } else {
+        Rect::default()
+    };
     app.layout.v_split = v_split;
 
     // The sidebar runs the full height; the status line spans the editor
@@ -95,7 +99,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let find_rows = if app.find_showing() { FIND_ROWS } else { 0 };
     let editor_rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(find_rows), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(find_rows),
+            Constraint::Min(1),
+        ])
         .split(editor_area);
     let (tab_row, find_area, editor_area) = (editor_rows[0], editor_rows[1], editor_rows[2]);
 
@@ -214,7 +222,7 @@ fn draw_splitters(frame: &mut Frame, app: &App, vertical: Rect, horizontal: Rect
 /// The top bar: the app name, then the File, View and Help menus.
 fn draw_menu_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme().clone();
-    let name = " YARA ";
+    let name = " YARA CODE ";
     let labels = [" File ", " View ", " Help "];
     let mut spans = vec![Span::styled(
         name,
@@ -273,8 +281,18 @@ fn draw_sidebar_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     app.layout.sidebar_header = area;
 
     let entries = [
-        (SidebarView::Files, app.icons.nav_files, "FILES", Focus::Tree),
-        (SidebarView::Search, app.icons.nav_search, "SEARCH", Focus::Search),
+        (
+            SidebarView::Files,
+            app.icons.nav_files,
+            "FILES",
+            Focus::Tree,
+        ),
+        (
+            SidebarView::Search,
+            app.icons.nav_search,
+            "SEARCH",
+            Focus::Search,
+        ),
         (SidebarView::Git, app.icons.nav_git, "GIT", Focus::Git),
     ];
     // Labels join the icons when the panel is wide enough for them.
@@ -487,7 +505,10 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            pad(&format!(" {}", clip(&summary, width.saturating_sub(1))), width),
+            pad(
+                &format!(" {}", clip(&summary, width.saturating_sub(1))),
+                width,
+            ),
             on(tone, theme.ui.sidebar_bg),
         ))),
         row(y),
@@ -506,9 +527,7 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     app.git_selected = app.git_selected.min(app.git.changes.len() - 1);
-    let offset = app
-        .git_selected
-        .saturating_sub(height.saturating_sub(1));
+    let offset = app.git_selected.saturating_sub(height.saturating_sub(1));
     app.layout.git_list_offset = offset;
 
     let lines: Vec<Line> = app
@@ -810,7 +829,7 @@ fn draw_start_page(frame: &mut Frame, app: &App, area: Rect) {
     if head_room > body_height + 4 {
         lines.push(Line::from(vec![
             Span::styled(left.clone(), plain),
-            Span::styled("YARA", title),
+            Span::styled("YARA CODE", title),
         ]));
         for (text, style) in header {
             lines.push(Line::from(vec![
@@ -897,8 +916,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let toggles_x = options.x + (1 + LABEL.len() + gap) as u16;
     app.layout.search_toggles = Rect {
         x: toggles_x,
-        width: (toggles_width as u16)
-            .min((options.x + options.width).saturating_sub(toggles_x)),
+        width: (toggles_width as u16).min((options.x + options.width).saturating_sub(toggles_x)),
         ..options
     };
     frame.render_widget(
@@ -1020,7 +1038,10 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     let action = "Replace All";
     let show_action = !app.search.results.is_empty();
     if show_action {
-        let left = format!(" {}", clip(&summary, width.saturating_sub(action.len() + 3)));
+        let left = format!(
+            " {}",
+            clip(&summary, width.saturating_sub(action.len() + 3))
+        );
         let pad_width = width.saturating_sub(left.chars().count() + action.len() + 1);
         app.layout.search_action = Rect {
             x: summary_row.x + (left.chars().count() + pad_width) as u16,
@@ -1061,7 +1082,11 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     for file in &app.search.results {
         let rel = app.project.display(&file.path);
         // File heading with the same disclosure triangle the window shows.
-        let heading = format!("{} {}", app.icons.dir_open, trim_front(&rel, width.saturating_sub(2)));
+        let heading = format!(
+            "{} {}",
+            app.icons.dir_open,
+            trim_front(&rel, width.saturating_sub(2))
+        );
         lines.push(Line::from(Span::styled(
             pad(&heading, width),
             on(theme.ui.accent_light, theme.ui.sidebar_bg),
@@ -1078,10 +1103,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
             // background exactly as in the window.
             let number = format!("{:>5}  ", m.line);
             let mut used = number.chars().count();
-            let mut spans = vec![Span::styled(
-                number,
-                on(theme.ui.fg_faint, bg),
-            )];
+            let mut spans = vec![Span::styled(number, on(theme.ui.fg_faint, bg))];
             for (text, highlight) in [
                 (m.prefix.as_str(), false),
                 (m.matched.as_str(), true),
@@ -1289,7 +1311,10 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
     actions.push("<");
     actions.push(">");
     let actions_width: usize = actions.iter().map(|a| a.chars().count() + 2).sum();
-    let left = format!(" {}", clip(&summary, width.saturating_sub(actions_width + 2)));
+    let left = format!(
+        " {}",
+        clip(&summary, width.saturating_sub(actions_width + 2))
+    );
     let lead = width.saturating_sub(left.chars().count() + actions_width);
     place(&mut spans, &mut x, left, on(tone, theme.ui.status_bg));
     place(&mut spans, &mut x, pad("", lead), plain);
@@ -1318,16 +1343,15 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
     let theme = app.theme().clone();
     let focused = app.focus == Focus::Diff;
-    let header = Rect {
-        height: 1,
-        ..whole
-    };
+    let header = Rect { height: 1, ..whole };
     let area = Rect {
         y: whole.y + 1,
         height: whole.height.saturating_sub(1),
         ..whole
     };
-    let Some(diff) = app.active_diff() else { return };
+    let Some(diff) = app.active_diff() else {
+        return;
+    };
 
     let added = core_theme::ansi256(&theme, 2);
     let removed = core_theme::ansi256(&theme, 1);
@@ -1406,10 +1430,7 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
                 diff::Kind::Removed => (Some(removed), None),
             };
             let mut spans = side(row.left.as_ref(), left_tint);
-            spans.push(Span::styled(
-                "│",
-                on(theme.ui.border, theme.ui.editor_bg),
-            ));
+            spans.push(Span::styled("│", on(theme.ui.border, theme.ui.editor_bg)));
             spans.extend(side(row.right.as_ref(), right_tint));
             Line::from(spans)
         })
@@ -1420,7 +1441,11 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
 /// A changed line's background: the tint laid thinly over the editor's own.
 fn wash(tint: (u8, u8, u8), base: (u8, u8, u8)) -> (u8, u8, u8) {
     let mix = |t: u8, b: u8| ((t as u16 * 22 + b as u16 * 78) / 100) as u8;
-    (mix(tint.0, base.0), mix(tint.1, base.1), mix(tint.2, base.2))
+    (
+        mix(tint.0, base.0),
+        mix(tint.1, base.1),
+        mix(tint.2, base.2),
+    )
 }
 
 /// The tab strip over the editor: the open files, then any open diffs.
@@ -1659,12 +1684,8 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         let selected = selection.and_then(|(from, to)| {
             let start = *line_starts.get(n)?;
             let end = *line_starts.get(n + 1)?;
-            (from < end && to > start).then(|| {
-                (
-                    from.saturating_sub(start),
-                    (to - start).min(end - start),
-                )
-            })
+            (from < end && to > start)
+                .then(|| (from.saturating_sub(start), (to - start).min(end - start)))
         });
         if let Some(regions) = app.highlight.get(n) {
             for (rgb, italic, text) in regions {
@@ -1710,10 +1731,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         // A selection running past the end of the line shows on the newline.
         if selected.is_some_and(|(s, e)| e > col && col >= s) && col < text_width {
-            spans.push(Span::styled(
-                " ",
-                on(theme.ui.fg, theme.ui.selection),
-            ));
+            spans.push(Span::styled(" ", on(theme.ui.fg, theme.ui.selection)));
         }
         if folded {
             // A collapsed block shows how much it swallowed.
@@ -1878,7 +1896,10 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
                         };
                         (text, cell_style(cell, &theme))
                     }
-                    None => (" ".to_string(), on(theme.ui.terminal_fg, theme.ui.editor_bg)),
+                    None => (
+                        " ".to_string(),
+                        on(theme.ui.terminal_fg, theme.ui.editor_bg),
+                    ),
                 };
                 match run_style {
                     Some(current) if current == style => run.push_str(&text),
@@ -1896,8 +1917,8 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             lines.push(Line::from(spans));
         }
-        let cursor = (!screen.hide_cursor() && screen.scrollback() == 0)
-            .then(|| screen.cursor_position());
+        let cursor =
+            (!screen.hide_cursor() && screen.scrollback() == 0).then(|| screen.cursor_position());
         (lines, cursor)
     });
 
@@ -2081,14 +2102,7 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         Prompt::Goto { candidates, .. } => candidates
             .iter()
-            .map(|c| {
-                format!(
-                    "{}:{}  {}",
-                    app.project.display(&c.path),
-                    c.line,
-                    c.text
-                )
-            })
+            .map(|c| format!("{}:{}  {}", app.project.display(&c.path), c.line, c.text))
             .collect(),
         _ => Vec::new(),
     };
@@ -2180,9 +2194,11 @@ fn trim_front(text: &str, width: usize) -> String {
     if len <= width {
         return text.to_string();
     }
-    format!("...{}", text.chars().skip(len - width + 3).collect::<String>())
+    format!(
+        "...{}",
+        text.chars().skip(len - width + 3).collect::<String>()
+    )
 }
-
 
 /// The right-click context menu, drawn last so it sits above everything.
 fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -2231,8 +2247,8 @@ fn draw_menu(frame: &mut Frame, app: &mut App, area: Rect) {
             let shortcut = menu.shortcut_at_row(i);
             let left = format!("{marker} {}", item.label());
             // The chord hint is right-aligned in the same row.
-            let gap = inner_width
-                .saturating_sub(left.chars().count() + shortcut.chars().count() + 1);
+            let gap =
+                inner_width.saturating_sub(left.chars().count() + shortcut.chars().count() + 1);
             let label = pad(
                 &format!("{left}{}{shortcut} ", " ".repeat(gap)),
                 inner_width,

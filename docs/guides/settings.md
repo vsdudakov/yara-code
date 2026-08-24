@@ -1,11 +1,15 @@
+---
+description: Everything in settings.json: themes, indentation, font size, go-to-definition modifiers and key bindings.
+---
+
 # Settings
 
-Everything Yara reads lives in one JSON file, editable from inside the editor
+Everything Yara Code reads lives in one JSON file, editable from inside the editor
 (**File → Settings**, `Cmd+,` / `Ctrl+,`). Saving it applies the changes
 immediately. It is written on first run to:
 
 ```
-~/.config/yara/settings.json
+~/.config/yara-code/settings.json
 ```
 
 ```jsonc

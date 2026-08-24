@@ -1,6 +1,10 @@
+---
+description: How one Rust core drives two frontends: a ratatui terminal UI and an egui GPU window, sharing buffers, search, git and key bindings.
+---
+
 # Architecture
 
-Yara is one crate with three modules and a rule: **anything a user could do in
+Yara Code is one crate with three modules and a rule: **anything a user could do in
 both frontends lives in `core`**. Each frontend only paints it and translates
 its own input.
 
@@ -56,7 +60,7 @@ The settings tests then enforce the rest: every command must be bound out of the
 box (bar the handful the text widget or the mouse owns), and no two commands may
 share a chord.
 
-## What Yara deliberately does not have
+## What Yara Code deliberately does not have
 
 - No language server. Go-to-definition is a keyword heuristic that falls back to
   listing references.

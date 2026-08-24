@@ -137,6 +137,16 @@ impl App {
                     None => {}
                 }
             }
+            Command::Undo | Command::Redo => {
+                let back = command == Command::Undo;
+                if !self.editor.step_history(back) {
+                    self.status = Some(if back {
+                        "nothing to undo".into()
+                    } else {
+                        "nothing to redo".into()
+                    });
+                }
+            }
             Command::OpenRecent => {
                 if self.settings.recent_projects.is_empty() {
                     self.status = Some("no recent projects yet".into());
@@ -794,7 +804,7 @@ impl App {
         match choice {
             Some(Choice::Save) => {
                 if self.editor.buffers.save(index) {
-                    self.editor.buffers.close(index);
+                    self.editor.close(index);
                     self.git.invalidate();
                 } else {
                     self.status = Some(format!("could not write \"{name}\""));
@@ -802,7 +812,7 @@ impl App {
                 self.editor.pending_close = None;
             }
             Some(Choice::Discard) => {
-                self.editor.buffers.close(index);
+                self.editor.close(index);
                 self.editor.pending_close = None;
             }
             Some(Choice::Cancel) => self.editor.pending_close = None,
@@ -1110,7 +1120,7 @@ impl App {
     /// heading over each field, both fields always present, and the counter and
     /// the actions on one line under them.
     fn find_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        if !self.editor.find.open {
+        if !self.editor.find_showing() {
             return;
         }
         let mut close = false;
@@ -1140,6 +1150,11 @@ impl App {
                 ui.horizontal(|ui| {
                     heading(ui, "FIND", ui.memory(|m| m.has_focus(query_id)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // The close mark sits in the corner, above everything
+                        // the bar does.
+                        if ui.button(egui::RichText::new("×").size(11.0)).clicked() {
+                            close = true;
+                        }
                         let toggle =
                             |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
                                 let text = egui::RichText::new(label)
@@ -1207,27 +1222,29 @@ impl App {
                             .color(color(tone))
                             .size(11.0),
                     );
+                    // Right to left, so they read Replace · Replace All · < ·
+                    // > along the bottom edge. The two replace actions only
+                    // appear once there is something to replace with.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(egui::RichText::new("×").size(11.0)).clicked() {
-                            close = true;
-                        }
-                        if ui
-                            .button(egui::RichText::new("Replace All").size(11.0))
-                            .clicked()
-                        {
-                            replace_all = true;
-                        }
-                        if ui
-                            .button(egui::RichText::new("Replace").size(11.0))
-                            .clicked()
-                        {
-                            replace_one = true;
-                        }
                         if ui.button(egui::RichText::new(">").size(11.0)).clicked() {
                             step = 1;
                         }
                         if ui.button(egui::RichText::new("<").size(11.0)).clicked() {
                             step = -1;
+                        }
+                        if !self.editor.find.replace.is_empty() {
+                            if ui
+                                .button(egui::RichText::new("Replace All").size(11.0))
+                                .clicked()
+                            {
+                                replace_all = true;
+                            }
+                            if ui
+                                .button(egui::RichText::new("Replace").size(11.0))
+                                .clicked()
+                            {
+                                replace_one = true;
+                            }
                         }
                     });
                 });

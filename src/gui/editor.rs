@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::core::buffer::{word_at, Buffers};
 use crate::core::find::Find;
 use crate::core::fold::{self, Region};
+use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::settings::{Indent, Modifier};
 use crate::core::theme::Theme;
@@ -51,10 +52,14 @@ impl Editor {
     /// Opens the bar, seeding it from the buffer and landing on the match
     /// nearest the cursor.
     pub fn open_find(&mut self) {
-        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+        let Some((text, path)) = self
+            .buffers
+            .active()
+            .map(|b| (b.text.clone(), b.path.clone()))
+        else {
             return;
         };
-        self.find.open = true;
+        self.find.open_on(&path);
         self.find.focus_pending = true;
         self.find.refresh(&text);
         let cursor_chars = self.cursor_char_index();
@@ -78,10 +83,14 @@ impl Editor {
         self.find.regex = regex;
         self.find.case_sensitive = case_sensitive;
         self.find.whole_word = whole_word;
-        self.find.open = true;
-        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+        let Some((text, path)) = self
+            .buffers
+            .active()
+            .map(|b| (b.text.clone(), b.path.clone()))
+        else {
             return;
         };
+        self.find.open_on(&path);
         self.find.refresh(&text);
         if let Some(index) = self.find.hits.iter().position(|h| h.line + 1 == line) {
             self.find.current = index;
@@ -133,8 +142,10 @@ impl Editor {
             return;
         };
         self.find.refresh(&text);
+        let at = self.cursor_offset();
         if let Some((updated, cursor)) = self.find.replace_current(&text) {
             if let Some(buf) = self.buffers.active_mut() {
+                buf.record(EditKind::Bulk, at);
                 buf.text = updated.clone();
             }
             self.find.refresh(&updated);
@@ -150,7 +161,9 @@ impl Editor {
         self.find.refresh(&text);
         match self.find.replace_all(&text) {
             Some((updated, count)) => {
+                let at = self.cursor_offset();
                 if let Some(buf) = self.buffers.active_mut() {
+                    buf.record(EditKind::Bulk, at);
                     buf.text = updated.clone();
                 }
                 self.find.refresh(&updated);
@@ -158,6 +171,45 @@ impl Editor {
             }
             None => 0,
         }
+    }
+
+    /// The cursor as a char offset into the active buffer, from the (line,
+    /// column) the text widget last reported.
+    fn cursor_offset(&self) -> usize {
+        let Some((line, col)) = self.cursor else {
+            return 0;
+        };
+        let Some(buf) = self.buffers.active() else {
+            return 0;
+        };
+        let mut offset = 0usize;
+        for (n, text) in buf.text.split('\n').enumerate() {
+            if n + 1 == line {
+                return offset + col.saturating_sub(1).min(text.chars().count());
+            }
+            offset += text.chars().count() + 1;
+        }
+        offset
+    }
+
+    /// Undo (`back`) or redo; returns false when there is nothing to step to.
+    pub fn step_history(&mut self, back: bool) -> bool {
+        let at = self.cursor_offset();
+        let Some(buf) = self.buffers.active_mut() else {
+            return false;
+        };
+        let moved = if back { buf.undo(at) } else { buf.redo(at) };
+        let Some(cursor) = moved else {
+            return false;
+        };
+        let text = buf.text.clone();
+        // Put the cursor back where the step left it, and keep the find bar's
+        // hits in step with the text it is searching.
+        self.pending_select = Some((cursor, cursor));
+        if self.find_showing() {
+            self.find.refresh(&text);
+        }
+        true
     }
 
     // ----- folding -------------------------------------------------------
@@ -337,7 +389,27 @@ impl Editor {
         if self.buffers.list.get(index).is_some_and(|b| b.modified()) {
             self.pending_close = Some(index);
         } else {
-            self.buffers.close(index);
+            self.close(index);
+        }
+    }
+
+    /// Closes a buffer. A find bar belonging to that file closes with it;
+    /// one belonging to another tab stays as it was.
+    pub fn close(&mut self, index: usize) {
+        let closed = self.buffers.list.get(index).map(|b| b.path.clone());
+        self.buffers.close(index);
+        if closed.is_some() && self.find.owner == closed {
+            self.find.open = false;
+            self.find.owner = None;
+        }
+    }
+
+    /// Whether the find bar is showing: it belongs to one file, and hides
+    /// while another tab is in front.
+    pub fn find_showing(&self) -> bool {
+        match self.buffers.active() {
+            Some(buf) => self.find.shows_for(&buf.path),
+            None => false,
         }
     }
 
@@ -366,12 +438,16 @@ impl Editor {
         // with the hidden lines removed and maps edits back afterwards.
         let mapping = Mapping::new(&buf.text, &hidden);
         let mut shown = mapping.display.clone();
+        // What the widget starts from, and where the cursor was: an edit is
+        // whatever differs from this once the widget has had its turn.
+        let display_len = mapping.display.chars().count();
+        let cursor_before = self.cursor_offset();
         let visible = mapping.lines.clone();
         let text_lines: Vec<String> = buf.text.split('\n').map(str::to_string).collect();
 
         // Find hits, mapped from the real text into what is on screen, so
         // every match is painted and the current one stands out.
-        let hits: Vec<(usize, usize, bool)> = if self.find.open {
+        let hits: Vec<(usize, usize, bool)> = if self.find.shows_for(&path) {
             let mut starts = vec![0usize; text_lines.len() + 1];
             let mut display_start = vec![0usize; text_lines.len() + 1];
             let mut real = 0usize;
@@ -641,12 +717,37 @@ impl Editor {
         if let Some(line) = toggle {
             self.toggle_fold(line);
         }
-        // The edited display text goes back into the real buffer.
+        // The edited display text goes back into the real buffer. What it
+        // replaced becomes an undo step, folded into the run being typed.
+        let edited = shown != mapping.display;
         if let Some(buf) = self.buffers.list.get_mut(self.buffers.active) {
+            if edited {
+                let kind = match shown.chars().count().cmp(&display_len) {
+                    std::cmp::Ordering::Greater => EditKind::Insert,
+                    std::cmp::Ordering::Less => EditKind::Delete,
+                    // Same length, different text: a replacement, not a run.
+                    std::cmp::Ordering::Equal => EditKind::Bulk,
+                };
+                buf.record(kind, cursor_before);
+            }
             if hidden.is_empty() {
                 buf.text = shown;
             } else {
                 mapping.splice(&mut buf.text, &shown);
+            }
+        }
+        // Match highlighting is painted from character offsets, so an edit
+        // that shifts the text has to shift the hits with it.
+        if edited && self.find_showing() {
+            if let Some(text) = self.buffers.active().map(|b| b.text.clone()) {
+                self.find.refresh(&text);
+            }
+        }
+        // A cursor that moved without an edit ends the run being typed, so undo
+        // follows what was typed where.
+        if !edited && self.cursor_offset() != cursor_before {
+            if let Some(buf) = self.buffers.list.get_mut(self.buffers.active) {
+                buf.history.end_run();
             }
         }
 

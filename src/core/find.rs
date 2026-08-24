@@ -3,6 +3,8 @@
 //! It shares the query options with project search so the two feel like one
 //! feature: plain or regular expression, case sensitivity, whole words.
 
+use std::path::{Path, PathBuf};
+
 use regex::{Regex, RegexBuilder};
 
 /// One hit, as character offsets into the buffer.
@@ -17,6 +19,9 @@ pub struct Hit {
 #[derive(Default)]
 pub struct Find {
     pub open: bool,
+    /// The file being searched. The bar belongs to that file: switching tabs
+    /// hides it, and coming back brings it — query, hits and all — with you.
+    pub owner: Option<PathBuf>,
     pub query: String,
     pub replace: String,
     pub regex: bool,
@@ -28,10 +33,33 @@ pub struct Find {
     pub current: usize,
     pub error: Option<String>,
     pub focus_pending: bool,
-    ran: Option<(String, bool, bool, bool, usize)>,
+    ran: Option<(String, bool, bool, bool, u64)>,
+}
+
+fn hash_of(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Find {
+    /// Whether the bar belongs to `path` and should be drawn over it.
+    pub fn shows_for(&self, path: &Path) -> bool {
+        self.open && self.owner.as_deref() == Some(path)
+    }
+
+    /// Opens the bar on `path`, moving it there if it was on another file.
+    pub fn open_on(&mut self, path: &Path) {
+        if self.owner.as_deref() != Some(path) {
+            self.owner = Some(path.to_path_buf());
+            self.hits.clear();
+            self.current = 0;
+            self.ran = None;
+        }
+        self.open = true;
+    }
+
     fn compile(&self) -> Result<Regex, String> {
         let base = if self.regex {
             self.query.clone()
@@ -58,12 +86,15 @@ impl Find {
 
     /// Recomputes hits when the query, the options or the text changed.
     pub fn refresh(&mut self, text: &str) {
+        // The text is keyed by a hash, not its length: a replacement of equal
+        // length (and the undo of one) changes what matches without changing
+        // how long the file is.
         let key = (
             self.query.clone(),
             self.regex,
             self.case_sensitive,
             self.whole_word,
-            text.len(),
+            hash_of(text),
         );
         if self.ran.as_ref() == Some(&key) {
             return;

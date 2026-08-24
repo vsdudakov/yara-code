@@ -62,8 +62,17 @@ The GPU frontend is likewise buildable alone with `--features gui`.
   unit (tabs, 2/4/8 spaces) is inferred from the file being edited.
 - **Find in file** — `Ctrl+F` opens the same form the project search uses: a lit
   `FIND` / `REPLACE` heading over each field, both always shown, `…` for an empty
-  one, the option toggles at the right edge, and the counter with Replace /
-  Replace All under them. `Tab` switches field.
+  one, the option toggles and the close mark in the top-right corner, and the
+  counter along the bottom with `Replace` · `Replace All` · `<` · `>` at its
+  right end — the two replace actions only once the replace field has something
+  in it. `Tab` switches field. The bar belongs to the file it was opened on:
+  switching tabs hides it and coming back brings it — query, options and match
+  counter — with you, closing that file closes it, and match highlighting
+  follows the text as you edit.
+- **Undo / redo** — every change is undoable in both frontends, including
+  Replace All and Replace in file: a run of typing steps back as one, a bulk
+  rewrite as one, and the cursor returns to where the step left it. 200 steps
+  per buffer.
 - **Project search** — live, case-insensitive, grouped by file, click/Enter to
   jump, with an **exclude box** above the query taking comma-separated globs in
   VS Code's spelling: `target, *.lock, **/node_modules, src/generated`. A bare
@@ -184,7 +193,9 @@ Defaults; all of them are rebindable in `settings.json`.
 | Toggle sidebar / terminal | `Cmd+B` / `Cmd+J` | `Ctrl+B` / `Ctrl+J` |
 | Search / Files sidebar | `Cmd+Shift+F` / `Cmd+Shift+E` | `Ctrl+F` / `Ctrl+E` |
 | Switch query / exclude box | click the field | `Ctrl+F` again |
+| Switch find / replace field | click the field | `Tab` |
 | Theme picker | `Cmd+Shift+T` | `Ctrl+T` |
+| Undo / Redo | `Cmd+Z` / `Cmd+Shift+Z` | `Ctrl+Z` / `Alt+U` |
 | Close tab / Quit | `Cmd+W` / `Cmd+Q` | `Ctrl+W` / `Ctrl+Q` |
 | Go to definition | `Cmd+click` | `Ctrl+G`, `Ctrl`/`Alt+click` |
 | Fold / unfold | `Cmd+Alt+F` | `Alt+F` |

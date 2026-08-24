@@ -89,7 +89,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // The find bar sits between the tabs and the text, like the window's.
     // Heading, field, heading, field, actions — the search panel's form.
-    let find_rows = if app.find.open { FIND_ROWS } else { 0 };
+    let find_rows = if app.find_showing() { FIND_ROWS } else { 0 };
     let editor_rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(find_rows), Constraint::Min(1)])
@@ -145,7 +145,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         reset_git_rects(app);
     }
     draw_editor(frame, app, tab_row, editor_area);
-    if app.find.open {
+    if app.find_showing() {
         draw_find(frame, app, find_area);
     } else {
         app.layout.find_query = Rect::default();
@@ -1146,7 +1146,8 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
     const LABEL: &str = "FIND";
-    let toggles_width = 2 + 1 + 2 + 1 + 2 + 1;
+    // Aa ab .* then the close mark, each with a space after it.
+    let toggles_width = 2 + 1 + 2 + 1 + 2 + 1 + 1 + 1;
     let gap = width.saturating_sub(1 + LABEL.len() + toggles_width);
     let toggles_x = area.x + (1 + LABEL.len() + gap) as u16;
     app.layout.find_case = Rect {
@@ -1163,6 +1164,11 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         x: toggles_x + 6,
         ..app.layout.find_case
     };
+    app.layout.find_close = Rect {
+        x: toggles_x + 9,
+        width: 1,
+        ..app.layout.find_case
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" ", plain),
@@ -1173,6 +1179,8 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled("ab", toggle_style(app.find.whole_word)),
             Span::styled(" ", plain),
             Span::styled(".*", toggle_style(app.find.regex)),
+            Span::styled(" ", plain),
+            Span::styled("×", on(theme.ui.fg, theme.ui.status_bg)),
             Span::styled(" ", plain),
         ])),
         row(y),
@@ -1247,23 +1255,35 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::styled(text, style));
         rect
     };
-    let actions = ["<", ">", "Replace", "Replace All", "×"];
+    let show_replace = !app.find.replace.is_empty();
+    let mut actions: Vec<&str> = Vec::new();
+    if show_replace {
+        actions.push("Replace");
+        actions.push("Replace All");
+    }
+    actions.push("<");
+    actions.push(">");
     let actions_width: usize = actions.iter().map(|a| a.chars().count() + 2).sum();
     let left = format!(" {}", clip(&summary, width.saturating_sub(actions_width + 2)));
     let lead = width.saturating_sub(left.chars().count() + actions_width);
     place(&mut spans, &mut x, left, on(tone, theme.ui.status_bg));
     place(&mut spans, &mut x, pad("", lead), plain);
     let action = on(theme.ui.fg, theme.ui.status_bg);
+    if show_replace {
+        place(&mut spans, &mut x, " ".into(), plain);
+        app.layout.find_replace_one = place(&mut spans, &mut x, "Replace".into(), action);
+        place(&mut spans, &mut x, "  ".into(), plain);
+        app.layout.find_replace_all = place(&mut spans, &mut x, "Replace All".into(), action);
+        place(&mut spans, &mut x, " ".into(), plain);
+    } else {
+        app.layout.find_replace_one = Rect::default();
+        app.layout.find_replace_all = Rect::default();
+        place(&mut spans, &mut x, " ".into(), plain);
+    }
     place(&mut spans, &mut x, " ".into(), plain);
     app.layout.find_prev = place(&mut spans, &mut x, "<".into(), action);
     place(&mut spans, &mut x, "  ".into(), plain);
     app.layout.find_next = place(&mut spans, &mut x, ">".into(), action);
-    place(&mut spans, &mut x, "  ".into(), plain);
-    app.layout.find_replace_one = place(&mut spans, &mut x, "Replace".into(), action);
-    place(&mut spans, &mut x, "  ".into(), plain);
-    app.layout.find_replace_all = place(&mut spans, &mut x, "Replace All".into(), action);
-    place(&mut spans, &mut x, "  ".into(), plain);
-    app.layout.find_close = place(&mut spans, &mut x, "×".into(), action);
     place(&mut spans, &mut x, " ".into(), plain);
     frame.render_widget(Paragraph::new(Line::from(spans)), action_row);
 }
@@ -1391,7 +1411,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, tab_area: Rect, area: Rect) {
     // Selection is a character range over the whole buffer; each line needs to
     // know where it starts to paint its share of it.
     let selection = app.selection();
-    let show_hits = app.find.open && !app.find.hits.is_empty();
+    let show_hits = app.find_showing() && !app.find.hits.is_empty();
     let mut line_starts: Vec<usize> = Vec::with_capacity(app.highlight.len() + 1);
     if selection.is_some() || show_hits {
         let mut at = 0usize;
@@ -1825,6 +1845,21 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list: Vec<String> = match prompt {
         Prompt::Themes => app.themes.iter().map(|t| t.name.clone()).collect(),
+        Prompt::Recent => app
+            .settings
+            .recent_projects
+            .iter()
+            .map(|path| {
+                // Home-relative, the way the paths were typed in.
+                let text = path.display().to_string();
+                match std::env::var("HOME") {
+                    Ok(home) if !home.is_empty() && text.starts_with(&home) => {
+                        format!("~{}", &text[home.len()..])
+                    }
+                    _ => text,
+                }
+            })
+            .collect(),
         Prompt::Help(entries) => entries.clone(),
         Prompt::GitRepo => app
             .git

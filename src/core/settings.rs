@@ -165,6 +165,8 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::FocusGit => "Cmd+Shift+G",
         Command::ThemePicker => "Cmd+Shift+T",
         Command::GoBack => "Ctrl+-",
+        Command::Undo => "Cmd+Z",
+        Command::Redo => "Cmd+Shift+Z",
         // Select all, copy, cut and paste are the text widget's own; binding
         // them here would take them away from it.
         Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => return None,
@@ -207,6 +209,9 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
         Command::ThemePicker => "Ctrl+T",
         Command::GotoDefinition => "Ctrl+G",
         Command::GoBack => "Ctrl+Y",
+        // Terminals cannot report Ctrl+Shift, so redo takes the Alt tier.
+        Command::Undo => "Ctrl+Z",
+        Command::Redo => "Alt+U",
         Command::SelectAll => "Ctrl+A",
         Command::Copy => "Ctrl+C",
         Command::Cut => "Ctrl+X",

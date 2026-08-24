@@ -7,6 +7,7 @@ pub mod fold;
 pub mod fs_ops;
 pub mod git;
 pub mod glob;
+pub mod history;
 pub mod indent;
 pub mod project;
 

@@ -2,14 +2,45 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::core::history::{EditKind, History, Snapshot};
+
 pub struct Buffer {
     pub path: PathBuf,
     pub text: String,
     pub saved_text: String,
     pub extension: String,
+    /// Undo/redo for this buffer, fed by whichever frontend is editing it.
+    pub history: History,
 }
 
 impl Buffer {
+    /// Records the state a change is about to replace. Call before mutating
+    /// `text`, with the kind of change and where the cursor is.
+    pub fn record(&mut self, kind: EditKind, cursor: usize) {
+        self.history.begin(kind, &self.text, cursor);
+    }
+
+    /// Steps back, returning where the cursor should go.
+    pub fn undo(&mut self, cursor: usize) -> Option<usize> {
+        let now = Snapshot {
+            text: self.text.clone(),
+            cursor,
+        };
+        let back = self.history.undo(now)?;
+        self.text = back.text;
+        Some(back.cursor)
+    }
+
+    pub fn redo(&mut self, cursor: usize) -> Option<usize> {
+        let now = Snapshot {
+            text: self.text.clone(),
+            cursor,
+        };
+        let forward = self.history.redo(now)?;
+        self.text = forward.text;
+        Some(forward.cursor)
+    }
+
     pub fn modified(&self) -> bool {
         self.text != self.saved_text
     }
@@ -60,6 +91,7 @@ impl Buffers {
             saved_text: text.clone(),
             text,
             extension,
+            history: History::default(),
         });
         self.active = self.list.len() - 1;
         true

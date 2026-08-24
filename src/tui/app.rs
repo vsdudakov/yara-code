@@ -20,6 +20,7 @@ use crate::core::command::{Chord, Command, Key, Mods};
 use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
 use crate::core::git::GitState;
+use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::project::Project;
 use crate::core::settings::{Modifier, Settings};
@@ -487,6 +488,9 @@ impl App {
                     Event::Resize(..) => {}
                     _ => redraw = false,
                 }
+                // A tab switch can hide the find bar out from under the
+                // keyboard, so the focus is settled before the next frame.
+                self.tab_changed();
             }
         }
         Ok(())
@@ -552,6 +556,14 @@ impl App {
         self.buffers.close(i);
         if i < self.edit.len() {
             self.edit.remove(i);
+        }
+        // The find bar searches the file that was open; closing it closes the
+        // search with it.
+        if self.find.open {
+            self.find.open = false;
+            if self.focus == Focus::Find {
+                self.focus = Focus::Editor;
+            }
         }
         if self.buffers.is_empty() {
             self.focus = Focus::Tree;
@@ -661,9 +673,33 @@ impl App {
         }
     }
 
+    /// Called after the active tab changes: a find bar belonging to the file
+    /// left behind hides, so the keyboard cannot stay in it.
+    fn tab_changed(&mut self) {
+        if self.focus == Focus::Find && !self.find_showing() {
+            self.focus = Focus::Editor;
+        }
+    }
+
+    /// Whether the find bar is showing: it belongs to one file, and hides
+    /// while another tab is in front.
+    pub fn find_showing(&self) -> bool {
+        match self.buffers.active() {
+            Some(buf) => self.find.shows_for(&buf.path),
+            None => false,
+        }
+    }
+
     fn mark_dirty(&mut self) {
         self.highlight_key = None;
         self.link = None;
+        // Match highlighting is drawn from character offsets, so an edit that
+        // shifts the text has to shift the hits with it.
+        if self.find_showing() {
+            if let Some(text) = self.buffers.active().map(|b| b.text.clone()) {
+                self.find.refresh(&text);
+            }
+        }
     }
 
     // ----- selection -----------------------------------------------------
@@ -703,9 +739,11 @@ impl App {
         let Some((start, end)) = self.selection() else {
             return false;
         };
+        let cursor = self.cursor_index();
         let Some(buf) = self.buffers.active_mut() else {
             return false;
         };
+        buf.record(EditKind::Bulk, cursor);
         let from = Self::byte_of_char(&buf.text, start);
         let to = Self::byte_of_char(&buf.text, end);
         buf.text.replace_range(from..to, "");
@@ -713,6 +751,29 @@ impl App {
         self.set_cursor_from_index(start);
         self.mark_dirty();
         true
+    }
+
+    /// Undo (`back`) or redo, putting the cursor where the step left it.
+    fn step_history(&mut self, back: bool) {
+        let cursor = self.cursor_index();
+        let Some(buf) = self.buffers.active_mut() else {
+            return;
+        };
+        let moved = if back { buf.undo(cursor) } else { buf.redo(cursor) };
+        let Some(at) = moved else {
+            self.status = if back {
+                "nothing to undo".into()
+            } else {
+                "nothing to redo".into()
+            };
+            return;
+        };
+        self.clear_selection();
+        self.set_cursor_from_index(at);
+        self.mark_dirty();
+        if self.find_showing() {
+            self.refresh_find();
+        }
     }
 
     fn select_all(&mut self) {
@@ -828,9 +889,16 @@ impl App {
 
     fn insert(&mut self, s: &str) {
         let index = self.cursor_index();
+        // A pasted or otherwise multi-character insert is a step of its own.
+        let kind = if s.chars().count() > 1 {
+            EditKind::Bulk
+        } else {
+            EditKind::Insert
+        };
         let Some(buf) = self.buffers.active_mut() else {
             return;
         };
+        buf.record(kind, index);
         let byte = Self::byte_of_char(&buf.text, index);
         buf.text.insert_str(byte, s);
         self.set_cursor_from_index(index + s.chars().count());
@@ -845,6 +913,7 @@ impl App {
         let Some(buf) = self.buffers.active_mut() else {
             return;
         };
+        buf.record(EditKind::Delete, index);
         let start = Self::byte_of_char(&buf.text, index - 1);
         let end = Self::byte_of_char(&buf.text, index);
         buf.text.replace_range(start..end, "");
@@ -860,6 +929,7 @@ impl App {
         if index >= buf.text.chars().count() {
             return;
         }
+        buf.record(EditKind::Delete, index);
         let start = Self::byte_of_char(&buf.text, index);
         let end = Self::byte_of_char(&buf.text, index + 1);
         buf.text.replace_range(start..end, "");
@@ -873,6 +943,8 @@ impl App {
         let Some(buf) = self.buffers.active_mut() else {
             return;
         };
+        // Enter closes the run being typed, so a line undoes as a line.
+        buf.record(EditKind::Bulk, index);
         let edit = indent::newline_edit(&buf.text, index, &buf.extension, &config);
         let byte = Self::byte_of_char(&buf.text, index);
         buf.text.insert_str(byte, &edit.insert);
@@ -881,6 +953,9 @@ impl App {
     }
 
     fn move_cursor(&mut self, dl: isize, dc: isize) {
+        if let Some(buf) = self.buffers.active_mut() {
+            buf.history.end_run();
+        }
         let state_line = self.edit[self.buffers.active].line;
         if dl != 0 {
             // Vertical movement walks the visible lines, stepping over folds.
@@ -1220,7 +1295,7 @@ impl App {
 
         // The find bar is fully clickable: fields, option toggles and the
         // arrows beside the match counter.
-        if self.find.open {
+        if self.find_showing() {
             if hits(self.layout.find_query, x, y) {
                 self.focus = Focus::Find;
                 self.find.in_replace_field = false;
@@ -1682,7 +1757,11 @@ impl App {
             }
             KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => self.cycle_focus(-1),
             KeyCode::BackTab => self.cycle_focus(-1),
-            KeyCode::Tab if self.focus != Focus::Editor => self.cycle_focus(1),
+            // The editor takes Tab as indentation, and the find bar as the
+            // switch between its two fields.
+            KeyCode::Tab if !matches!(self.focus, Focus::Editor | Focus::Find) => {
+                self.cycle_focus(1)
+            }
             _ => match self.focus {
                 Focus::Tree => self.tree_key(key),
                 Focus::Editor => self.editor_key(key),
@@ -1815,6 +1894,8 @@ impl App {
                 self.prompt = Some(Prompt::Themes);
             }
             Command::GotoDefinition => self.goto_definition(),
+            Command::Undo => self.step_history(true),
+            Command::Redo => self.step_history(false),
             Command::SelectAll => self.select_all(),
             Command::Copy => self.copy(),
             Command::Cut => self.cut(),
@@ -1880,7 +1961,11 @@ impl App {
         self.find.regex = self.search.regex;
         self.find.case_sensitive = self.search.case_sensitive;
         self.find.whole_word = self.search.whole_word;
-        self.find.open = !self.find.query.is_empty();
+        if self.find.query.is_empty() {
+            self.find.open = false;
+        } else if let Some(path) = self.buffers.active().map(|b| b.path.clone()) {
+            self.find.open_on(&path);
+        }
         if let Some(text) = self.buffers.active().map(|b| b.text.clone()) {
             self.find.refresh(&text);
             if let Some(index) = self.find.hits.iter().position(|h| h.line + 1 == line) {
@@ -2180,10 +2265,14 @@ impl App {
     /// Opens the find bar, seeded from the buffer and landing on the match
     /// nearest the cursor.
     pub fn open_find(&mut self) {
-        let Some(text) = self.buffers.active().map(|b| b.text.clone()) else {
+        let Some((text, path)) = self
+            .buffers
+            .active()
+            .map(|b| (b.text.clone(), b.path.clone()))
+        else {
             return;
         };
-        self.find.open = true;
+        self.find.open_on(&path);
         self.find.refresh(&text);
         let cursor = self.cursor_index();
         self.find.select_near(cursor);
@@ -2215,8 +2304,10 @@ impl App {
             return;
         };
         self.find.refresh(&text);
+        let at = self.cursor_index();
         if let Some((updated, cursor)) = self.find.replace_current(&text) {
             if let Some(buf) = self.buffers.active_mut() {
+                buf.record(EditKind::Bulk, at);
                 buf.text = updated.clone();
             }
             self.mark_dirty();
@@ -2231,8 +2322,10 @@ impl App {
             return;
         };
         self.find.refresh(&text);
+        let at = self.cursor_index();
         if let Some((updated, count)) = self.find.replace_all(&text) {
             if let Some(buf) = self.buffers.active_mut() {
+                buf.record(EditKind::Bulk, at);
                 buf.text = updated.clone();
             }
             self.mark_dirty();

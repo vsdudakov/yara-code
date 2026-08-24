@@ -48,7 +48,7 @@ impl Drop for RestoreTerminal {
     }
 }
 
-pub fn run(root: Option<PathBuf>) -> io::Result<()> {
+pub fn run(root: Option<PathBuf>, file: Option<PathBuf>) -> io::Result<()> {
     // A panic inside the draw loop would otherwise print into the alternate
     // screen and vanish with it. Restore first, then report.
     let default_hook = std::panic::take_hook();
@@ -88,6 +88,9 @@ pub fn run(root: Option<PathBuf>) -> io::Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let mut app = app::App::new(root);
+    if let Some(file) = file {
+        app.open(file);
+    }
     if !enhanced {
         app.status = "this terminal cannot tell Ctrl+Shift from Ctrl — \
                       rebind those chords in settings.json"

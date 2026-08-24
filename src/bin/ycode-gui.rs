@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use yara::gui::app::App;
 
 fn main() -> eframe::Result<()> {
-    let root = yara::core::project_root(std::env::args().nth(1).map(PathBuf::from));
+    let launched = yara::core::launch(std::env::args().nth(1).map(PathBuf::from));
 
     // The dock and task-switcher icon: the prompt chevron and the editor's
     // cursor, drawn once and carried in the binary.
@@ -25,6 +25,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Yara Code",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, root)))),
+        Box::new(move |cc| Ok(Box::new(App::new(cc, launched.root, launched.file)))),
     )
 }

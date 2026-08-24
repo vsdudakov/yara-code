@@ -87,8 +87,16 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, root: Option<PathBuf>) -> Self {
-        Self::with_context(&cc.egui_ctx, root)
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        root: Option<PathBuf>,
+        file: Option<PathBuf>,
+    ) -> Self {
+        let mut app = Self::with_context(&cc.egui_ctx, root);
+        if let Some(file) = file {
+            app.open_file(file);
+        }
+        app
     }
 
     /// The editor over a bare egui context — what `new` does once eframe has

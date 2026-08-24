@@ -251,7 +251,7 @@ fn parse_worktrees(out: &str) -> Vec<Worktree> {
         if let Some(path) = line.strip_prefix("worktree ") {
             list.extend(current.take());
             current = Some(Worktree {
-                path: PathBuf::from(path),
+                path: canonical(PathBuf::from(path)),
                 branch: String::new(),
             });
         } else if let Some(branch) = line.strip_prefix("branch ") {

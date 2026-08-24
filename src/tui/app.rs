@@ -509,6 +509,41 @@ impl App {
         &self.themes[self.theme_index]
     }
 
+    /// Everything that happens between an event and a frame: the highlight,
+    /// the git marks and any update that has landed. The run loop calls it
+    /// before drawing, and so must anything else that draws.
+    pub fn prepare(&mut self) {
+        self.refresh_highlight();
+        self.refresh_git_marks();
+        self.collect_update();
+    }
+
+    /// Handles one terminal event, the way the run loop does. Public so an
+    /// end-to-end test can drive the editor without a terminal.
+    pub fn handle(&mut self, event: Event) {
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
+            Event::Mouse(m) => self.on_mouse(m),
+            Event::Paste(text) => self.paste_event(&text),
+            _ => {}
+        }
+        self.tab_changed();
+    }
+
+    /// Text arriving as a bracketed paste, which goes wherever the keyboard is.
+    fn paste_event(&mut self, text: &str) {
+        match self.focus {
+            Focus::Shell => self.shell.paste(text),
+            Focus::Editor => self.paste_text(text),
+            Focus::Search => {
+                self.search.input_mut().push_str(text);
+                self.search.run(self.project.roots());
+            }
+            Focus::Find => self.find.query.push_str(text),
+            Focus::Tree | Focus::Git | Focus::Diff => {}
+        }
+    }
+
     pub fn run<B: Backend>(mut self, terminal: &mut Terminal<B>) -> io::Result<()> {
         let mut redraw = true;
         while !self.quit {
@@ -518,35 +553,16 @@ impl App {
                 redraw = true;
             }
             if redraw || self.shell_dirty.swap(false, Ordering::Relaxed) {
-                self.refresh_highlight();
-                self.refresh_git_marks();
-                self.collect_update();
+                self.prepare();
                 terminal.draw(|frame| ui::draw(frame, &mut self))?;
             }
             // Short poll so shell output appears promptly; the frame is only
             // painted when something actually changed.
             redraw = false;
             if event::poll(Duration::from_millis(30))? {
-                redraw = true;
-                match event::read()? {
-                    Event::Key(key) if key.kind != KeyEventKind::Release => self.on_key(key),
-                    Event::Mouse(m) => self.on_mouse(m),
-                    Event::Paste(text) => match self.focus {
-                        Focus::Shell => self.shell.paste(&text),
-                        Focus::Editor => self.paste_text(&text),
-                        Focus::Search => {
-                            self.search.input_mut().push_str(&text);
-                            self.search.run(self.project.roots());
-                        }
-                        Focus::Find => self.find.query.push_str(&text),
-                        Focus::Tree | Focus::Git | Focus::Diff => {}
-                    },
-                    Event::Resize(..) => {}
-                    _ => redraw = false,
-                }
-                // A tab switch can hide the find bar out from under the
-                // keyboard, so the focus is settled before the next frame.
-                self.tab_changed();
+                let event = event::read()?;
+                redraw = !matches!(event, Event::FocusGained | Event::FocusLost);
+                self.handle(event);
             }
         }
         Ok(())

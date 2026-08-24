@@ -186,6 +186,29 @@ pub fn dark_plus() -> Theme {
     }
 }
 
+/// VS Code's current default, "Dark Modern": a touch darker and flatter than
+/// Dark+, with the same syntax colours. Two deliberate departures from the
+/// stock theme, both to keep the eye on the code: module names in imports are
+/// coloured rather than left plain white, and comments are dimmed so they sit
+/// back instead of glowing.
+pub fn dark_modern() -> Theme {
+    let mut theme = dark_plus();
+    theme.name = "Dark Modern".into();
+    theme.ui.editor_bg = rgb(0x1F1F1F);
+    theme.ui.sidebar_bg = rgb(0x181818);
+    theme.ui.tab_active_bg = rgb(0x1F1F1F);
+    theme.ui.tab_inactive_bg = rgb(0x181818);
+    theme.ui.status_bg = rgb(0x181818);
+    theme.ui.border = rgb(0x2B2B2B);
+    theme.ui.line_number = rgb(0x6E7681);
+    theme.ui.accent = rgb(0x0078D4);
+    theme.ui.hover_bg = rgb(0x2A2D2E);
+    theme.ui.selected_bg = rgb(0x04395E);
+    dim_comments(&mut theme, 0x5C6370);
+    color_imports(&mut theme, 0x4EC9B0);
+    theme
+}
+
 pub fn light_plus() -> Theme {
     Theme {
         name: "Light+".into(),
@@ -247,7 +270,7 @@ pub fn light_plus() -> Theme {
 }
 
 pub fn monokai() -> Theme {
-    Theme {
+    let mut theme = Theme {
         name: "Monokai".into(),
         dark: true,
         ui: Ui {
@@ -297,12 +320,40 @@ pub fn monokai() -> Theme {
             TokenRule::new("entity.name.tag", 0xF92672),
             TokenRule::new("entity.other.attribute-name", 0xA6E22E),
             TokenRule::new("punctuation", 0xF8F8F2),
+            TokenRule::new(
+                "entity.name.namespace, entity.name.module, support.other.namespace, \
+                 meta.path, variable.other.module, entity.name.import",
+                0x66D9EF,
+            ),
         ],
+    };
+    // The classic Monokai comment, sat back a little further so it stops
+    // competing with the code.
+    dim_comments(&mut theme, 0x5B584C);
+    theme
+}
+
+/// Repaints a theme's comment rule, so a theme can sit its comments back
+/// without restating the whole token list.
+fn dim_comments(theme: &mut Theme, color: u32) {
+    for rule in &mut theme.tokens {
+        if rule.scope.split(',').any(|s| s.trim() == "comment") {
+            rule.color = rgb(color);
+        }
     }
 }
 
+/// Colours the module and namespace names an import names, which most grammars
+/// leave as plain identifiers — white against a dark background.
+fn color_imports(theme: &mut Theme, color: u32) {
+    theme.tokens.push(TokenRule::new(
+        "entity.name.namespace, entity.name.module, support.other.namespace,          meta.path, variable.other.module, entity.name.import",
+        color,
+    ));
+}
+
 pub fn builtin() -> Vec<Theme> {
-    vec![dark_plus(), light_plus(), monokai()]
+    vec![dark_modern(), dark_plus(), light_plus(), monokai()]
 }
 
 /// Where user themes live: `$XDG_CONFIG_HOME/yara/themes` or
@@ -508,6 +559,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dark_modern_is_the_default_and_dims_comments_and_colours_imports() {
+        let all = builtin();
+        assert_eq!(all[0].name, "Dark Modern", "Dark Modern leads the list");
+        let dm = dark_modern();
+        // Dark Modern's own background, not Dark+'s.
+        assert_eq!(dm.ui.editor_bg, rgb(0x1F1F1F));
+        // Comments are the dim slate, not Dark+'s bright green.
+        let comment = dm.tokens.iter().find(|r| r.scope == "comment").unwrap();
+        assert_eq!(comment.color, rgb(0x5C6370));
+        // Imports have a rule of their own now.
+        assert!(dm
+            .tokens
+            .iter()
+            .any(|r| r.scope.contains("entity.name.namespace")));
+    }
+
+    #[test]
+    fn monokai_keeps_sublime_colours_but_sits_comments_back() {
+        let m = monokai();
+        assert_eq!(m.ui.editor_bg, rgb(0x272822), "still Sublime's ground");
+        let comment = m.tokens.iter().find(|r| r.scope == "comment").unwrap();
+        assert_eq!(
+            comment.color,
+            rgb(0x5B584C),
+            "dimmer than the stock #75715E"
+        );
+        assert!(m
+            .tokens
+            .iter()
+            .any(|r| r.scope.contains("entity.name.namespace")));
+    }
+
+    #[test]
     fn hex_forms_parse() {
         assert_eq!(parse_hex("#FF0000"), Some((255, 0, 0)));
         assert_eq!(parse_hex("#f00"), Some((255, 0, 0)));
@@ -567,9 +651,10 @@ mod theme_tests {
     use crate::core::test_support::Dir;
 
     #[test]
-    fn the_built_in_themes_are_the_three_we_ship() {
+    fn the_built_in_themes_are_the_ones_we_ship() {
         let names: Vec<String> = builtin().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, ["Dark+", "Light+", "Monokai"]);
+        assert_eq!(names, ["Dark Modern", "Dark+", "Light+", "Monokai"]);
+        assert!(dark_modern().dark);
         assert!(dark_plus().dark);
         assert!(!light_plus().dark);
         assert!(monokai().dark);

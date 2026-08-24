@@ -84,6 +84,10 @@ pub type KeyMap = BTreeMap<String, Chord>;
 pub struct Keys {
     pub gui: KeyMap,
     pub tui: KeyMap,
+    /// Bindings the file spelled wrongly, as `(frontend, command, text)`. They
+    /// keep their defaults and are named in the status bar; one typo does not
+    /// cost the user the rest of their settings.
+    pub rejected: Vec<(&'static str, String, String)>,
 }
 
 /// Only bindings that differ from the defaults are written out. Saving the
@@ -110,16 +114,29 @@ impl Serialize for Keys {
 /// doesn't silently drop every other shortcut.
 impl<'de> Deserialize<'de> for Keys {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Read the chords as text and parse them here, so a single mistyped
+        // chord loses that one binding rather than the whole settings file.
         #[derive(Deserialize, Default)]
         #[serde(default)]
         struct Overrides {
-            gui: KeyMap,
-            tui: KeyMap,
+            gui: BTreeMap<String, String>,
+            tui: BTreeMap<String, String>,
         }
         let overrides = Overrides::deserialize(d)?;
         let mut keys = Keys::default();
-        keys.gui.extend(overrides.gui);
-        keys.tui.extend(overrides.tui);
+        for (frontend, from, into) in [
+            ("gui", overrides.gui, &mut keys.gui),
+            ("tui", overrides.tui, &mut keys.tui),
+        ] {
+            for (id, text) in from {
+                match text.parse::<Chord>() {
+                    Ok(chord) => {
+                        into.insert(id, chord);
+                    }
+                    Err(_) => keys.rejected.push((frontend, id, text)),
+                }
+            }
+        }
         Ok(keys)
     }
 }
@@ -129,6 +146,7 @@ impl Default for Keys {
         Self {
             gui: default_map(gui_default_chord),
             tui: default_map(tui_default_chord),
+            rejected: Vec::new(),
         }
     }
 }
@@ -201,8 +219,10 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::ContextMenu | Command::FileMenu | Command::ViewMenu | Command::HelpMenu => {
             return None
         }
-        // No page to open yet.
-        Command::Documentation => return None,
+        Command::Documentation => "Cmd+Shift+H",
+        // Updating is a menu action; a key for it would only be pressed by
+        // accident.
+        Command::CheckForUpdates | Command::InstallUpdate => return None,
     })
 }
 
@@ -263,10 +283,10 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
         Command::ViewMenu => "Alt+F10",
         Command::HelpMenu => "Shift+F1",
         Command::Help => "F1",
-        // The terminal owns its own font size, and there is no page yet.
-        Command::ZoomIn | Command::ZoomOut | Command::ResetZoom | Command::Documentation => {
-            return None
-        }
+        Command::Documentation => "Ctrl+Shift+H",
+        Command::CheckForUpdates | Command::InstallUpdate => return None,
+        // The terminal owns its own font size.
+        Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => return None,
     })
 }
 
@@ -323,11 +343,23 @@ impl Settings {
         };
         match serde_json::from_str::<Self>(&text) {
             Ok(settings) => {
-                let clash = settings.clashing_binding();
-                (settings, clash)
+                let complaint = settings.binding_complaint();
+                (settings, complaint)
             }
             Err(e) => (Self::default(), Some(format!("settings.json ignored: {e}"))),
         }
+    }
+
+    /// What is wrong with the bindings the file gave us, if anything: a chord
+    /// that could not be read, or one handed to two commands at once. Either
+    /// way the editor keeps working — this is what it says about it.
+    fn binding_complaint(&self) -> Option<String> {
+        if let Some((frontend, id, text)) = self.keys.rejected.first() {
+            return Some(format!(
+                "settings.json: {frontend} {id} is not a key chord: \"{text}\" — keeping the default"
+            ));
+        }
+        self.clashing_binding()
     }
 
     /// The first chord bound to two commands, if the file rebound one onto
@@ -490,6 +522,8 @@ mod tests {
             Command::HelpMenu,
             Command::NextPane,
             Command::PrevPane,
+            Command::CheckForUpdates,
+            Command::InstallUpdate,
         ];
         // The terminal has no font of its own to scale, and neither frontend
         // has a documentation page to open yet.
@@ -497,7 +531,8 @@ mod tests {
             Command::ZoomIn,
             Command::ZoomOut,
             Command::ResetZoom,
-            Command::Documentation,
+            Command::CheckForUpdates,
+            Command::InstallUpdate,
         ];
         for command in ALL {
             assert!(
@@ -505,9 +540,6 @@ mod tests {
                 "{} has no terminal binding",
                 command.id()
             );
-            if *command == Command::Documentation {
-                continue;
-            }
             if widget_owned.contains(command) {
                 continue;
             }
@@ -563,6 +595,138 @@ mod tests {
         assert_eq!(
             settings.recent_projects,
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn every_field_survives_a_round_trip() {
+        let mut settings = Settings {
+            theme: "Monokai".into(),
+            font_size: 15.0,
+            show_terminal: false,
+            indent: Indent {
+                width: 2,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        settings.push_recent(Path::new("/work/one"));
+        let text = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.theme, "Monokai");
+        assert_eq!(back.font_size, 15.0);
+        assert!(!back.show_terminal);
+        assert_eq!(back.indent.width, 2);
+        assert_eq!(back.recent_projects, [PathBuf::from("/work/one")]);
+    }
+
+    #[test]
+    fn an_empty_file_still_gives_every_default() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.theme, Settings::default().theme);
+        assert!(settings.gui_chord(Command::Save).is_some());
+        assert!(settings.tui_chord(Command::Quit).is_some());
+    }
+
+    #[test]
+    fn a_chord_resolves_to_its_command_and_back() {
+        let settings = Settings::default();
+        let save = settings.gui_chord(Command::Save).unwrap().clone();
+        assert_eq!(settings.gui_command(&save), Some(Command::Save));
+        let quit = settings.tui_chord(Command::Quit).unwrap().clone();
+        assert_eq!(settings.tui_command(&quit), Some(Command::Quit));
+        // A chord nobody claimed is nobody's.
+        let unbound: Chord = "Ctrl+Alt+Shift+F9".parse().unwrap();
+        assert_eq!(settings.gui_command(&unbound), None);
+        assert_eq!(settings.tui_command(&unbound), None);
+    }
+
+    #[test]
+    fn a_binding_the_file_gives_to_two_commands_is_reported() {
+        let clashing: Settings =
+            serde_json::from_str(r#"{"keys":{"tui":{"file_menu":"Ctrl+X"}}}"#).unwrap();
+        let message = clashing.clashing_binding().expect("Ctrl+X is cut's");
+        assert!(message.contains("Ctrl+X"), "{message}");
+        assert!(
+            message.contains("cut") && message.contains("file_menu"),
+            "{message}"
+        );
+        // The defaults themselves never clash.
+        assert_eq!(Settings::default().clashing_binding(), None);
+    }
+
+    #[test]
+    fn an_unparsable_chord_is_skipped_rather_than_fatal() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"keys":{"gui":{"save":"Cmd+Shift+S","quit":"Ctrl+"}}}"#)
+                .unwrap();
+        assert_eq!(
+            settings.gui_chord(Command::Save).unwrap().to_string(),
+            "Cmd+Shift+S"
+        );
+        // The broken one keeps its default rather than unbinding the command.
+        assert_eq!(
+            settings.gui_chord(Command::Quit).unwrap().to_string(),
+            "Cmd+Q"
+        );
+    }
+
+    #[test]
+    fn the_recent_list_is_newest_first_and_capped() {
+        let mut settings = Settings::default();
+        for i in 0..20 {
+            settings.push_recent(&PathBuf::from(format!("/p/{i}")));
+        }
+        assert_eq!(settings.recent_projects.len(), 15);
+        assert_eq!(settings.recent_projects[0], PathBuf::from("/p/19"));
+        // Opening one again moves it to the front instead of duplicating it.
+        settings.push_recent(&PathBuf::from("/p/10"));
+        assert_eq!(settings.recent_projects[0], PathBuf::from("/p/10"));
+        assert_eq!(
+            settings
+                .recent_projects
+                .iter()
+                .filter(|p| *p == &PathBuf::from("/p/10"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_indent_unit_reads_as_what_it_inserts() {
+        let spaces = Indent {
+            style: IndentStyle::Spaces,
+            width: 3,
+            detect_from_file: true,
+        };
+        assert_eq!(spaces.unit(), "   ");
+        let tabs = Indent {
+            style: IndentStyle::Tabs,
+            width: 4,
+            detect_from_file: false,
+        };
+        assert_eq!(tabs.unit(), "\t");
+    }
+
+    #[test]
+    fn go_to_definition_modifiers_are_read_per_frontend() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"goto_modifiers":{"gui":["cmd"],"tui":["ctrl","alt"]}}"#)
+                .unwrap();
+        assert_eq!(settings.goto_modifiers.gui, [Modifier::Cmd]);
+        assert_eq!(settings.goto_modifiers.tui, [Modifier::Ctrl, Modifier::Alt]);
+    }
+
+    #[test]
+    fn the_settings_file_lives_under_the_editor_s_own_config_directory() {
+        let path = Settings::path().expect("a config directory on every platform");
+        assert!(
+            path.ends_with("yara-code/settings.json") || path.ends_with("yara-code\\settings.json")
         );
     }
 }

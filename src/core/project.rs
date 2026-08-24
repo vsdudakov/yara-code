@@ -227,3 +227,76 @@ mod tests {
         assert!(!project.is_multi_root());
     }
 }
+
+#[cfg(test)]
+mod more_project_tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    #[test]
+    fn an_empty_project_falls_back_to_the_working_directory() {
+        let project = Project::empty();
+        assert!(project.is_empty());
+        assert_eq!(project.root(), None);
+        assert_eq!(project.roots(), &[] as &[PathBuf]);
+        assert_eq!(project.root_or_cwd(), std::env::current_dir().unwrap());
+        assert!(!project.is_multi_root());
+        // Nothing belongs to a project with no folders.
+        assert_eq!(project.owner(Path::new("/anywhere")), None);
+        assert!(!project.is_root(Path::new("/anywhere")));
+        assert_eq!(project.display(Path::new("/a/b.rs")), "/a/b.rs");
+    }
+
+    #[test]
+    fn opened_takes_a_folder_or_none() {
+        let dir = Dir::new("yara-project-opened");
+        assert!(Project::opened(None).is_empty());
+        let project = Project::opened(Some(dir.path().to_path_buf()));
+        assert_eq!(project.root(), Some(dir.path()));
+        assert_eq!(project.root_or_cwd(), dir.path());
+    }
+
+    #[test]
+    fn a_folder_that_is_not_a_folder_is_refused() {
+        let dir = Dir::new("yara-project-file");
+        let file = dir.file("notes.txt", "");
+        let mut project = Project::empty();
+        let message = project.add(file).unwrap_err();
+        assert!(message.starts_with("not a folder"), "{message}");
+        assert!(project.is_empty());
+    }
+
+    #[test]
+    fn switching_the_root_drops_the_folders_that_were_added() {
+        let first = Dir::new("yara-project-first");
+        let second = Dir::new("yara-project-second");
+        let third = Dir::new("yara-project-third");
+        let mut project = Project::new(first.path().to_path_buf());
+        project.add(second.path().to_path_buf()).unwrap();
+        assert!(project.is_multi_root());
+        let root = project.set_root(third.path().to_path_buf());
+        assert_eq!(root, third.path());
+        assert_eq!(project.roots(), &[third.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn a_root_row_is_named_after_its_folder() {
+        assert_eq!(Project::name_of(Path::new("/work/project")), "project");
+        // A path with no file name at all still says something.
+        assert_eq!(Project::name_of(Path::new("/")), "/");
+    }
+
+    #[test]
+    fn every_folder_knows_what_belongs_to_it() {
+        let one = Dir::new("yara-project-owner-one");
+        let two = Dir::new("yara-project-owner-two");
+        let mut project = Project::new(one.path().to_path_buf());
+        project.add(two.path().to_path_buf()).unwrap();
+        assert_eq!(project.owner(&one.path().join("src")), Some(one.path()));
+        assert_eq!(project.owner(&two.path().join("src")), Some(two.path()));
+        assert_eq!(project.owner(Path::new("/elsewhere")), None);
+        assert!(project.is_root(one.path()) && project.is_root(two.path()));
+        // A folder's own row shows just its name.
+        assert_eq!(project.display(two.path()), Project::name_of(two.path()));
+    }
+}

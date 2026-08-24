@@ -460,9 +460,10 @@ pub fn find_references(roots: &[PathBuf], word: &str, cap: usize) -> Vec<Candida
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::Dir;
 
-    fn project() -> (tempdir::Dir, PathBuf) {
-        let dir = tempdir::Dir::new("yara-search");
+    fn project() -> (Dir, PathBuf) {
+        let dir = Dir::new("yara-search");
         let root = dir.path().to_path_buf();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/a.rs"), "let total = 1;\nlet TOTAL = 2;\n").unwrap();
@@ -589,34 +590,196 @@ mod tests {
         s.cycle_field(-1);
         assert_eq!(s.field(), Field::Exclude);
     }
+}
 
-    /// A throwaway directory that cleans itself up.
-    mod tempdir {
-        use std::path::{Path, PathBuf};
-        use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+mod more_search_tests {
+    use super::*;
+    use crate::core::test_support::Dir;
 
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    fn ran(query: &str, roots: &[PathBuf], build: impl FnOnce(&mut Search)) -> Search {
+        let mut search = Search {
+            query: query.to_string(),
+            ..Default::default()
+        };
+        build(&mut search);
+        search.run(roots);
+        search
+    }
 
-        pub struct Dir(PathBuf);
+    #[test]
+    fn the_fields_are_the_three_the_panel_draws() {
+        assert_eq!(
+            Field::visible(),
+            [Field::Query, Field::Replace, Field::Exclude]
+        );
+        assert_eq!(Field::Query.hint(), "…");
+        assert!(Field::Exclude.example().is_some());
+        assert!(Field::Query.example().is_none());
+    }
 
-        impl Dir {
-            pub fn new(tag: &str) -> Self {
-                let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-                let path = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
-                let _ = std::fs::remove_dir_all(&path);
-                std::fs::create_dir_all(&path).unwrap();
-                Self(path)
-            }
+    #[test]
+    fn the_focused_field_cycles_and_takes_the_typing() {
+        let mut search = Search::default();
+        assert_eq!(search.field(), Field::Query);
+        search.input_mut().push_str("needle");
+        assert_eq!(search.input(Field::Query), "needle");
 
-            pub fn path(&self) -> &Path {
-                &self.0
-            }
-        }
+        search.cycle_field(1);
+        assert_eq!(search.field(), Field::Replace);
+        search.input_mut().push_str("thread");
+        search.cycle_field(1);
+        assert_eq!(search.field(), Field::Exclude);
+        // Past the end it wraps, so Tab keeps working.
+        search.cycle_field(1);
+        assert_eq!(search.field(), Field::Query);
+        search.cycle_field(-1);
+        assert_eq!(search.field(), Field::Exclude);
 
-        impl Drop for Dir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
+        search.set_field(Field::Replace);
+        assert_eq!(search.input(Field::Replace), "thread");
+    }
+
+    #[test]
+    fn a_search_can_be_narrowed_by_case_words_and_regex() {
+        let dir = Dir::new("yara-search-opts");
+        // A result is a line, not an occurrence, so each case gets its own.
+        dir.file("a.txt", "Total\ntotal\ntotals\n");
+        let roots = vec![dir.path().to_path_buf()];
+
+        assert_eq!(ran("total", &roots, |_| {}).total_matches(), 3);
+        assert_eq!(
+            ran("total", &roots, |s| s.case_sensitive = true).total_matches(),
+            2,
+            "Total is out"
+        );
+        assert_eq!(
+            ran("total", &roots, |s| s.whole_word = true).total_matches(),
+            2,
+            "totals is out"
+        );
+        assert_eq!(
+            ran(r"tot\w+s", &roots, |s| s.regex = true).total_matches(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_bad_pattern_is_reported_and_finds_nothing() {
+        let dir = Dir::new("yara-search-bad");
+        dir.file("a.txt", "text\n");
+        let search = ran("(unclosed", &[dir.path().to_path_buf()], |s| s.regex = true);
+        assert!(search.error.is_some());
+        assert_eq!(search.total_matches(), 0);
+    }
+
+    #[test]
+    fn an_empty_query_searches_nothing_at_all() {
+        let dir = Dir::new("yara-search-empty");
+        dir.file("a.txt", "text\n");
+        let search = ran("", &[dir.path().to_path_buf()], |_| {});
+        assert!(search.results.is_empty());
+        assert!(search.error.is_none());
+    }
+
+    #[test]
+    fn a_second_run_is_skipped_unless_the_query_or_options_moved() {
+        let dir = Dir::new("yara-search-cache");
+        let file = dir.file("a.txt", "one\n");
+        let roots = vec![dir.path().to_path_buf()];
+        let mut search = Search {
+            query: "one".into(),
+            ..Default::default()
+        };
+        search.run_if_changed(&roots);
+        assert_eq!(search.total_matches(), 1);
+
+        // The file changed underneath: the cached run stands until something
+        // about the query changes.
+        std::fs::write(&file, "one\none\n").unwrap();
+        search.run_if_changed(&roots);
+        assert_eq!(search.total_matches(), 1, "the cached run stands");
+        search.case_sensitive = true;
+        search.run_if_changed(&roots);
+        assert_eq!(search.total_matches(), 2, "an option is a new search");
+    }
+
+    #[test]
+    fn several_project_folders_are_searched_as_one() {
+        let one = Dir::new("yara-search-one");
+        let two = Dir::new("yara-search-two");
+        one.file("a.txt", "needle\n");
+        two.file("b.txt", "needle\nneedle\n");
+        let search = ran(
+            "needle",
+            &[one.path().to_path_buf(), two.path().to_path_buf()],
+            |_| {},
+        );
+        assert_eq!(search.results.len(), 2, "one result group per file");
+        assert_eq!(search.total_matches(), 3);
+    }
+
+    #[test]
+    fn replacing_rewrites_every_match_and_re_runs() {
+        let dir = Dir::new("yara-search-replace");
+        let file = dir.file("a.txt", "one one\ntwo\n");
+        let roots = vec![dir.path().to_path_buf()];
+        let mut search = ran("one", &roots, |s| s.replace = "1".into());
+        let (count, files) = search.replace_all(&roots).unwrap();
+        assert_eq!((count, files), (2, 1));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "1 1\ntwo\n");
+        assert_eq!(search.total_matches(), 0, "the results are refreshed");
+
+        // A plain search takes its replacement literally, dollars and all.
+        let file = dir.file("b.txt", "price\n");
+        let mut search = ran("price", &roots, |s| s.replace = "$1 each".into());
+        search.replace_all(&roots).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "$1 each\n");
+
+        // Nothing to replace is an error, not a silent success.
+        let mut empty = Search::default();
+        assert!(empty.replace_all(&roots).is_err());
+    }
+
+    #[test]
+    fn go_to_definition_prefers_a_definition_and_falls_back_to_uses() {
+        let dir = Dir::new("yara-search-goto");
+        dir.file(
+            "lib.rs",
+            "fn compute_total(x: u32) -> u32 { x }\nlet y = compute_total(1);\n",
+        );
+        let roots = vec![dir.path().to_path_buf()];
+
+        let defs = find_definitions(&roots, "compute_total");
+        assert_eq!(defs.len(), 1, "the fn line, not the call");
+        assert_eq!(defs[0].line, 1);
+        assert!(defs[0].text.contains("fn compute_total"));
+
+        let refs = find_references(&roots, "compute_total", 10);
+        assert_eq!(refs.len(), 2);
+        // The cap is honoured, so a common word cannot flood the picker.
+        assert_eq!(find_references(&roots, "compute_total", 1).len(), 1);
+        assert!(find_definitions(&roots, "nothing_here").is_empty());
+    }
+
+    #[test]
+    fn a_long_line_is_clipped_for_the_picker() {
+        let dir = Dir::new("yara-search-clip");
+        let long = format!("let x = 1; // {}", "y".repeat(400));
+        dir.file("a.rs", &format!("{long}\n"));
+        let refs = find_references(&[dir.path().to_path_buf()], "let", 5);
+        assert!(refs[0].text.chars().count() < 200, "{}", refs[0].text.len());
+    }
+
+    #[test]
+    fn excluded_folders_are_never_even_walked() {
+        let dir = Dir::new("yara-search-exclude");
+        dir.file("keep/a.txt", "needle\n");
+        dir.file("skip/b.txt", "needle\n");
+        dir.file("c.lock", "needle\n");
+        let roots = vec![dir.path().to_path_buf()];
+        let search = ran("needle", &roots, |s| s.exclude = "skip, *.lock".into());
+        assert_eq!(search.results.len(), 1);
+        assert!(search.results[0].path.ends_with("a.txt"));
     }
 }

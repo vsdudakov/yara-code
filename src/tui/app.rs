@@ -29,6 +29,7 @@ use crate::core::search::{self, Candidate, Field as SearchField, Search};
 use crate::core::settings::{Modifier, Settings};
 use crate::core::syntax::Syntax;
 use crate::core::theme::{self as core_theme, Theme};
+use crate::core::update as core_update;
 use crate::tui::clipboard::Clipboard;
 use crate::tui::icons::{self, Icons};
 use crate::tui::menu::{Menu, MenuItem};
@@ -365,6 +366,9 @@ pub struct App {
     pub diffs: Vec<Diff>,
     /// Which diff tab is in front; `None` while a file is.
     pub active_diff: Option<usize>,
+    /// The update check, and the release it found.
+    pub updates: core_update::Checker,
+    pub update: Option<core_update::Release>,
     /// Who last touched the line the cursor is on, and what it was read for.
     pub blame: Option<core_git::Blame>,
     blame_key: Option<(PathBuf, usize)>,
@@ -452,6 +456,8 @@ impl App {
             git: GitState::default(),
             diffs: Vec::new(),
             active_diff: None,
+            updates: core_update::Checker::default(),
+            update: None,
             blame: None,
             blame_key: None,
             git_lines: BTreeMap::new(),
@@ -514,6 +520,7 @@ impl App {
             if redraw || self.shell_dirty.swap(false, Ordering::Relaxed) {
                 self.refresh_highlight();
                 self.refresh_git_marks();
+                self.collect_update();
                 terminal.draw(|frame| ui::draw(frame, &mut self))?;
             }
             // Short poll so shell output appears promptly; the frame is only
@@ -616,6 +623,25 @@ impl App {
         }
         if self.buffers.is_empty() {
             self.focus = Focus::Tree;
+        }
+    }
+
+    /// Picks up an update check that has finished.
+    fn collect_update(&mut self) {
+        let Some(answer) = self.updates.take() else {
+            return;
+        };
+        match answer {
+            Ok(release) if release.is_newer() => {
+                self.status = format!(
+                    "{} is out — Help → Install Update ({})",
+                    release.tag,
+                    core_update::how_to_update()
+                );
+                self.update = Some(release);
+            }
+            Ok(_) => self.status = format!("Yara Code {} is the latest", core_update::CURRENT),
+            Err(message) => self.status = format!("update check failed: {message}"),
         }
     }
 
@@ -2074,11 +2100,38 @@ impl App {
             Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => {
                 self.status = "the terminal controls the font size".into()
             }
+            Command::CheckForUpdates => {
+                self.status = format!("checking for updates (this is {})…", core_update::CURRENT);
+                let dirty = Arc::clone(&self.shell_dirty);
+                self.updates
+                    .start(move || dirty.store(true, Ordering::Relaxed));
+            }
+            Command::InstallUpdate => match self.update.clone() {
+                Some(release) => {
+                    self.status = format!("installing {}…", release.tag);
+                    match core_update::install(&release) {
+                        Ok(dir) => {
+                            self.update = None;
+                            self.status = format!(
+                                "{} installed in {} — restart to use it",
+                                release.tag,
+                                dir.display()
+                            );
+                        }
+                        Err(message) => self.status = message,
+                    }
+                }
+                None => self.status = "nothing to install; check for updates first".into(),
+            },
             Command::Documentation => {
-                self.status = format!(
-                    "Yara {} — no documentation page yet",
-                    env!("CARGO_PKG_VERSION")
-                )
+                self.status = if crate::core::open_url(crate::core::DOCUMENTATION) {
+                    crate::core::DOCUMENTATION.to_string()
+                } else {
+                    format!(
+                        "open {} to read the documentation",
+                        crate::core::DOCUMENTATION
+                    )
+                }
             }
             Command::Undo => self.step_history(true),
             Command::Redo => self.step_history(false),

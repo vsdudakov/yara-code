@@ -75,10 +75,19 @@ impl GitState {
     /// `None` for anything git has nothing to say about.
     pub fn state_of(&self, path: &Path) -> Option<FileState> {
         let dir = self.dir()?;
-        let relative = path.strip_prefix(&dir).ok()?.to_string_lossy().to_string();
+        let relative = path
+            .strip_prefix(&dir)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if let Some(change) = self.changes.iter().find(|change| change.path == relative) {
+            return Some(FileState::of(change));
+        }
+        // An untracked directory is reported as `pkg/` rather than file by
+        // file, so everything inside it is untracked too.
         self.changes
             .iter()
-            .find(|change| change.path == relative)
+            .find(|change| change.path.ends_with('/') && relative.starts_with(&change.path))
             .map(FileState::of)
     }
 
@@ -89,7 +98,7 @@ impl GitState {
         let Ok(relative) = path.strip_prefix(&dir) else {
             return false;
         };
-        let prefix = format!("{}/", relative.to_string_lossy());
+        let prefix = format!("{}/", relative.to_string_lossy().replace('\\', "/"));
         !prefix.is_empty()
             && self
                 .changes
@@ -406,11 +415,13 @@ fn ago(time: u64) -> String {
         .map(|d| d.as_secs())
         .unwrap_or(time);
     let seconds = now.saturating_sub(time);
+    // Each unit hands over as soon as one of the next is complete, so an hour
+    // old never reads as "60 minutes ago".
     let (count, unit) = match seconds {
         0..=90 => return "just now".to_string(),
-        91..=5399 => (seconds / 60, "minute"),
-        5400..=129_599 => (seconds / 3600, "hour"),
-        129_600..=2_591_999 => (seconds / 86_400, "day"),
+        91..=3_599 => (seconds / 60, "minute"),
+        3_600..=86_399 => (seconds / 3_600, "hour"),
+        86_400..=2_591_999 => (seconds / 86_400, "day"),
         2_592_000..=31_535_999 => (seconds / 2_592_000, "month"),
         _ => (seconds / 31_536_000, "year"),
     };
@@ -548,5 +559,196 @@ mod tests {
         assert_eq!(list[0].branch, "main");
         assert_eq!(list[0].name(), "repo");
         assert_eq!(list[1].branch, "detached");
+    }
+}
+
+#[cfg(test)]
+mod git_tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    /// A repository with one commit, so blame and diff have something to say.
+    fn repo(tag: &str) -> Dir {
+        let dir = Dir::new(tag);
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .output()
+                .expect("git is on PATH");
+            assert!(out.status.success(), "git {args:?}: {:?}", out);
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        dir.file("kept.txt", "one\ntwo\nthree\n");
+        run(&["add", "-A"]);
+        run(&["commit", "-qm", "Seed the tree (#42)"]);
+        dir
+    }
+
+    #[test]
+    fn status_letters_come_from_the_porcelain_columns() {
+        assert_eq!(
+            Change {
+                code: "??".into(),
+                path: "x".into()
+            }
+            .letter(),
+            'U'
+        );
+        // The worktree column speaks first, the index column otherwise.
+        assert_eq!(
+            Change {
+                code: " M".into(),
+                path: "x".into()
+            }
+            .letter(),
+            'M'
+        );
+        assert_eq!(
+            Change {
+                code: "A ".into(),
+                path: "x".into()
+            }
+            .letter(),
+            'A'
+        );
+    }
+
+    #[test]
+    fn porcelain_lines_become_changes() {
+        let changes =
+            parse_status(" M src/main.rs\n?? new.txt\nR  old.rs -> new.rs\n\"quoted\\tname\"\n");
+        assert_eq!(changes[0].path, "src/main.rs");
+        assert_eq!(changes[1].code, "??");
+        // A rename is listed under the name it has now.
+        assert_eq!(changes[2].path, "new.rs");
+        assert_eq!(unquote("\"a\\tb\""), "a\tb");
+        assert_eq!(unquote("plain"), "plain");
+    }
+
+    #[test]
+    fn a_worktree_listing_is_read_into_paths_and_branches() {
+        let parsed = parse_worktrees(
+            "worktree /work/main\nHEAD abc\nbranch refs/heads/main\n\n\
+             worktree /work/detached\nHEAD def\ndetached\n\n",
+        );
+        assert_eq!(parsed[0].branch, "main");
+        assert_eq!(parsed[0].name(), "main");
+        assert_eq!(parsed[1].branch, "detached");
+    }
+
+    #[test]
+    fn a_repository_reports_what_changed_and_who_wrote_it() {
+        let dir = repo("yara-git-status");
+        std::fs::write(dir.path().join("kept.txt"), "one\nTWO\nthree\nfour\n").unwrap();
+        dir.file("fresh.txt", "new\n");
+
+        let root = repo_root(dir.path()).expect("inside a repository");
+        assert_eq!(root, dir.path());
+        assert!(discover_repos(dir.path()).contains(&root));
+        assert_eq!(worktrees(dir.path())[0].branch, "main");
+
+        let changes = status(dir.path()).unwrap();
+        let modified = changes.iter().find(|c| c.path == "kept.txt").unwrap();
+        assert_eq!(modified.letter(), 'M');
+        assert_eq!(
+            changes
+                .iter()
+                .find(|c| c.path == "fresh.txt")
+                .unwrap()
+                .letter(),
+            'U'
+        );
+
+        // The diff pairs the replaced line and leaves the added one alone.
+        let rows = diff(dir.path(), modified).unwrap();
+        let changed = rows.iter().find(|r| r.kind == diff::Kind::Changed).unwrap();
+        assert_eq!(changed.left.as_ref().unwrap().text, "two");
+        assert_eq!(changed.right.as_ref().unwrap().text, "TWO");
+        assert!(rows.iter().any(|r| r.kind == diff::Kind::Added));
+
+        // An untracked file has no old version at all.
+        let fresh = changes.iter().find(|c| c.path == "fresh.txt").unwrap();
+        let rows = diff(dir.path(), fresh).unwrap();
+        assert!(rows.iter().all(|r| r.kind == diff::Kind::Added));
+
+        // The gutter marks: line 2 changed, line 4 arrived.
+        let marks = changed_lines(dir.path(), "kept.txt");
+        assert_eq!(marks.get(&2), Some(&LineState::Modified));
+        assert_eq!(marks.get(&4), Some(&LineState::Added));
+
+        // Blame names the commit, its author and the pull request it mentions.
+        let first = blame(dir.path(), "kept.txt", 1).unwrap();
+        assert_eq!(first.author, "Test");
+        assert_eq!(first.pr.as_deref(), Some("42"));
+        assert!(first.summary.starts_with("Seed the tree"));
+        assert!(first.line().contains("#42"));
+        // A line that is not committed yet says so.
+        let uncommitted = blame(dir.path(), "kept.txt", 4).unwrap();
+        assert_eq!(uncommitted.when, "not committed yet");
+    }
+
+    #[test]
+    fn a_deleted_file_shows_as_wholly_removed() {
+        let dir = repo("yara-git-deleted");
+        std::fs::remove_file(dir.path().join("kept.txt")).unwrap();
+        let changes = status(dir.path()).unwrap();
+        let gone = changes.iter().find(|c| c.path == "kept.txt").unwrap();
+        assert_eq!(gone.letter(), 'D');
+        let rows = diff(dir.path(), gone).unwrap();
+        assert!(rows.iter().all(|r| r.kind == diff::Kind::Removed));
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn outside_a_repository_nothing_is_claimed() {
+        let dir = Dir::new("yara-git-none");
+        assert!(repo_root(dir.path()).is_none());
+        assert!(status(dir.path()).is_err());
+        assert!(changed_lines(dir.path(), "nothing.txt").is_empty());
+        assert!(blame(dir.path(), "nothing.txt", 1).is_none());
+        assert!(discover_repos(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn the_state_tracks_the_repository_it_was_pointed_at() {
+        let dir = repo("yara-git-state");
+        std::fs::write(dir.path().join("kept.txt"), "one\nTWO\nthree\n").unwrap();
+        let mut state = GitState::default();
+        state.tick(dir.path());
+        assert!(!state.repos.is_empty());
+        assert_eq!(state.dir().as_deref(), Some(dir.path()));
+        assert!(state.changes.iter().any(|c| c.path == "kept.txt"));
+
+        let file = dir.path().join("kept.txt");
+        assert_eq!(state.state_of(&file), Some(FileState::Modified));
+        assert_eq!(state.state_of(Path::new("/elsewhere/x")), None);
+
+        // A folder wears the mark of what changed beneath it.
+        let nested = dir.file("pkg/inner.txt", "x\n");
+        state.invalidate();
+        state.tick(dir.path());
+        assert!(state.folder_touched(&dir.path().join("pkg")));
+        assert!(!state.folder_touched(&dir.path().join("nowhere")));
+        assert_eq!(state.state_of(&nested), Some(FileState::Untracked));
+    }
+
+    #[test]
+    fn ages_read_as_words() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(ago(now), "just now");
+        assert_eq!(ago(now - 600), "10 minutes ago");
+        assert_eq!(ago(now - 7200), "2 hours ago");
+        assert_eq!(ago(now - 86_400 * 3), "3 days ago");
+        assert_eq!(ago(now - 2_592_000 * 2), "2 months ago");
+        assert_eq!(ago(now - 31_536_000 * 4), "4 years ago");
+        assert_eq!(ago(now - 3600), "1 hour ago", "one of anything is singular");
     }
 }

@@ -112,3 +112,119 @@ pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
     });
     entries
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    #[test]
+    fn a_new_file_is_empty_and_refuses_to_overwrite() {
+        let dir = Dir::new("yara-fs-new");
+        let path = create_file(dir.path(), "notes.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        assert!(
+            matches!(create_file(dir.path(), "notes.txt"), Err(FsError::Exists)),
+            "a second file of the same name would silently replace the first"
+        );
+        assert!(matches!(
+            create_file(dir.path(), "   "),
+            Err(FsError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn a_new_file_brings_its_parents_with_it() {
+        let dir = Dir::new("yara-fs-parents");
+        let path = create_file(dir.path(), "a/b/c.txt").unwrap();
+        assert!(path.is_file());
+        assert!(dir.path().join("a").join("b").is_dir());
+    }
+
+    #[test]
+    fn folders_are_created_and_deleted_whole() {
+        let dir = Dir::new("yara-fs-dir");
+        let nested = create_dir(dir.path(), "pkg/inner").unwrap();
+        assert!(nested.is_dir());
+        assert!(matches!(
+            create_dir(dir.path(), "pkg"),
+            Err(FsError::Exists)
+        ));
+        create_file(&nested, "file.txt").unwrap();
+        delete(&dir.path().join("pkg")).unwrap();
+        assert!(!dir.path().join("pkg").exists(), "the whole tree goes");
+    }
+
+    #[test]
+    fn renaming_keeps_the_file_in_place() {
+        let dir = Dir::new("yara-fs-rename");
+        let path = dir.file("before.txt", "body");
+        let renamed = rename(&path, "after.txt").unwrap();
+        assert_eq!(renamed, dir.path().join("after.txt"));
+        assert_eq!(std::fs::read_to_string(&renamed).unwrap(), "body");
+        // A name that is really a path would move the file somewhere else.
+        assert!(matches!(
+            rename(&renamed, "sub/x.txt"),
+            Err(FsError::Invalid)
+        ));
+        assert!(matches!(rename(&renamed, ""), Err(FsError::Invalid)));
+        // Renaming to itself is a no-op, not a failure.
+        assert_eq!(rename(&renamed, "after.txt").unwrap(), renamed);
+        dir.file("taken.txt", "");
+        assert!(matches!(
+            rename(&renamed, "taken.txt"),
+            Err(FsError::Exists)
+        ));
+    }
+
+    #[test]
+    fn moving_refuses_what_would_corrupt_the_tree() {
+        let dir = Dir::new("yara-fs-move");
+        let file = dir.file("file.txt", "x");
+        let target = create_dir(dir.path(), "target").unwrap();
+        let moved = move_into(&file, &target).unwrap();
+        assert_eq!(moved, target.join("file.txt"));
+
+        // Already there.
+        assert!(matches!(move_into(&moved, &target), Err(FsError::Invalid)));
+        // A folder into itself.
+        let inner = create_dir(&target, "inner").unwrap();
+        assert!(matches!(move_into(&target, &inner), Err(FsError::Invalid)));
+        // Onto a name that is taken.
+        let other = create_dir(dir.path(), "other").unwrap();
+        std::fs::write(other.join("file.txt"), "").unwrap();
+        assert!(matches!(move_into(&moved, &other), Err(FsError::Exists)));
+    }
+
+    #[test]
+    fn a_listing_puts_folders_first_and_hides_the_repository() {
+        let dir = Dir::new("yara-fs-list");
+        dir.file("beta.txt", "");
+        dir.file("Alpha.txt", "");
+        create_dir(dir.path(), "zeta").unwrap();
+        create_dir(dir.path(), "Middle").unwrap();
+        create_dir(dir.path(), ".git").unwrap();
+
+        let names: Vec<String> = list_dir(dir.path())
+            .into_iter()
+            .map(|(path, is_dir)| {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if is_dir {
+                    format!("{name}/")
+                } else {
+                    name
+                }
+            })
+            .collect();
+        assert_eq!(names, ["Middle/", "zeta/", "Alpha.txt", "beta.txt"]);
+        assert!(list_dir(&dir.path().join("nowhere")).is_empty());
+    }
+
+    #[test]
+    fn errors_say_what_went_wrong() {
+        assert_eq!(FsError::Exists.to_string(), "already exists");
+        assert_eq!(FsError::Invalid.to_string(), "invalid path");
+        let io = FsError::Io(std::io::Error::other("disk gone"));
+        assert!(io.to_string().contains("disk gone"));
+    }
+}

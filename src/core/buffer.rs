@@ -181,10 +181,13 @@ pub fn relative_path(path: &Path, root: &Path) -> String {
 pub fn word_at(text: &str, idx: usize) -> Option<(String, usize, usize)> {
     let chars: Vec<char> = text.chars().collect();
     let is_ident = |c: char| c.is_alphanumeric() || c == '_';
-    if idx >= chars.len() && !(idx > 0 && is_ident(chars[idx - 1])) {
+    // A cursor can sit past the end — of a shorter line, or of text an edit has
+    // just trimmed — and that is the end of the text, not a panic.
+    let idx = idx.min(chars.len());
+    if idx == chars.len() && !(idx > 0 && is_ident(chars[idx - 1])) {
         return None;
     }
-    let mut start = idx.min(chars.len());
+    let mut start = idx;
     let mut end = start;
     while start > 0 && is_ident(chars[start - 1]) {
         start -= 1;
@@ -218,5 +221,157 @@ mod tests {
         assert_eq!(shift_index(3, 3, 1), 1);
         // Anything outside the moved range stays put.
         assert_eq!(shift_index(4, 0, 2), 4);
+    }
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    fn open(dir: &Dir, name: &str, body: &str) -> PathBuf {
+        dir.file(name, body)
+    }
+
+    #[test]
+    fn opening_the_same_file_twice_focuses_the_tab_it_already_has() {
+        let dir = Dir::new("yara-buf-open");
+        let path = open(&dir, "a.rs", "fn main() {}\n");
+        let other = open(&dir, "b.rs", "");
+        let mut buffers = Buffers::default();
+        assert!(buffers.open(path.clone()));
+        assert!(buffers.open(other));
+        assert_eq!(buffers.active, 1);
+        assert!(buffers.open(path));
+        assert_eq!(buffers.active, 0, "no second tab for a file already open");
+        assert_eq!(buffers.list.len(), 2);
+    }
+
+    #[test]
+    fn a_file_that_is_not_text_does_not_open() {
+        let dir = Dir::new("yara-buf-binary");
+        let path = dir.path().join("blob.bin");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x9f]).unwrap();
+        let mut buffers = Buffers::default();
+        assert!(!buffers.open(path));
+        assert!(buffers.is_empty());
+        assert!(buffers.active().is_none());
+    }
+
+    #[test]
+    fn saving_writes_the_text_and_clears_the_modified_mark() {
+        let dir = Dir::new("yara-buf-save");
+        let path = open(&dir, "a.txt", "one\n");
+        let mut buffers = Buffers::default();
+        buffers.open(path.clone());
+        buffers.active_mut().unwrap().text.push_str("two\n");
+        assert!(buffers.active().unwrap().modified());
+        assert!(buffers.save_active());
+        assert!(!buffers.active().unwrap().modified());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\n");
+        assert!(!buffers.save(9), "there is no ninth buffer");
+    }
+
+    #[test]
+    fn closing_keeps_the_selection_on_a_neighbour() {
+        let dir = Dir::new("yara-buf-close");
+        let mut buffers = Buffers::default();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            buffers.open(open(&dir, name, ""));
+        }
+        assert_eq!(buffers.active, 2);
+        buffers.close(2);
+        assert_eq!(buffers.active, 1);
+        buffers.close(0);
+        assert_eq!(buffers.list.len(), 1);
+        buffers.close(7); // out of range: nothing happens
+        assert_eq!(buffers.list.len(), 1);
+    }
+
+    #[test]
+    fn deleting_a_folder_closes_what_was_open_under_it() {
+        let dir = Dir::new("yara-buf-tree");
+        let mut buffers = Buffers::default();
+        buffers.open(open(&dir, "keep.txt", ""));
+        buffers.open(open(&dir, "src/one.rs", ""));
+        buffers.open(open(&dir, "src/two.rs", ""));
+        buffers.active = 0;
+        buffers.close_path(&dir.path().join("src"));
+        assert_eq!(buffers.list.len(), 1);
+        assert_eq!(buffers.active().unwrap().name(), "keep.txt");
+    }
+
+    #[test]
+    fn a_moved_folder_takes_its_open_files_with_it() {
+        let dir = Dir::new("yara-buf-move");
+        let mut buffers = Buffers::default();
+        buffers.open(open(&dir, "src/one.rs", ""));
+        let from = dir.path().join("src");
+        let to = dir.path().join("lib");
+        buffers.retarget(&from, &to);
+        assert_eq!(buffers.list[0].path, to.join("one.rs"));
+        // The folder itself, renamed, lands on the new name rather than under it.
+        buffers.list[0].path = to.clone();
+        buffers.retarget(&to, &dir.path().join("core"));
+        assert_eq!(buffers.list[0].path, dir.path().join("core"));
+    }
+
+    #[test]
+    fn reordering_moves_the_tab_and_keeps_the_active_one_active() {
+        let dir = Dir::new("yara-buf-reorder");
+        let mut buffers = Buffers::default();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            buffers.open(open(&dir, name, ""));
+        }
+        buffers.active = 0;
+        buffers.reorder(0, 2);
+        assert_eq!(buffers.list[2].name(), "a.txt");
+        assert_eq!(buffers.active, 2, "the dragged tab stays in front");
+        buffers.reorder(0, 0); // no-op
+        buffers.reorder(0, 9); // out of range
+        assert_eq!(buffers.list[2].name(), "a.txt");
+    }
+
+    #[test]
+    fn a_path_is_shown_relative_to_the_project() {
+        let root = Path::new("/work/project");
+        assert_eq!(
+            relative_path(&root.join("src/main.rs"), root),
+            "src/main.rs"
+        );
+        // Outside the project, the whole path is the only honest answer.
+        let outside = Path::new("/elsewhere/file.rs");
+        assert_eq!(relative_path(outside, root), "/elsewhere/file.rs");
+    }
+
+    #[test]
+    fn a_buffer_names_itself_after_its_file() {
+        let buffer = Buffer {
+            path: PathBuf::from("/a/b/main.rs"),
+            text: String::new(),
+            saved_text: String::new(),
+            extension: "rs".into(),
+            history: History::default(),
+        };
+        assert_eq!(buffer.name(), "main.rs");
+        assert!(!buffer.modified());
+    }
+
+    #[test]
+    fn the_word_under_the_cursor_is_an_identifier_or_nothing() {
+        let text = "let total = other_value + 1;";
+        let (word, start, end) = word_at(text, 6).unwrap();
+        assert_eq!((word.as_str(), start, end), ("total", 4, 9));
+        // The end of a word counts as being in it.
+        assert_eq!(word_at(text, 9).unwrap().0, "total");
+        // Punctuation, digits and single letters are not worth navigating to.
+        assert!(word_at(text, 10).is_none());
+        assert!(word_at("x = 1", 0).is_none(), "one letter");
+        assert!(word_at("42 things", 0).is_none(), "starts with a digit");
+        assert!(word_at("", 0).is_none());
+        // A cursor past the end reads as the end of the text: the word there,
+        // if any, rather than a panic.
+        assert_eq!(word_at("value", 99).unwrap().0, "value");
+        assert!(word_at("value ", 99).is_none());
     }
 }

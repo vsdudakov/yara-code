@@ -51,6 +51,9 @@ pub struct App {
     show_theme_picker: bool,
     /// Last file-operation error, shown in the status bar.
     status: Option<String>,
+    /// The update check, and the release it found.
+    updates: crate::core::update::Checker,
+    update: Option<crate::core::update::Release>,
     /// Who last touched the line the cursor is on.
     blame: Option<Blame>,
     /// What `blame` was read for.
@@ -98,6 +101,8 @@ impl App {
             theme_index,
             show_theme_picker: false,
             status: settings_error,
+            updates: crate::core::update::Checker::default(),
+            update: None,
             blame: None,
             blame_key: None,
             git_lines: BTreeMap::new(),
@@ -203,11 +208,38 @@ impl App {
                 crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
                 let _ = self.settings.save();
             }
-            Command::Documentation => {
+            Command::CheckForUpdates => {
                 self.status = Some(format!(
-                    "Yara {} — no documentation page yet",
-                    env!("CARGO_PKG_VERSION")
+                    "checking for updates (this is {})…",
+                    crate::core::update::CURRENT
                 ));
+                let ctx = ctx.clone();
+                self.updates.start(move || ctx.request_repaint());
+            }
+            Command::InstallUpdate => match self.update.clone() {
+                Some(release) => match crate::core::update::install(&release) {
+                    Ok(dir) => {
+                        self.update = None;
+                        self.status = Some(format!(
+                            "{} installed in {} — restart to use it",
+                            release.tag,
+                            dir.display()
+                        ));
+                    }
+                    Err(message) => self.status = Some(message),
+                },
+                None => self.status = Some("nothing to install; check for updates first".into()),
+            },
+            Command::Documentation => {
+                let opened = crate::core::open_url(crate::core::DOCUMENTATION);
+                self.status = Some(if opened {
+                    crate::core::DOCUMENTATION.to_string()
+                } else {
+                    format!(
+                        "open {} to read the documentation",
+                        crate::core::DOCUMENTATION
+                    )
+                });
             }
             // The window's menus open from the bar itself.
             Command::NextPane
@@ -597,6 +629,30 @@ impl App {
             },
             None => BTreeMap::new(),
         };
+    }
+
+    /// Picks up an update check that has finished.
+    fn collect_update(&mut self) {
+        let Some(answer) = self.updates.take() else {
+            return;
+        };
+        match answer {
+            Ok(release) if release.is_newer() => {
+                self.status = Some(format!(
+                    "{} is out — Help → Install Update ({})",
+                    release.tag,
+                    crate::core::update::how_to_update()
+                ));
+                self.update = Some(release);
+            }
+            Ok(_) => {
+                self.status = Some(format!(
+                    "Yara Code {} is the latest",
+                    crate::core::update::CURRENT
+                ))
+            }
+            Err(message) => self.status = Some(format!("update check failed: {message}")),
+        }
     }
 
     /// Reads who last touched the cursor's line, when the cursor moves to
@@ -1595,6 +1651,7 @@ impl eframe::App for App {
         let theme = self.theme().clone();
         self.refresh_git_lines();
         self.refresh_blame();
+        self.collect_update();
         self.menu_bar(ctx);
 
         // Navigator / search / git sidebar. Declared before the status bar so

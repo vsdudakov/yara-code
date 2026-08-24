@@ -62,6 +62,8 @@ pub enum Command {
     ZoomOut,
     ResetZoom,
     Documentation,
+    CheckForUpdates,
+    InstallUpdate,
     Help,
 }
 
@@ -121,6 +123,8 @@ impl Command {
             Self::ZoomOut => "zoom_out",
             Self::ResetZoom => "reset_zoom",
             Self::Documentation => "documentation",
+            Self::CheckForUpdates => "check_for_updates",
+            Self::InstallUpdate => "install_update",
             Self::Help => "help",
         }
     }
@@ -184,6 +188,8 @@ impl Command {
             Self::ZoomOut => "Zoom Out",
             Self::ResetZoom => "Reset Zoom",
             Self::Documentation => "Documentation",
+            Self::CheckForUpdates => "Check for Updates...",
+            Self::InstallUpdate => "Install Update",
             Self::Help => "Show Key Bindings",
         }
     }
@@ -242,6 +248,8 @@ pub const ALL: &[Command] = &[
     Command::ZoomOut,
     Command::ResetZoom,
     Command::Documentation,
+    Command::CheckForUpdates,
+    Command::InstallUpdate,
     Command::Help,
 ];
 
@@ -286,7 +294,13 @@ pub const VIEW_MENU: &[Option<Command>] = &[
 
 /// What the Help menu lists. The version stands above it, drawn by each
 /// frontend from the crate's own version.
-pub const HELP_MENU: &[Option<Command>] = &[Some(Command::Help), Some(Command::Documentation)];
+pub const HELP_MENU: &[Option<Command>] = &[
+    Some(Command::Help),
+    Some(Command::Documentation),
+    None,
+    Some(Command::CheckForUpdates),
+    Some(Command::InstallUpdate),
+];
 
 /// The start page's key list: what to reach for first, in groups. Both
 /// frontends draw the same groups, each with the chord actually bound.

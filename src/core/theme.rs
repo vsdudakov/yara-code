@@ -536,3 +536,129 @@ mod tests {
         assert_eq!(ansi256(&theme, 232), (8, 8, 8));
     }
 }
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    use crate::core::test_support::Dir;
+
+    #[test]
+    fn the_built_in_themes_are_the_three_we_ship() {
+        let names: Vec<String> = builtin().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["Dark+", "Light+", "Monokai"]);
+        assert!(dark_plus().dark);
+        assert!(!light_plus().dark);
+        assert!(monokai().dark);
+    }
+
+    #[test]
+    fn the_ansi_palette_answers_for_every_index() {
+        let theme = dark_plus();
+        // The first sixteen come from the theme itself.
+        assert_eq!(ansi256(&theme, 1), theme.ansi[1]);
+        // 16..232 is the 6×6×6 cube: 16 is black, 231 white.
+        assert_eq!(ansi256(&theme, 16), (0, 0, 0));
+        assert_eq!(ansi256(&theme, 231), (255, 255, 255));
+        // 232..255 is the grey ramp, dark to light.
+        let (dark, light) = (ansi256(&theme, 232), ansi256(&theme, 255));
+        assert!(dark.0 < light.0);
+        assert_eq!(dark.0, dark.1, "the ramp is grey, not tinted");
+    }
+
+    #[test]
+    fn a_vs_code_theme_json_becomes_a_theme() {
+        let json = r##"{
+            "name": "Test Theme",
+            "type": "light",
+            "colors": {
+                "editor.background": "#fafafa",
+                "editor.foreground": "#101010",
+                "terminal.ansiRed": "#ff0000"
+            },
+            "tokenColors": [
+                { "scope": "comment", "settings": { "foreground": "#008000", "fontStyle": "italic" } },
+                { "scope": ["keyword", "storage"], "settings": { "foreground": "#0000ff", "fontStyle": "bold" } },
+                { "settings": { "foreground": "#123456" } }
+            ]
+        }"##;
+        let theme = from_vscode_json(json, "ignored").unwrap();
+        assert_eq!(theme.name, "Test Theme");
+        assert!(!theme.dark, "type: light");
+        assert_eq!(theme.ui.editor_bg, (250, 250, 250));
+        assert_eq!(theme.ui.fg, (16, 16, 16));
+        assert_eq!(theme.ansi[1], (255, 0, 0));
+
+        let comment = theme
+            .tokens
+            .iter()
+            .find(|t| t.scope == "comment")
+            .expect("the comment rule survived");
+        assert_eq!(comment.color, (0, 128, 0));
+        assert!(comment.italic);
+        // Several scopes stay one rule: a comma-separated selector is what
+        // the highlighter matches against.
+        let keywords = theme
+            .tokens
+            .iter()
+            .find(|t| t.scope == "keyword, storage")
+            .expect("both scopes in one selector");
+        assert!(keywords.bold && !keywords.italic);
+        // A rule with no scope at all is VS Code's editor default, not a rule.
+        assert!(theme.tokens.iter().all(|t| !t.scope.trim().is_empty()));
+    }
+
+    #[test]
+    fn a_theme_without_a_name_takes_the_file_name() {
+        let theme = from_vscode_json(r##"{"colors": {}}"##, "Fallback").unwrap();
+        assert_eq!(theme.name, "Fallback");
+        // With nothing to go on it stays dark, like VS Code's own default.
+        assert!(theme.dark);
+    }
+
+    #[test]
+    fn malformed_json_is_reported_rather_than_guessed_at() {
+        assert!(matches!(
+            from_vscode_json("{not json", "x"),
+            Err(ThemeError::Parse(_))
+        ));
+        let dir = Dir::new("yara-theme-missing");
+        assert!(from_vscode_file(&dir.path().join("nope.json")).is_err());
+    }
+
+    #[test]
+    fn a_theme_file_is_loaded_from_disk() {
+        let dir = Dir::new("yara-theme-file");
+        let path = dir.file(
+            "solar.json",
+            r##"{"type":"dark","colors":{"editor.background":"#002b36"}}"##,
+        );
+        let theme = from_vscode_file(&path).unwrap();
+        // No name in the file: the file name stands in.
+        assert_eq!(theme.name, "solar");
+        assert_eq!(theme.ui.editor_bg, (0, 43, 54));
+    }
+
+    #[test]
+    fn colours_are_read_in_every_shape_vs_code_writes_them() {
+        assert_eq!(parse_hex("#ffffff"), Some((255, 255, 255)));
+        assert_eq!(parse_hex("#abc"), Some((170, 187, 204)), "short form");
+        // Alpha is accepted and dropped: the editor paints opaque.
+        assert_eq!(parse_hex("#11223344"), Some((17, 34, 51)));
+        assert_eq!(parse_hex("nonsense"), None);
+        assert_eq!(parse_hex(""), None);
+    }
+
+    #[test]
+    fn a_token_rule_carries_its_style() {
+        let rule = TokenRule::new("string", 0x00ff00).italic().bold();
+        assert_eq!(rule.color, (0, 255, 0));
+        assert!(rule.italic && rule.bold);
+    }
+
+    #[test]
+    fn loading_everything_always_yields_the_built_ins() {
+        let themes = load_all();
+        assert!(themes.iter().any(|t| t.name == "Dark+"));
+        assert!(themes.len() >= builtin().len());
+    }
+}

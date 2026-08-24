@@ -28,6 +28,9 @@ jobs:
           - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
           - { os: macos-latest, target: x86_64-apple-darwin, archive: tar.gz }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, archive: tar.gz }
+          # Linux on arm64 builds natively on GitHub's arm runner: a Raspberry
+          # Pi, a Graviton box or an NVIDIA DGX Spark all take this one.
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     steps:
       - uses: actions/checkout@v5
@@ -73,8 +76,14 @@ jobs:
             *.zip.sha256
 
   linux-packages:
-    name: Debian and RPM packages
-    runs-on: ubuntu-latest
+    name: Debian and RPM packages (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -100,7 +109,7 @@ jobs:
           ls -l
       - uses: actions/upload-artifact@v5
         with:
-          name: ycode-linux-packages
+          name: ycode-linux-packages-${{ matrix.arch }}
           path: dist/*
 
   release:
@@ -139,6 +148,7 @@ jobs:
           arm_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz.sha256)
           intel_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz.sha256)
           linux_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256)
+          linux_arm_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz.sha256)
           for template in packaging/homebrew/ycode.rb.tmpl packaging/aur/PKGBUILD.tmpl; do
             out="$(basename "${template%.tmpl}")"
             sed -e "s/@VERSION@/$version/g" \
@@ -146,6 +156,7 @@ jobs:
                 -e "s/@ARM_SHA@/$arm_sha/g" \
                 -e "s/@INTEL_SHA@/$intel_sha/g" \
                 -e "s/@LINUX_SHA@/$linux_sha/g" \
+                -e "s/@LINUX_ARM_SHA@/$linux_arm_sha/g" \
                 "$template" > "$out"
             cat "$out"
           done

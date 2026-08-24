@@ -18,8 +18,14 @@ class Ycode < Formula
   end
 
   on_linux do
-    url "https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "@LINUX_SHA@"
+    on_arm do
+      url "https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_ARM_SHA@"
+    end
+    on_intel do
+      url "https://github.com/vsdudakov/yara-code/releases/download/@TAG@/ycode-@TAG@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@LINUX_SHA@"
+    end
   end
 
   # One formula, both frontends: `yara` for the terminal, `yara-gui` for the

@@ -71,6 +71,12 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, root: Option<PathBuf>) -> Self {
+        Self::with_context(&cc.egui_ctx, root)
+    }
+
+    /// The editor over a bare egui context — what `new` does once eframe has
+    /// made one, and what an end-to-end test can make for itself.
+    pub fn with_context(ctx: &egui::Context, root: Option<PathBuf>) -> Self {
         let themes = core_theme::load_all();
         let (mut settings, settings_error) = Settings::load();
         if let Some(root) = &root {
@@ -82,7 +88,7 @@ impl App {
             .position(|t| t.name == settings.theme)
             .unwrap_or(0);
         let theme = themes.get(theme_index).cloned().unwrap_or_default();
-        crate::gui::theme::apply(&cc.egui_ctx, &theme, settings.font_size);
+        crate::gui::theme::apply(ctx, &theme, settings.font_size);
         highlight::set_theme(&theme);
         Self {
             tree: FileTree::with_roots(root.iter().cloned().collect()),
@@ -1633,15 +1639,36 @@ fn command_row(ui: &mut egui::Ui, theme: &Theme, label: &str, shortcut: &str) ->
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ui(ctx);
+    }
+}
+
+impl App {
+    /// One frame of the editor. `eframe` calls it through `update`; a test
+    /// calls it through `egui::Context::run`.
+    pub fn ui(&mut self, ctx: &egui::Context) {
         // Every shortcut comes from settings.json, so a rebind takes effect
         // the moment the file is saved.
-        let bindings: Vec<(Command, _)> = self
+        //
+        // The most specific chord is offered first: egui ignores extra Shift
+        // and Alt when matching, so Cmd+F would otherwise swallow Cmd+Shift+F
+        // and Search would open Find in File.
+        let mut bindings: Vec<(Command, _)> = self
             .settings
             .keys
             .gui
             .iter()
             .filter_map(|(id, chord)| Some((Command::from_id(id)?, chord.clone())))
             .collect();
+        bindings.sort_by_key(|(_, chord)| {
+            let m = &chord.mods;
+            std::cmp::Reverse(
+                usize::from(m.cmd)
+                    + usize::from(m.ctrl)
+                    + usize::from(m.alt)
+                    + usize::from(m.shift),
+            )
+        });
         for (command, chord) in bindings {
             if keys::consumed(ctx, &chord) {
                 self.execute(ctx, command);

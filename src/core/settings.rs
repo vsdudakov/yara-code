@@ -631,6 +631,23 @@ mod settings_tests {
     }
 
     #[test]
+    fn a_more_specific_chord_is_never_shadowed() {
+        let settings = Settings::default();
+        // Cmd+Shift+F is Search, not Find in File with a stray Shift; the
+        // terminal frontend matches chords exactly, and the window sorts its
+        // bindings so the specific one is offered first.
+        let search: Chord = "Cmd+Shift+F".parse().unwrap();
+        assert_eq!(settings.gui_command(&search), Some(Command::FocusSearch));
+        let find: Chord = "Cmd+F".parse().unwrap();
+        assert_eq!(settings.gui_command(&find), Some(Command::FindInFile));
+
+        let save_as: Chord = "Ctrl+Shift+S".parse().unwrap();
+        assert_eq!(settings.tui_command(&save_as), Some(Command::SaveAs));
+        let save: Chord = "Ctrl+S".parse().unwrap();
+        assert_eq!(settings.tui_command(&save), Some(Command::Save));
+    }
+
+    #[test]
     fn a_chord_resolves_to_its_command_and_back() {
         let settings = Settings::default();
         let save = settings.gui_chord(Command::Save).unwrap().clone();

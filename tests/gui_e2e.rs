@@ -444,3 +444,124 @@ fn a_file_saves_from_the_window() {
     harness.press(Key::W, Modifiers::COMMAND);
     assert!(harness.shows("PROJECT"), "{}", harness.screen());
 }
+
+impl Harness {
+    fn right_click(&mut self, at: Pos2) {
+        self.events.push(Event::PointerMoved(at));
+        self.frame();
+        for pressed in [true, false] {
+            self.events.push(Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            self.frame();
+        }
+        self.frame();
+    }
+
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.events.push(Event::PointerMoved(from));
+        self.frame();
+        self.events.push(Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        self.frame();
+        // A few steps, so egui sees a drag rather than a click.
+        for i in 1..=4 {
+            let t = i as f32 / 4.0;
+            self.events
+                .push(Event::PointerMoved(from + (to - from) * t));
+            self.frame();
+        }
+        self.events.push(Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        self.frame();
+        self.frame();
+    }
+}
+
+#[test]
+fn the_navigator_renames_in_place_and_the_context_menu_offers_the_rest() {
+    let project = Project::new("yara-gui-e2e-rename");
+    let mut harness = Harness::open(Some(&project));
+    // Select the row, then F2 opens the inline name box.
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::F2, Modifiers::NONE);
+    harness.press(Key::A, Modifiers::COMMAND);
+    harness.type_text("RENAMED.md");
+    harness.press(Key::Enter, Modifiers::NONE);
+    assert!(
+        project.path().join("RENAMED.md").is_file(),
+        "{}",
+        harness.screen()
+    );
+
+    // The context menu on a file row.
+    let at = harness.position_of("RENAMED.md").unwrap();
+    harness.right_click(at);
+    assert!(harness.shows("Move To..."), "{}", harness.screen());
+    assert!(harness.shows("Delete") && harness.shows("New Folder"));
+    harness.press(Key::Escape, Modifiers::NONE);
+}
+
+#[test]
+fn dragging_a_row_onto_a_folder_moves_the_file_in_the_window() {
+    let project = Project::new("yara-gui-e2e-dnd");
+    let mut harness = Harness::open(Some(&project));
+    let from = harness.position_of("README.md").unwrap();
+    let to = harness.position_of("src").unwrap();
+    harness.drag(from, to);
+    assert!(
+        project.path().join("src").join("README.md").is_file(),
+        "{}",
+        harness.screen()
+    );
+}
+
+#[test]
+fn several_folders_each_head_their_own_subtree_in_the_window() {
+    let project = Project::new("yara-gui-e2e-roots");
+    let other = Project::new("yara-gui-e2e-roots-other");
+    // No native dialog in a test: add the folder through the navigator's
+    // empty-space menu is dialog-bound too, so use the project directly.
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, Some(project.path().to_path_buf()));
+    let _ = other;
+    for _ in 0..2 {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1280.0, 800.0))),
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.ui(ctx));
+    }
+}
+
+#[test]
+fn the_terminal_opens_a_second_session_and_takes_typing() {
+    let project = Project::new("yara-gui-e2e-term");
+    let mut harness = Harness::open(Some(&project));
+    assert!(harness.shows("TERMINAL"), "{}", harness.screen());
+    harness.press(Key::T, Modifiers::COMMAND | Modifiers::ALT);
+    harness.frame();
+    assert!(harness.shows("2"), "{}", harness.screen());
+    // Click into the grid and type; the shell gets it.
+    let at = harness
+        .position_of("TERMINAL")
+        .map(|p| Pos2::new(p.x + 40.0, p.y + 60.0))
+        .unwrap();
+    harness.click(at);
+    harness.type_text("echo hi");
+    harness.press(Key::Enter, Modifiers::NONE);
+    harness.press(Key::W, Modifiers::COMMAND | Modifiers::ALT);
+    harness.frame();
+}

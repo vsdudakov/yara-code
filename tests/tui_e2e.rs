@@ -1003,3 +1003,174 @@ fn the_git_view_pickers_open_and_the_diff_tab_closes() {
     harness.key(KeyCode::Esc);
     assert!(!harness.shows("≠ README.md"), "{}", harness.screen());
 }
+
+#[test]
+fn the_right_button_opens_the_context_menu_on_a_row() {
+    let project = Project::new("yara-e2e-rclick");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Right),
+        MouseEventKind::Up(MouseButton::Right),
+    ] {
+        harness.app.handle(Event::Mouse(MouseEvent {
+            kind,
+            column: 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    harness.draw();
+    assert!(
+        harness.shows("Open") && harness.shows("Delete"),
+        "{}",
+        harness.screen()
+    );
+    // Hovering moves the highlight; clicking outside dismisses it.
+    harness.app.handle(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: 6,
+        row: row + 3,
+        modifiers: KeyModifiers::NONE,
+    }));
+    harness.draw();
+    // Escape, like a click clear of it, puts the menu away.
+    harness.key(KeyCode::Esc);
+    assert!(!harness.shows("Move To..."), "{}", harness.screen());
+}
+
+#[test]
+fn a_shift_drag_selects_text_and_paste_replaces_it() {
+    let project = Project::new("yara-e2e-shiftdrag");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    let line = harness.row_of("A line of prose.").unwrap();
+    // Drag across the second line to select it.
+    drag(&mut harness, (38, line), (54, line));
+    // A paste event goes where the keyboard is: over the selection.
+    harness.app.handle(Event::Paste("replaced".into()));
+    harness.draw();
+    assert!(harness.shows("replaced"), "{}", harness.screen());
+}
+
+#[test]
+fn tab_cycles_the_panes_and_ctrl_click_jumps_to_a_definition() {
+    let project = Project::new("yara-e2e-cycle");
+    project.file(
+        "app.rs",
+        "fn helper() -> u32 { 1 }\nfn main() { let x = helper(); }\n",
+    );
+    let mut harness = Harness::open(&project);
+    // From the navigator, Tab walks Editor → Terminal → Navigator.
+    harness.key(KeyCode::Tab);
+    harness.key(KeyCode::Tab);
+    harness.press(KeyCode::BackTab, KeyModifiers::SHIFT);
+    // Open the file and Ctrl+click the call on line 2.
+    let row = harness.row_of("app.rs").unwrap();
+    harness.click(4, row);
+    let line = harness.row_of("let x = helper();").unwrap();
+    let col = harness
+        .screen()
+        .lines()
+        .nth(line as usize)
+        .unwrap()
+        .find("helper();")
+        .unwrap() as u16;
+    harness.app.handle(Event::Mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: col + 2,
+        row: line,
+        modifiers: KeyModifiers::CONTROL,
+    }));
+    harness.draw();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        harness.app.handle(Event::Mouse(MouseEvent {
+            kind,
+            column: col + 2,
+            row: line,
+            modifiers: KeyModifiers::CONTROL,
+        }));
+    }
+    harness.draw();
+    let screen = harness.screen();
+    assert!(
+        screen.contains("Definitions of") || screen.contains("Ln 1"),
+        "{screen}"
+    );
+    if screen.contains("Definitions of") {
+        harness.key(KeyCode::Enter);
+    }
+    assert!(harness.shows("Ln 1"), "{}", harness.screen());
+}
+
+#[test]
+fn find_next_and_replace_one_walk_the_matches() {
+    let project = Project::new("yara-e2e-findstep");
+    project.file("many.txt", "one\none\none\n");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("many.txt").unwrap();
+    harness.click(4, row);
+    harness.ctrl('f');
+    harness.type_text("one");
+    assert!(harness.shows("1 of 3"), "{}", harness.screen());
+    harness.key(KeyCode::F(3));
+    assert!(harness.shows("2 of 3"), "{}", harness.screen());
+    harness.press(KeyCode::F(3), KeyModifiers::SHIFT);
+    assert!(harness.shows("1 of 3"), "{}", harness.screen());
+    // Replace just this one: two remain.
+    harness.key(KeyCode::Tab);
+    harness.type_text("two");
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("1 of 2"), "{}", harness.screen());
+}
+
+#[test]
+fn a_folder_row_offers_to_leave_the_project() {
+    let project = Project::new("yara-e2e-leave");
+    let other = Project::new("yara-e2e-leave-other");
+    let mut harness = Harness::open(&project);
+    harness.press(
+        KeyCode::Char('a'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    harness.key(KeyCode::Tab);
+    harness.type_text(&other.path().display().to_string());
+    harness.key(KeyCode::Enter);
+    // The root row wears the folder's name; a long one is clipped to the pane,
+    // so match on its stem.
+    let name: String = other
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .chars()
+        .take(20)
+        .collect();
+    assert!(harness.shows(&name), "{}", harness.screen());
+    // Right-click the added folder's own row: the menu offers to remove it.
+    let row = harness.row_of(&name).unwrap();
+    for kind in [
+        MouseEventKind::Down(MouseButton::Right),
+        MouseEventKind::Up(MouseButton::Right),
+    ] {
+        harness.app.handle(Event::Mouse(MouseEvent {
+            kind,
+            column: 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    harness.draw();
+    assert!(
+        harness.shows("Remove Folder from Project"),
+        "{}",
+        harness.screen()
+    );
+    let entry = harness.row_of("Remove Folder from Project").unwrap();
+    harness.click(6, entry);
+    assert!(!harness.shows(&name), "{}", harness.screen());
+}

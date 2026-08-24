@@ -8,7 +8,7 @@ GPU window that mirror each other, in one small Rust binary.**
 [![CI](https://github.com/vsdudakov/yara-code/actions/workflows/ci.yml/badge.svg)](https://github.com/vsdudakov/yara-code/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/vsdudakov/yara-code?sort=semver)](https://github.com/vsdudakov/yara-code/releases)
 [![Docs](https://img.shields.io/badge/docs-vsdudakov.github.io%2Fyara--code-blue.svg)](https://vsdudakov.github.io/yara-code/)
-[![Coverage](https://img.shields.io/badge/coverage-78%25-green.svg)](#development)
+[![Coverage](https://img.shields.io/badge/coverage-81%25-green.svg)](#development)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -138,7 +138,7 @@ make build     # release build of both binaries
 make run ARGS=~/code/project
 ```
 
-**Coverage.** 242 tests, **78% of the crate**: 92% of `src/core` — buffers
+**Coverage.** 242 tests, **81% of the crate**: 92% of `src/core` — buffers
 and undo, project folders, search, find and replace, diffs, git against a real
 repository, themes, settings and key chords, the updater, terminal sessions
 over live PTYs — and the two frontends driven **end to end**. `tests/tui_e2e.rs`

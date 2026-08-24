@@ -88,11 +88,11 @@ cargo build --release --no-default-features --features tui
 | | |
 | --- | --- |
 | 📂 **Read what the agent changed** | Changed files tinted in the navigator, changed lines marked in the gutter, a **side-by-side diff** in a tab of its own, blame for the line under the cursor — commit, author, age, and the pull request its message names. |
-| ✏️ **Fix a line, not a project** | Tabs, smart indent, folding with sticky scroll, undo/redo over everything (including Replace All), find & replace in the file and across the project. |
-| 🖥 **The agent stays in view** | A real login shell on a pseudo-terminal in both frontends — tab completion, full-screen programs, 5000 lines of scrollback, named and reorderable session tabs. |
+| ✏️ **Fix a line, not a project** | Tabs, smart indent with indent guides, folding with sticky scroll, undo/redo over everything (including Replace All), find & replace in the file and across the project, a rendered **markdown preview** in both frontends. |
+| 🖥 **The agent stays in view** | A real login shell on a pseudo-terminal in both frontends — tab completion, full-screen programs, 5000 lines of scrollback. Session tabs say what is running (`yara-code — claude`), and can be renamed and reordered. |
 | 🗂 **Several folders, one window** | "Add Folder to Project" — search, go-to-definition and the navigator treat them as one project. |
 | 🎨 **Themes and syntax** | Three built-in themes; any VS Code color theme JSON; 75 syntect grammars plus bundled TypeScript, TOML, Kotlin, Swift, Dart, Dockerfile, Protobuf and GraphQL. |
-| ⌨️ **Keys you already know** | VS Code bindings, `Ctrl` for `Cmd` in the terminal, every one of them rebindable in `settings.json`. |
+| ⌨️ **Keys you already know** | VS Code bindings, `Ctrl` for `Cmd` in the terminal, every one of them rebindable in a commented `settings.json` that applies the moment it is saved — with a per-project `.ycode/settings.json` on top. |
 
 ## Usage
 
@@ -138,7 +138,7 @@ make build     # release build of both binaries
 make run ARGS=~/code/project
 ```
 
-**Coverage.** 251 tests, **81% of the crate**: 92% of `src/core` — buffers
+**Coverage.** 278 tests, **81% of the crate**: 92% of `src/core` — buffers
 and undo, project folders, search, find and replace, diffs, git against a real
 repository, themes, settings and key chords, the updater, terminal sessions
 over live PTYs — and the two frontends driven **end to end**. `tests/tui_e2e.rs`

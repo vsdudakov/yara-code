@@ -142,6 +142,45 @@ pub fn newline_edit(text: &str, cursor: usize, extension: &str, config: &Indent)
     }
 }
 
+/// How many indent guides each line carries: one per whole level of leading
+/// whitespace before the line's own text, a tab counting as `width` columns.
+/// A blank line takes the guides shared by its nearest non-blank neighbours,
+/// so a block's guides run unbroken through the empty lines inside it.
+pub fn guides(text: &str, width: usize) -> Vec<usize> {
+    let width = width.max(1);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let levels: Vec<Option<usize>> = lines
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                return None;
+            }
+            let columns: usize = line
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .map(|c| if c == '\t' { width } else { 1 })
+                .sum();
+            Some(columns / width)
+        })
+        .collect();
+
+    let mut out = vec![0usize; lines.len()];
+    let mut above = 0usize;
+    for (i, level) in levels.iter().enumerate() {
+        out[i] = match level {
+            Some(level) => {
+                above = *level;
+                *level
+            }
+            None => {
+                let below = levels[i..].iter().find_map(|l| *l).unwrap_or(0);
+                above.min(below)
+            }
+        };
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +267,17 @@ mod tests {
     #[test]
     fn rust_colon_does_not_indent() {
         assert_eq!(apply("    foo:", "rs"), "    foo:\n    ");
+    }
+
+    #[test]
+    fn guides_follow_the_leading_whitespace_in_whole_levels() {
+        let text = "fn a() {\n    if x {\n        y();\n\n    }\n\tz();\n      w();\n}";
+        assert_eq!(guides(text, 4), vec![0, 1, 2, 1, 1, 1, 1, 0]);
+        // A blank line between two equally deep lines keeps their guides; a
+        // trailing blank line has nothing below and takes nothing.
+        assert_eq!(guides("    a\n\n    b\n", 4), vec![1, 1, 1, 0]);
+        // A width of zero cannot divide anything and is read as one.
+        assert_eq!(guides("  a", 0), vec![2]);
+        assert_eq!(guides("", 4), vec![0]);
     }
 }

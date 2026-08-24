@@ -273,7 +273,8 @@ impl FileTree {
     }
 
     /// The navigator context menu, identical in both frontends:
-    /// Open | New File, New Folder | Rename, Move To... | Delete.
+    /// Open | New File, New Folder | Rename, Move To... | Delete | the
+    /// project-level entries — leave the project, add a folder to it.
     fn context_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -308,38 +309,40 @@ impl FileTree {
             }
             ui.separator();
         }
+
+        match target {
+            // A project folder can leave the project; renaming, moving or
+            // deleting one on disk is not what the navigator offers.
+            Some((path, _)) if is_root => {
+                if menu_item(ui, theme, "Remove Folder from Project").clicked() {
+                    events.push(TreeEvent::RemoveFolder(path.to_path_buf()));
+                    ui.close_menu();
+                }
+            }
+            Some((path, _)) => {
+                if menu_item(ui, theme, "Rename").clicked() {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.start_editing(Pending::Rename(path.to_path_buf()), name);
+                    ui.close_menu();
+                }
+                if menu_item(ui, theme, "Move To...").clicked() {
+                    self.start_editing(Pending::MoveTo(path.to_path_buf()), String::new());
+                    ui.close_menu();
+                }
+                ui.separator();
+                if menu_item(ui, theme, "Delete").clicked() {
+                    events.push(TreeEvent::RequestDelete(path.to_path_buf()));
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
+            None => {}
+        }
         if menu_item(ui, theme, "Add Folder to Project...").clicked() {
             events.push(TreeEvent::AddFolder);
-            ui.close_menu();
-        }
-
-        let Some((path, _)) = target else { return };
-        // A project folder can leave the project; renaming, moving or deleting
-        // one on disk is not what the navigator offers.
-        if is_root {
-            ui.separator();
-            if menu_item(ui, theme, "Remove Folder from Project").clicked() {
-                events.push(TreeEvent::RemoveFolder(path.to_path_buf()));
-                ui.close_menu();
-            }
-            return;
-        }
-        ui.separator();
-        if menu_item(ui, theme, "Rename").clicked() {
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            self.start_editing(Pending::Rename(path.to_path_buf()), name);
-            ui.close_menu();
-        }
-        if menu_item(ui, theme, "Move To...").clicked() {
-            self.start_editing(Pending::MoveTo(path.to_path_buf()), String::new());
-            ui.close_menu();
-        }
-        ui.separator();
-        if menu_item(ui, theme, "Delete").clicked() {
-            events.push(TreeEvent::RequestDelete(path.to_path_buf()));
             ui.close_menu();
         }
     }

@@ -87,5 +87,11 @@ pub fn run(root: Option<PathBuf>) -> io::Result<()> {
     let backend = ratatui::backend::CrosstermBackend::new(out);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    app::App::new(root).run(&mut terminal)
+    let mut app = app::App::new(root);
+    if !enhanced {
+        app.status = "this terminal cannot tell Ctrl+Shift from Ctrl — \
+                      rebind those chords in settings.json"
+            .into();
+    }
+    app.run(&mut terminal)
 }

@@ -116,7 +116,10 @@ impl GitPanel {
                 let summary = match &self.state.error {
                     Some(error) => error.clone(),
                     None if self.state.changes.is_empty() => "no changes".to_string(),
-                    None => format!("{} changed file(s)", self.state.changes.len()),
+                    None => format!(
+                        "{} changed",
+                        crate::core::count(self.state.changes.len(), "file")
+                    ),
                 };
                 let tone = if self.state.error.is_some() {
                     theme.ui.danger

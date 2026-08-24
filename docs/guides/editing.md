@@ -54,8 +54,8 @@ C# and proto — not an LSP — and it falls back to listing references. `Ctrl+-
 
 Arrows or `j`/`k` move, <kbd>Enter</kbd> opens or expands. New file, new folder,
 rename, move and delete are on the context menu (right-click, or `Shift+F10`),
-and each has a binding of its own — `F2` renames, `Cmd+Backspace` /
-`Shift+Delete` deletes.
+and each has a binding of its own — `F2` renames, `Shift+Delete`
+deletes.
 
 Drag a row onto a folder to move it; the target folder highlights, and dropping
 on empty space moves to the project root.

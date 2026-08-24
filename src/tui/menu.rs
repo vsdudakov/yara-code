@@ -127,6 +127,19 @@ impl Menu {
         y: u16,
         chord_for: impl Fn(Command) -> Option<String>,
     ) -> Self {
+        Self::commands_where(entries, title, x, y, chord_for, |_| true)
+    }
+
+    /// `commands`, listing only the entries `keep` says yes to — how the Help
+    /// menu offers Install Update only once there is an update to install.
+    pub fn commands_where(
+        entries: &'static [Option<Command>],
+        title: Option<String>,
+        x: u16,
+        y: u16,
+        chord_for: impl Fn(Command) -> Option<String>,
+        keep: impl Fn(Command) -> bool,
+    ) -> Self {
         let mut rows = Vec::new();
         let mut shortcuts = Vec::new();
         if let Some(title) = title {
@@ -135,7 +148,12 @@ impl Menu {
             rows.push(None);
             shortcuts.push(String::new());
         }
-        for entry in entries {
+        let entries: Vec<Option<Command>> = entries
+            .iter()
+            .copied()
+            .filter(|entry| entry.is_none_or(&keep))
+            .collect();
+        for entry in &entries {
             match entry {
                 Some(command) => {
                     rows.push(Some(MenuItem::Command(*command)));

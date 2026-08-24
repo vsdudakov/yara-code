@@ -156,7 +156,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         reset_git_rects(app);
     }
     draw_tab_strip(frame, app, tab_row);
-    if app.active_diff().is_some() {
+    if app.active_preview().is_some() {
+        draw_preview(frame, app, editor_area);
+    } else if app.active_diff().is_some() {
         draw_diff(frame, app, editor_area);
     } else {
         draw_editor(frame, app, editor_area);
@@ -496,7 +498,10 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
     let summary = match &app.git.error {
         Some(error) => error.clone(),
         None if app.git.changes.is_empty() => "no changes".to_string(),
-        None => format!("{} changed file(s)", app.git.changes.len()),
+        None => format!(
+            "{} changed",
+            crate::core::count(app.git.changes.len(), "file")
+        ),
     };
     let tone = if app.git.error.is_some() {
         theme.ui.danger
@@ -1019,16 +1024,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     y += 1;
 
     // Summary line, carrying any pattern error.
-    let summary = match (&app.search.error, app.search.query.is_empty()) {
-        (Some(error), _) => error.clone(),
-        (None, true) => String::new(),
-        (None, false) => format!(
-            "{}{} results in {} files",
-            app.search.total_matches(),
-            if app.search.truncated { "+" } else { "" },
-            app.search.results.len()
-        ),
-    };
+    let summary = app.search.summary();
     let tone = if app.search.error.is_some() {
         theme.ui.danger
     } else {
@@ -1438,6 +1434,167 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// A markdown file as a reader sees it: headings in the accent, code on the
+/// sidebar's background, lists with their bullets — one line of text per
+/// drawn row, wrapped to the pane.
+fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
+    use crate::core::markdown::{plain, Block, Span as Md};
+    let theme = app.theme().clone();
+    let Some(preview) = app.active_preview() else {
+        return;
+    };
+    let width = whole.width.saturating_sub(4) as usize;
+
+    let heading = |level: u8| {
+        Style::default()
+            .fg(color(theme.ui.accent_light))
+            .bg(color(theme.ui.editor_bg))
+            .add_modifier(if level <= 2 {
+                Modifier::BOLD
+            } else {
+                Modifier::BOLD | Modifier::DIM
+            })
+    };
+    let body = on(theme.ui.fg, theme.ui.editor_bg);
+    let faint = on(theme.ui.fg_faint, theme.ui.editor_bg);
+    let code = on(theme.ui.fg, theme.ui.sidebar_bg);
+
+    // Inline spans, then wrapped into rows of `width`.
+    let inline = |spans: &[Md], base: Style| -> Vec<Span<'static>> {
+        spans
+            .iter()
+            .map(|s| match s {
+                Md::Text(t) => Span::styled(t.clone(), base),
+                Md::Bold(t) => Span::styled(t.clone(), base.add_modifier(Modifier::BOLD)),
+                Md::Italic(t) => Span::styled(t.clone(), base.add_modifier(Modifier::ITALIC)),
+                Md::Code(t) => Span::styled(format!(" {t} "), code),
+                Md::Link(t, _) => Span::styled(
+                    t.clone(),
+                    base.fg(color(theme.ui.accent_light))
+                        .add_modifier(Modifier::UNDERLINED),
+                ),
+            })
+            .collect()
+    };
+    let wrap = |text: &str, indent: &str| -> Vec<String> {
+        let mut rows = Vec::new();
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            if !line.is_empty()
+                && line.chars().count() + 1 + word.chars().count()
+                    > width.saturating_sub(indent.len())
+            {
+                rows.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        if !line.is_empty() || rows.is_empty() {
+            rows.push(line);
+        }
+        rows
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    for block in preview.blocks.iter().skip(preview.scroll) {
+        match block {
+            Block::Heading(level, spans) => {
+                let text = plain(spans);
+                let marker = if *level == 1 { "" } else { "  " };
+                lines.push(Line::from(Span::styled(
+                    format!("{marker}{text}"),
+                    heading(*level),
+                )));
+                if *level == 1 {
+                    lines.push(Line::from(Span::styled(
+                        "═".repeat(text.chars().count().min(width)),
+                        heading(1),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Paragraph(spans) => {
+                // Styled spans survive on the first row; wrapped rows carry the
+                // text only, which keeps the styling honest where it matters.
+                let text = plain(spans);
+                let rows = wrap(&text, "  ");
+                if rows.len() == 1 {
+                    let mut styled = vec![Span::styled("  ", body)];
+                    styled.extend(inline(spans, body));
+                    lines.push(Line::from(styled));
+                } else {
+                    for row in rows {
+                        lines.push(Line::from(Span::styled(format!("  {row}"), body)));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Code(language, text) => {
+                if let Some(language) = language {
+                    lines.push(Line::from(Span::styled(format!("  {language}"), faint)));
+                }
+                for row in text.lines() {
+                    lines.push(Line::from(Span::styled(
+                        pad(&format!("  {row}"), width + 2),
+                        code,
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+            Block::List(ordered, items) => {
+                for (n, item) in items.iter().enumerate() {
+                    let bullet = if *ordered {
+                        format!("{}.", n + 1)
+                    } else {
+                        "•".to_string()
+                    };
+                    let rows = wrap(&plain(item), "     ");
+                    for (r, row) in rows.into_iter().enumerate() {
+                        let lead = if r == 0 {
+                            format!("  {bullet} ")
+                        } else {
+                            "     ".to_string()
+                        };
+                        let mut styled = vec![Span::styled(lead, faint)];
+                        if r == 0 && item.iter().any(|s| !matches!(s, Md::Text(_))) {
+                            styled.extend(inline(item, body));
+                        } else {
+                            styled.push(Span::styled(row, body));
+                        }
+                        lines.push(Line::from(styled));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Quote(spans) => {
+                for row in wrap(&plain(spans), "  │ ") {
+                    lines.push(Line::from(vec![
+                        Span::styled("  │ ", on(theme.ui.accent_light, theme.ui.editor_bg)),
+                        Span::styled(row, faint.add_modifier(Modifier::ITALIC)),
+                    ]));
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Rule => {
+                lines.push(Line::from(Span::styled(
+                    "  ".to_string() + &"─".repeat(width),
+                    faint,
+                )));
+                lines.push(Line::from(""));
+            }
+        }
+        if lines.len() > whole.height as usize + 1 {
+            break;
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines).style(on(theme.ui.fg, theme.ui.editor_bg)),
+        whole,
+    );
+}
+
 /// A changed line's background: the tint laid thinly over the editor's own.
 fn wash(tint: (u8, u8, u8), base: (u8, u8, u8)) -> (u8, u8, u8) {
     let mix = |t: u8, b: u8| ((t as u16 * 22 + b as u16 * 78) / 100) as u8;
@@ -1527,9 +1684,141 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
         diff_spans.push((x + label_width, x + label_width + 2, i, true));
         x += label_width + 2;
     }
-    app.layout.tab_spans = tab_spans;
-    app.layout.diff_tabs = diff_spans;
-    if spans.is_empty() {
+    let mut preview_spans: Vec<(u16, u16, usize, bool)> = Vec::new();
+    for (i, preview) in app.previews.iter().enumerate() {
+        let selected = app.active_preview == Some(i);
+        let name = preview
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let label = format!(" ◫ {name} ");
+        let label_width = label.chars().count() as u16;
+        let (fg, bg) = if selected {
+            (theme.ui.fg_bright, theme.ui.tab_active_bg)
+        } else {
+            (theme.ui.fg_dim, theme.ui.tab_inactive_bg)
+        };
+        spans.push(Span::styled(label, on(fg, bg)));
+        spans.push(Span::styled(
+            format!("{} ", icons.close),
+            on(theme.ui.fg_faint, bg),
+        ));
+        preview_spans.push((x, x + label_width, i, false));
+        preview_spans.push((x + label_width, x + label_width + 2, i, true));
+        x += label_width + 2;
+    }
+    // What stands at the right edge: a Preview button while a markdown file
+    // is in front, and `‹ ›` when the tabs run past the strip.
+    let markdown_in_front = app.active_diff.is_none()
+        && app.active_preview.is_none()
+        && app
+            .buffers
+            .active()
+            .is_some_and(|buf| matches!(buf.extension.as_str(), "md" | "markdown"));
+    let hint = markdown_in_front.then(|| match app.settings.tui_chord(Command::TogglePreview) {
+        Some(chord) => format!(" ◫ Preview {chord} "),
+        None => " ◫ Preview ".to_string(),
+    });
+    let hint_width = hint.as_ref().map_or(0, |h| h.chars().count() as u16);
+    let total = x.saturating_sub(tab_area.x);
+    let overflow = total > tab_area.width.saturating_sub(hint_width);
+    let arrows_width = if overflow { 4 } else { 0 };
+    let visible = tab_area.width.saturating_sub(hint_width + arrows_width);
+
+    // Scrolling: clamp to what is there, and bring a newly fronted tab into
+    // view the first time it is drawn.
+    let in_front = (app.buffers.active, app.active_diff, app.active_preview);
+    let max_scroll = total.saturating_sub(visible);
+    app.tab_scroll = app.tab_scroll.min(max_scroll);
+    if app.shown_tab != Some(in_front) {
+        app.shown_tab = Some(in_front);
+        let fronted = match in_front {
+            (_, _, Some(p)) => preview_spans.get(p * 2).map(|s| (s.0, s.1 + 2)),
+            (_, Some(d), _) => diff_spans.get(d * 2).map(|s| (s.0, s.1 + 2)),
+            (b, _, _) => tab_spans.get(b * 2).map(|s| (s.0, s.1 + 2)),
+        };
+        if let Some((start, end)) = fronted {
+            let (start, end) = (start - tab_area.x, end - tab_area.x);
+            if end > app.tab_scroll + visible {
+                app.tab_scroll = end.saturating_sub(visible);
+            }
+            if start < app.tab_scroll {
+                app.tab_scroll = start;
+            }
+        }
+    }
+    let scroll = app.tab_scroll;
+    let shift = |ranges: Vec<(u16, u16, usize, bool)>| -> Vec<(u16, u16, usize, bool)> {
+        ranges
+            .into_iter()
+            .filter_map(|(start, end, i, close)| {
+                let start = (start - tab_area.x).saturating_sub(scroll);
+                let end = (end - tab_area.x).saturating_sub(scroll).min(visible);
+                (end > start).then_some((tab_area.x + start, tab_area.x + end, i, close))
+            })
+            .collect()
+    };
+    app.layout.tab_spans = shift(tab_spans);
+    app.layout.diff_tabs = shift(diff_spans);
+    app.layout.preview_tabs = shift(preview_spans);
+
+    // Drop the scrolled-off columns from the front of the strip, cut it to
+    // the room it has, then put the controls after it.
+    let mut skip = scroll as usize;
+    let mut room = visible as usize;
+    let mut shown: Vec<Span> = Vec::new();
+    for span in spans.iter() {
+        let text: Vec<char> = span.content.chars().collect();
+        if skip >= text.len() {
+            skip -= text.len();
+            continue;
+        }
+        let piece: String = text[skip..].iter().take(room).collect();
+        skip = 0;
+        room -= piece.chars().count();
+        shown.push(Span::styled(piece, span.style));
+        if room == 0 {
+            break;
+        }
+    }
+    let empty = spans.is_empty();
+    let mut spans = shown;
+    if !empty {
+        spans.push(Span::styled(
+            " ".repeat(room),
+            on(theme.ui.fg_dim, theme.ui.status_bg),
+        ));
+        let mut at = tab_area.x + visible;
+        app.layout.tab_scroll_buttons = None;
+        if overflow {
+            let can_left = scroll > 0;
+            let can_right = scroll < max_scroll;
+            let tone = |on_: bool| {
+                on(
+                    if on_ { theme.ui.fg } else { theme.ui.fg_faint },
+                    theme.ui.status_bg,
+                )
+            };
+            spans.push(Span::styled(" ‹", tone(can_left)));
+            spans.push(Span::styled(" ›", tone(can_right)));
+            app.layout.tab_scroll_buttons = Some((at, at + 2));
+            at += 4;
+        }
+        app.layout.preview_hint = None;
+        if let Some(hint) = hint {
+            let width = hint.chars().count() as u16;
+            spans.push(Span::styled(
+                hint,
+                on(theme.ui.fg_bright, theme.ui.tab_inactive_bg),
+            ));
+            app.layout.preview_hint = Some((at, at + width));
+        }
+    } else {
+        app.layout.tab_scroll_buttons = None;
+        app.layout.preview_hint = None;
+    }
+    if empty {
         // No tab strip at all when nothing is open, as in the window.
         frame.render_widget(
             Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
@@ -1612,8 +1901,29 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         line_starts.push(at);
     }
 
+    // Indent guides: one faint bar per level of indentation before the text,
+    // running through blank lines so a block reads as one.
+    let guide_width = app.settings.indent.width.max(1);
+    let guide_style = on(core_theme::indent_guide(&theme), theme.ui.editor_bg);
+    let guides = {
+        let text: String = app
+            .highlight
+            .iter()
+            .map(|regions| {
+                regions
+                    .iter()
+                    .map(|(_, _, t)| t.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::core::indent::guides(&text, guide_width)
+    };
+
     let render_line = |n: usize, row_style: Option<ratatui::style::Style>| -> Line<'static> {
         let folded = app.is_folded(n);
+        let guide_cols = guides.get(n).copied().unwrap_or(0) * guide_width;
+        let guide_at = |at: usize| at < guide_cols && at.is_multiple_of(guide_width);
         let foldable = fold::region_at(&app.regions, n).is_some();
         let marker = if !foldable {
             " "
@@ -1701,10 +2011,16 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                 let touched = selected.is_some_and(|(s, e)| col < e && col + len > s);
                 let underlined = link.is_some_and(|(_, s, e)| col < e && col + len > s);
                 let hit_here = hits.iter().any(|(s, e, _)| col < *e && col + len > *s);
-                if touched || underlined || hit_here {
+                let guided = col < guide_cols && piece.chars().all(|c| c == ' ');
+                if touched || underlined || hit_here || guided {
                     for (i, ch) in piece.chars().enumerate() {
                         let at = col + i;
                         let mut style = style;
+                        let mut glyph = ch.to_string();
+                        if guided && guide_at(at) && row_style.is_none() {
+                            glyph = "\u{2502}".to_string();
+                            style = guide_style;
+                        }
                         if let Some((_, _, current)) =
                             hits.iter().find(|(s, e, _)| at >= *s && at < *e)
                         {
@@ -1721,12 +2037,20 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                             style = on(theme.ui.accent_light, theme.ui.editor_bg)
                                 .add_modifier(Modifier::UNDERLINED);
                         }
-                        spans.push(Span::styled(ch.to_string(), style));
+                        spans.push(Span::styled(glyph, style));
                     }
                 } else {
                     spans.push(Span::styled(piece, style));
                 }
                 col += len;
+            }
+        }
+        // A blank line inside a block carries the block's guides too.
+        if row_style.is_none() {
+            while col < guide_cols.min(text_width) {
+                let glyph = if guide_at(col) { "\u{2502}" } else { " " };
+                spans.push(Span::styled(glyph, guide_style));
+                col += 1;
             }
         }
         // A selection running past the end of the line shows on the newline.
@@ -1961,7 +2285,10 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme().clone();
     let width = area.width as usize;
 
-    let mut left = match app.buffers.active() {
+    // The row reads, left to right: the file, then the message or the blame
+    // line; on the right the cursor, the indentation, the language and the
+    // theme — the same fields in the same order as the window's status bar.
+    let mut path = match app.buffers.active() {
         Some(buf) => {
             let mut text = app.project.display(&buf.path);
             if buf.modified() {
@@ -1971,21 +2298,14 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         None => String::new(),
     };
-    if !app.status.is_empty() {
-        if !left.is_empty() {
-            left.push_str("   ");
-        }
-        left.push_str(&app.status);
-    } else if let Some(blame) = &app.blame {
+    let message = if !app.status.is_empty() {
+        app.status.clone()
+    } else {
         // Who last touched the line the cursor is on.
-        if !left.is_empty() {
-            left.push_str("   ");
-        }
-        left.push_str(&blame.line());
-    }
+        app.blame.as_ref().map(|b| b.line()).unwrap_or_default()
+    };
 
-    // The theme name closes the row and is clickable, so it is kept apart.
-    let right_prefix = match app.buffers.active() {
+    let (cursor, indent, lang) = match app.buffers.active() {
         Some(buf) => {
             let state = &app.edit[app.buffers.active];
             let lang = if buf.extension.is_empty() {
@@ -1993,47 +2313,105 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 buf.extension.clone()
             };
-            format!("Ln {}, Col {}   {}   ", state.line + 1, state.col + 1, lang)
+            (
+                format!("Ln {}, Col {}", state.line + 1, state.col + 1),
+                app.settings.indent.label(),
+                lang,
+            )
         }
-        None => String::new(),
+        None => (String::new(), String::new(), String::new()),
     };
     let name = theme.name.clone();
-    let right_len = right_prefix.chars().count() + name.chars().count();
+    let right: Vec<&str> = [
+        cursor.as_str(),
+        indent.as_str(),
+        lang.as_str(),
+        name.as_str(),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
+    let right_len = right.iter().map(|s| s.chars().count()).sum::<usize>() + 3 * (right.len() - 1);
 
-    let left = clip(&left, width.saturating_sub(right_len + 3));
-    let gap = width
-        .saturating_sub(left.chars().count() + right_len + 2)
-        .max(1);
+    // The message is the newer thing to read, so the path gives way to it:
+    // first from its front — the file name is the end worth keeping — and
+    // when even that leaves the message short, entirely.
+    let room = width.saturating_sub(right_len + 3);
+    if !message.is_empty() && !path.is_empty() {
+        let path_room = room.saturating_sub(message.chars().count() + 3);
+        path = if path_room >= 12 {
+            trim_front(&path, path_room.min(room))
+        } else {
+            String::new()
+        };
+    } else {
+        path = trim_front(&path, room);
+    }
+    let left_room = room.saturating_sub(path.chars().count() + if path.is_empty() { 0 } else { 3 });
+    let message = clip(&message, left_room);
+    let left_len = path.chars().count()
+        + if message.is_empty() {
+            0
+        } else {
+            3 + message.chars().count()
+        };
+    let gap = width.saturating_sub(left_len + right_len + 2).max(1);
 
-    let name_x = area.x + (1 + left.chars().count() + gap + right_prefix.chars().count()) as u16;
-    let name_w = (name.chars().count() as u16).min((area.x + area.width).saturating_sub(name_x));
-    app.layout.status_theme = Rect {
-        x: name_x,
-        y: area.y,
-        width: name_w,
-        height: 1,
-    };
-    let hovered = app
-        .mouse
-        .is_some_and(|(x, y)| y == area.y && x >= name_x && x < name_x + name_w);
-
-    let base = on(theme.ui.fg_dim, theme.ui.status_bg);
+    // The theme and the indentation are clickable, so where they land is kept.
+    let mut x = area.x + (1 + left_len + gap) as u16;
+    let mut spans = vec![Span::styled(
+        format!(" {path}{}", if message.is_empty() { "" } else { "   " }),
+        on(theme.ui.fg_dim, theme.ui.status_bg),
+    )];
+    spans.push(Span::styled(
+        format!("{message}{}", " ".repeat(gap)),
+        on(
+            if crate::core::is_failure(&message) {
+                theme.ui.danger
+            } else {
+                theme.ui.fg_dim
+            },
+            theme.ui.status_bg,
+        ),
+    ));
+    app.layout.status_indent = Rect::default();
+    app.layout.status_theme = Rect::default();
+    let mouse = app.mouse;
+    for (i, field) in right.iter().enumerate() {
+        let w = field.chars().count() as u16;
+        let rect = Rect {
+            x,
+            y: area.y,
+            width: w.min((area.x + area.width).saturating_sub(x)),
+            height: 1,
+        };
+        let clickable = *field == name || (*field == indent && !indent.is_empty());
+        if *field == name {
+            app.layout.status_theme = rect;
+        } else if clickable {
+            app.layout.status_indent = rect;
+        }
+        let hovered = clickable
+            && mouse
+                .is_some_and(|(mx, my)| my == rect.y && mx >= rect.x && mx < rect.x + rect.width);
+        spans.push(Span::styled(
+            field.to_string(),
+            if hovered {
+                on(theme.ui.fg_bright, theme.ui.status_bg)
+            } else if *field == lang {
+                on(theme.ui.accent_light, theme.ui.status_bg)
+            } else {
+                on(theme.ui.fg_dim, theme.ui.status_bg)
+            },
+        ));
+        x += w;
+        if i + 1 < right.len() {
+            spans.push(Span::styled("   ", on(theme.ui.fg_dim, theme.ui.status_bg)));
+            x += 3;
+        }
+    }
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                clip(&format!(" {left}{}{right_prefix}", " ".repeat(gap)), width),
-                base,
-            ),
-            Span::styled(
-                name,
-                if hovered {
-                    on(theme.ui.fg_bright, theme.ui.status_bg)
-                } else {
-                    base
-                },
-            ),
-            Span::styled(" ", base),
-        ])),
+        Paragraph::new(Line::from(spans)).style(on(theme.ui.fg_dim, theme.ui.status_bg)),
         area,
     );
 }
@@ -2048,6 +2426,10 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list: Vec<String> = match prompt {
         Prompt::Themes => app.themes.iter().map(|t| t.name.clone()).collect(),
+        Prompt::Indent => crate::core::settings::Indent::CHOICES
+            .iter()
+            .map(|(label, _, _)| label.to_string())
+            .collect(),
         Prompt::Recent => app
             .settings
             .recent_projects
@@ -2110,8 +2492,10 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
     let width = (area.width as usize * 3 / 4).clamp(30, 100) as u16;
     let room = area.height.saturating_sub(8) as usize;
     let list_height = list.len().min(room.max(4)) as u16;
-    // One row for the title, one per list entry, plus the border and any input.
-    let height = 3 + list_height + if prompt.is_input() { 1 } else { 0 };
+    let detail = prompt.detail();
+    // One row for the title, one per list entry, plus the border, any input
+    // and the lines a question adds under itself.
+    let height = 3 + list_height + u16::from(prompt.is_input()) + detail.len() as u16;
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 3,
@@ -2126,7 +2510,16 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_width = rect.width.saturating_sub(2) as usize;
 
     let mut lines = vec![Line::from(Span::styled(
-        pad(&format!(" {}", prompt.title()), inner_width),
+        pad(
+            &format!(
+                " {}",
+                match prompt {
+                    Prompt::ConfirmReplaceAll => app.search.replace_all_question(),
+                    _ => prompt.title(),
+                }
+            ),
+            inner_width,
+        ),
         Style::default()
             .fg(color(theme.ui.accent_light))
             .bg(color(theme.ui.sidebar_bg))
@@ -2137,9 +2530,21 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
             pad(&format!(" > {}", app.prompt_input), inner_width),
             on(theme.ui.fg_bright, theme.ui.sidebar_bg),
         )));
+        // The caret sits where the next character lands.
+        let col = 3 + app.prompt_input.chars().count() as u16;
+        frame.set_cursor_position((
+            (rect.x + 1 + col).min(rect.x + rect.width.saturating_sub(2)),
+            rect.y + 2,
+        ));
+    }
+    for line in &detail {
+        lines.push(Line::from(Span::styled(
+            pad(&format!(" {line}"), inner_width),
+            on(theme.ui.fg_dim, theme.ui.sidebar_bg),
+        )));
     }
     // Scroll the list so the selection stays visible.
-    let list_y = rect.y + 2 + u16::from(prompt.is_input());
+    let list_y = rect.y + 2 + u16::from(prompt.is_input()) + detail.len() as u16;
     app.layout.prompt_list = Rect {
         x: rect.x + 1,
         y: list_y,

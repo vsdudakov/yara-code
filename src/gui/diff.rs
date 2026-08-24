@@ -3,7 +3,7 @@
 
 use crate::core::diff::{Kind, Row};
 use crate::core::theme::Theme;
-use crate::gui::theme::{ansi_color, color, CODE_FONT_SIZE};
+use crate::gui::theme::{ansi_color, code_font, color};
 
 pub struct DiffView {
     /// Path as git reports it, relative to the worktree.
@@ -83,7 +83,7 @@ impl DiffView {
             return event;
         }
 
-        let font = egui::FontId::monospace(CODE_FONT_SIZE);
+        let font = code_font(ui);
         let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font, ' '), f.row_height(&font)));
         let gutter = char_w * 6.0;
         // The theme's own red and green, dimmed to a background wash and used

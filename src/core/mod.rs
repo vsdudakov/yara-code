@@ -69,6 +69,47 @@ pub fn open_url(url: &str) -> bool {
         .is_ok()
 }
 
+/// Whether a status message reports something that failed, as opposed to
+/// something that merely happened or is worth knowing. Both frontends colour
+/// their status bar by this, so a failure looks like one in each.
+pub fn is_failure(message: &str) -> bool {
+    const FAILED: [&str; 7] = [
+        "failed",
+        "could not",
+        "cannot",
+        "no such",
+        "not a ",
+        "gone:",
+        "unavailable",
+    ];
+    let lower = message.to_ascii_lowercase();
+    FAILED.iter().any(|word| lower.contains(word))
+}
+
+/// `1 file`, `3 files`: a count with its noun, so no message has to say
+/// "file(s)".
+pub fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// What Save All has to say afterwards. A file that could not be written is
+/// named, so the count never hides a failure.
+pub fn save_all_report(saved: usize, failed: &[String]) -> String {
+    if failed.is_empty() {
+        format!("saved {}", count(saved, "file"))
+    } else {
+        format!(
+            "saved {}; could not write {}",
+            count(saved, "file"),
+            failed.join(", ")
+        )
+    }
+}
+
 /// Resolves the project root a frontend was launched with. Without a path
 /// argument the editor opens with no project at all, and the user picks a
 /// folder from the File menu.
@@ -84,6 +125,9 @@ mod tests {
     fn an_explicit_config_directory_wins() {
         // Set for this process only; the other tests read their own.
         let dir = crate::core::test_support::Dir::new("yara-config-override");
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("YARA_CONFIG_DIR", dir.path());
         assert_eq!(config_dir().as_deref(), Some(dir.path()));
         std::env::remove_var("YARA_CONFIG_DIR");
@@ -91,6 +135,22 @@ mod tests {
             config_dir().is_some(),
             "a convention answers when nothing is set"
         );
+    }
+
+    #[test]
+    fn a_count_names_its_noun_in_the_right_number() {
+        assert_eq!(count(1, "file"), "1 file");
+        assert_eq!(count(0, "result"), "0 results");
+        assert_eq!(count(12, "occurrence"), "12 occurrences");
+    }
+
+    #[test]
+    fn a_failure_is_told_from_a_notice_by_its_wording() {
+        assert!(is_failure("could not write main.rs"));
+        assert!(is_failure("terminal failed: no pty"));
+        assert!(is_failure("not a git repository"));
+        assert!(!is_failure("saved 3 files"));
+        assert!(!is_failure("notable.txt opened"));
     }
 
     #[test]

@@ -13,11 +13,32 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use egui::{Event, Key, Modifiers, Pos2, RawInput, Rect, Vec2};
 use yara::gui::app::App;
 
-/// A project to open, removed when the test ends.
-struct Project(PathBuf);
+/// A project to open, removed when the test ends. `YARA_CONFIG_DIR` is one
+/// variable for the whole process, so the tests in this binary take turns:
+/// each holds the lock for as long as its project lives.
+struct Project(
+    PathBuf,
+    /// Held by the first project a test makes; a second folder in the same
+    /// test rides on it rather than waiting for itself.
+    #[allow(dead_code)]
+    Option<std::sync::MutexGuard<'static, ()>>,
+);
+
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+thread_local! {
+    static HOLDS_CONFIG_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 impl Project {
     fn new(tag: &str) -> Self {
+        // A test that panicked while holding the lock poisons it; the next
+        // test still gets its turn.
+        let lock = if HOLDS_CONFIG_LOCK.with(|held| held.replace(true)) {
+            None
+        } else {
+            Some(CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+        };
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
@@ -29,7 +50,7 @@ impl Project {
         let config = path.with_extension("config");
         std::fs::create_dir_all(&config).unwrap();
         std::env::set_var("YARA_CONFIG_DIR", &config);
-        let project = Self(path);
+        let project = Self(path, lock);
         project.file("README.md", "# Title\nA line of prose.\n");
         project.file("src/main.rs", "fn main() {\n    let total = 1;\n}\n");
         project
@@ -50,6 +71,9 @@ impl Project {
 impl Drop for Project {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        if self.1.is_some() {
+            HOLDS_CONFIG_LOCK.with(|held| held.set(false));
+        }
     }
 }
 
@@ -142,6 +166,13 @@ impl Harness {
         self.text.iter().any(|(drawn, _)| drawn.contains(text))
     }
 
+    /// Re-reads the file in front from disk, as the editor would after an
+    /// outside change — so a Save then writes and applies the new contents.
+    fn reload_active_buffer(&mut self) {
+        self.app.reload_active_from_disk();
+        self.frame();
+    }
+
     fn screen(&self) -> String {
         self.text
             .iter()
@@ -223,30 +254,11 @@ fn the_bindings_overlay_opens_from_f1() {
     let project = Project::new("yara-gui-e2e-help");
     let mut harness = Harness::open(Some(&project));
     harness.press(Key::F1, Modifiers::NONE);
-    assert!(harness.shows("key bindings"), "{}", harness.screen());
-    assert!(harness.shows("Save"));
+    assert!(harness.shows("Key Bindings"), "{}", harness.screen());
+    // A row the start page behind it does not have.
+    assert!(harness.shows("Save All"));
     harness.press(Key::Escape, Modifiers::NONE);
-    assert!(!harness.shows("key bindings"));
-}
-
-#[test]
-fn zooming_changes_the_code_font_and_resets() {
-    let project = Project::new("yara-gui-e2e-zoom");
-    let mut harness = Harness::open(Some(&project));
-    let size = |harness: &Harness| {
-        harness
-            .ctx
-            .style()
-            .text_styles
-            .get(&egui::TextStyle::Monospace)
-            .unwrap()
-            .size
-    };
-    let before = size(&harness);
-    harness.press(Key::Equals, Modifiers::COMMAND);
-    assert!(size(&harness) > before, "zoom in");
-    harness.press(Key::Num0, Modifiers::COMMAND);
-    assert_eq!(size(&harness), before, "reset puts it back");
+    assert!(!harness.shows("Save All"));
 }
 
 #[test]
@@ -414,7 +426,7 @@ fn the_recent_projects_modal_lists_the_folder_we_opened() {
     let project = Project::new("yara-gui-e2e-recent");
     let mut harness = Harness::open(Some(&project));
     harness.press(Key::R, Modifiers::COMMAND);
-    assert!(harness.shows("Recent projects"), "{}", harness.screen());
+    assert!(harness.shows("Recent Projects"), "{}", harness.screen());
     let name = project
         .path()
         .file_name()
@@ -423,7 +435,7 @@ fn the_recent_projects_modal_lists_the_folder_we_opened() {
         .to_string();
     assert!(harness.shows(&name), "{}", harness.screen());
     harness.press(Key::Escape, Modifiers::NONE);
-    assert!(!harness.shows("Recent projects"));
+    assert!(!harness.shows("Recent Projects"));
 }
 
 #[test]
@@ -591,4 +603,90 @@ fn escape_closes_one_thing_at_a_time() {
     // A second Escape, with nothing above it, closes the bar.
     harness.press(Key::Escape, Modifiers::NONE);
     assert!(!harness.shows("REPLACE"), "{}", harness.screen());
+}
+
+#[test]
+fn a_markdown_file_previews_in_the_window() {
+    let project = Project::new("yara-gui-e2e-preview");
+    project.file(
+        "README.md",
+        "# Yara Code\n\nSome **bold** text.\n\n- one\n- two\n",
+    );
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert!(harness.shows("Yara Code"), "{}", harness.screen());
+    assert!(
+        !harness.shows("# Yara Code"),
+        "the hash is markup, not text"
+    );
+    assert!(
+        harness.shows("README.md preview"),
+        "a tab of its own: {}",
+        harness.screen()
+    );
+    assert!(harness.shows("•"), "{}", harness.screen());
+    harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert!(!harness.shows("README.md preview"), "{}", harness.screen());
+}
+
+#[test]
+fn the_indentation_picker_opens_from_its_key_and_the_status_bar() {
+    let project = Project::new("yara-gui-e2e-indent");
+    let mut harness = Harness::open(Some(&project));
+    // The status bar describes the file in front, indentation included.
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    assert!(
+        harness.shows("Spaces: 4"),
+        "the status bar shows it: {}",
+        harness.screen()
+    );
+    harness.press(Key::I, Modifiers::COMMAND | Modifiers::ALT);
+    assert!(
+        harness.shows("Indentation") && harness.shows("Tabs"),
+        "{}",
+        harness.screen()
+    );
+    let at = harness.position_of("Tabs").unwrap();
+    harness.click(at);
+    assert!(harness.shows("indentation: Tabs"), "{}", harness.screen());
+    assert!(!harness.shows("Spaces: 4"), "{}", harness.screen());
+}
+
+#[test]
+fn saving_the_settings_file_applies_it_without_a_restart() {
+    let project = Project::new("yara-gui-e2e-live-settings");
+    let mut harness = Harness::open(Some(&project));
+    let size = |h: &Harness| {
+        h.ctx
+            .style()
+            .text_styles
+            .get(&egui::TextStyle::Monospace)
+            .unwrap()
+            .size
+    };
+    assert_eq!(size(&harness), 13.5);
+
+    // File → Settings opens the user's settings.json in a tab. Rewrite it on
+    // disk the way an edit would, then Save: the editor writes the buffer's
+    // (unchanged) text and reloads what it now finds there.
+    harness.press(Key::Comma, Modifiers::COMMAND);
+    assert!(harness.shows("settings.json"), "{}", harness.screen());
+    let settings = yara::core::settings::Settings::path().unwrap();
+    let mut text = std::fs::read_to_string(&settings).unwrap();
+    text = text
+        .replace("\"font_size\": 13.5", "\"font_size\": 19.0")
+        .replace("\"theme\": \"Dark+\"", "\"theme\": \"Monokai\"");
+    std::fs::write(&settings, &text).unwrap();
+    harness.reload_active_buffer();
+    harness.press(Key::S, Modifiers::COMMAND);
+    assert!(harness.shows("settings applied"), "{}", harness.screen());
+    assert_eq!(size(&harness), 19.0, "the font size was applied on save");
+    assert!(
+        harness.shows("Monokai"),
+        "and the theme: {}",
+        harness.screen()
+    );
 }

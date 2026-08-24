@@ -100,6 +100,15 @@ fn ansi_from(hexes: [u32; 16]) -> [Rgb; 16] {
 
 /// Expands an ANSI index into a full RGB triple, covering the 256-color cube
 /// for indices past the 16 the theme defines.
+/// The colour of an indent guide: the editor background nudged a little
+/// toward the faint text, so the lines are there when looked for and not
+/// otherwise.
+pub fn indent_guide(theme: &Theme) -> Rgb {
+    let (bg, fg) = (theme.ui.editor_bg, theme.ui.fg_faint);
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * 0.35).round() as u8;
+    (mix(bg.0, fg.0), mix(bg.1, fg.1), mix(bg.2, fg.2))
+}
+
 pub fn ansi256(theme: &Theme, idx: u8) -> Rgb {
     match idx {
         0..=15 => theme.ansi[idx as usize],
@@ -529,6 +538,19 @@ mod tests {
             "comment, punctuation.definition.comment"
         );
         assert!(theme.tokens[0].italic);
+    }
+
+    #[test]
+    fn an_indent_guide_sits_between_the_background_and_faint_text() {
+        for theme in builtin() {
+            let guide = indent_guide(&theme);
+            let (bg, fg) = (theme.ui.editor_bg, theme.ui.fg_faint);
+            let between = |g: u8, a: u8, b: u8| g >= a.min(b) && g <= a.max(b);
+            assert!(between(guide.0, bg.0, fg.0));
+            assert!(between(guide.1, bg.1, fg.1));
+            assert!(between(guide.2, bg.2, fg.2));
+            assert_ne!(guide, bg, "a guide the colour of the page is no guide");
+        }
     }
 
     #[test]

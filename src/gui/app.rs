@@ -43,6 +43,8 @@ pub struct App {
     search: Search,
     git: GitPanel,
     pending_delete: Option<PathBuf>,
+    /// The project-wide Replace All is waiting for a yes.
+    pending_replace_all: bool,
     goto_picker: Option<GotoPicker>,
     /// Locations to return to with ⌃- after a goto jump.
     history: Vec<(PathBuf, usize)>,
@@ -66,9 +68,16 @@ pub struct App {
     /// What `git_lines` was read for, so it is re-read only when it must be.
     git_lines_key: Option<(PathBuf, usize)>,
     settings: Settings,
+    /// When the settings files were last written, as of the last look; `None`
+    /// before the first look.
+    settings_stamp: Option<Vec<Option<std::time::SystemTime>>>,
+    /// When the files were last looked at.
+    settings_polled: std::time::Instant,
     show_recent: bool,
     /// The key bindings overlay, opened from Help.
     show_help: bool,
+    /// The indentation picker, opened from View or the status bar.
+    show_indent_picker: bool,
     recent_selected: usize,
 }
 
@@ -104,6 +113,7 @@ impl App {
             search: Search::default(),
             git: GitPanel::default(),
             pending_delete: None,
+            pending_replace_all: false,
             goto_picker: None,
             history: Vec::new(),
             themes,
@@ -118,8 +128,11 @@ impl App {
             git_lines: BTreeMap::new(),
             git_lines_key: None,
             settings,
+            settings_stamp: None,
+            settings_polled: std::time::Instant::now(),
             show_recent: false,
             show_help: false,
+            show_indent_picker: false,
             recent_selected: 0,
         }
     }
@@ -206,21 +219,14 @@ impl App {
             Command::FindPrev => self.editor.find_step(-1),
             Command::ReplaceAll => {
                 let replaced = self.editor.find_replace_all();
-                self.status = Some(format!("replaced {replaced} occurrence(s)"));
+                self.status = Some(format!(
+                    "replaced {}",
+                    crate::core::count(replaced, "occurrence")
+                ));
             }
             Command::PickRepository | Command::PickWorktree => {
                 self.sidebar_view = SidebarView::Git;
                 self.show_sidebar = true;
-            }
-            Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => {
-                self.settings.font_size = match command {
-                    Command::ZoomIn => (self.settings.font_size + 1.0).min(32.0),
-                    Command::ZoomOut => (self.settings.font_size - 1.0).max(8.0),
-                    _ => Settings::default().font_size,
-                };
-                let theme = self.theme().clone();
-                crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
-                let _ = self.settings.save();
             }
             Command::CheckForUpdates => {
                 self.status = Some(format!(
@@ -262,6 +268,12 @@ impl App {
             | Command::FileMenu
             | Command::ViewMenu
             | Command::HelpMenu => {}
+            Command::IndentPicker => self.show_indent_picker = true,
+            Command::TogglePreview => {
+                if let Err(message) = self.editor.toggle_preview() {
+                    self.status = Some(message);
+                }
+            }
             Command::Undo | Command::Redo => {
                 let back = command == Command::Undo;
                 if !self.editor.step_history(back) {
@@ -287,19 +299,25 @@ impl App {
             Command::SaveAll => {
                 let previous = self.editor.buffers.active;
                 let mut saved = 0;
+                let mut failed = Vec::new();
                 for i in 0..self.editor.buffers.list.len() {
                     self.editor.buffers.active = i;
-                    if self.editor.buffers.list[i].modified() && self.editor.buffers.save_active() {
+                    if !self.editor.buffers.list[i].modified() {
+                        continue;
+                    }
+                    if self.editor.buffers.save_active() {
                         saved += 1;
+                    } else {
+                        failed.push(self.editor.buffers.list[i].name());
                     }
                 }
                 self.editor.buffers.active = previous;
                 self.after_save(ctx);
-                self.status = Some(format!("saved {saved} file(s)"));
+                self.status = Some(crate::core::save_all_report(saved, &failed));
             }
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => {
-                    self.editor.open(path);
+                    self.open_file(path);
                     self.status = Some("editing settings — save to apply".into());
                 }
                 Err(e) => self.status = Some(format!("cannot open settings: {e}")),
@@ -347,7 +365,7 @@ impl App {
             Command::UnfoldAll => self.editor.unfold_all(),
             Command::GoBack => {
                 if let Some((path, line)) = self.history.pop() {
-                    self.editor.open(path.clone());
+                    self.open_file(path.clone());
                     self.editor.pending_jump = Some((path, line));
                 }
             }
@@ -367,11 +385,12 @@ impl App {
             // these three are mouse- or menu-driven in this frontend.
             // The clipboard belongs to the text widget, go-to-definition to
             // the mouse, and the bindings overlay is the Help menu itself.
-            Command::SelectAll
-            | Command::Copy
-            | Command::Cut
-            | Command::Paste
-            | Command::GotoDefinition => {}
+            Command::GotoDefinition => {
+                if let Some(word) = self.editor.word_at_cursor() {
+                    self.editor.goto_request = Some(word);
+                }
+            }
+            Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => {}
             Command::Help => self.show_help = true,
         }
     }
@@ -380,25 +399,58 @@ impl App {
     fn after_save(&mut self, ctx: &egui::Context) {
         // A save changes the git status; show it right away, not on the timer.
         self.git.invalidate();
+        let root = self.project.root().map(Path::to_path_buf);
         let is_settings = self
             .editor
             .buffers
             .active()
-            .zip(Settings::path())
-            .is_some_and(|(buf, path)| buf.path == path);
+            .is_some_and(|buf| Settings::is_settings_file(&buf.path, root.as_deref()));
         if !is_settings {
             self.status = Some("saved".into());
             return;
         }
-        let (settings, error) = Settings::load();
+        self.reload_settings(ctx);
+    }
+
+    /// Once a second, looks whether a settings file was written by something
+    /// other than this window — the terminal frontend, a script, a hand edit
+    /// — and applies it, so a change lands without a restart either way.
+    fn poll_settings(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        if self.settings_polled.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.settings_polled = std::time::Instant::now();
+        let stamp = Settings::stamp(self.project.root());
+        match &self.settings_stamp {
+            // The first look only remembers what is there.
+            None => self.settings_stamp = Some(stamp),
+            Some(known) if *known != stamp => self.reload_settings(ctx),
+            Some(_) => {}
+        }
+    }
+
+    /// Reads the settings files again and puts everything they say into
+    /// effect: the theme, the font size it is applied with, which panels are
+    /// open, and the bindings.
+    fn reload_settings(&mut self, ctx: &egui::Context) {
+        let root = self.project.root().map(Path::to_path_buf);
+        self.settings_stamp = Some(Settings::stamp(root.as_deref()));
+        let (settings, error) = Settings::load_for(root.as_deref());
+        let recent = std::mem::take(&mut self.settings.recent_projects);
         self.settings = settings;
-        if let Some(index) = self
+        self.settings.recent_projects = recent;
+        self.show_sidebar = self.settings.show_sidebar;
+        self.show_terminal = self.settings.show_terminal;
+        let index = self
             .themes
             .iter()
             .position(|t| t.name == self.settings.theme)
-        {
-            self.set_theme(ctx, index);
-        }
+            .unwrap_or(self.theme_index);
+        self.theme_index = index;
+        let theme = self.themes[index].clone();
+        crate::gui::theme::apply(ctx, &theme, self.settings.font_size);
+        highlight::set_theme(&theme);
         self.status = Some(error.unwrap_or_else(|| "settings applied".to_string()));
     }
 
@@ -577,7 +629,7 @@ impl App {
             self.set_root(path);
         } else if path.is_file() {
             self.tree.reveal(&path);
-            self.editor.open(path);
+            self.open_file(path);
         } else {
             self.status = Some(format!("no such file: {}", path.display()));
         }
@@ -592,13 +644,13 @@ impl App {
         // only sane reading of "new file" on a path that already exists.
         if path.is_file() {
             self.tree.reveal(&path);
-            self.editor.open(path);
+            self.open_file(path);
             return;
         }
         match fs_ops::create_file(&dir, &name) {
             Ok(created) => {
                 self.tree.reveal(&created);
-                self.editor.open(created);
+                self.open_file(created);
             }
             Err(e) => self.status = Some(format!("create failed: {e}")),
         }
@@ -654,6 +706,21 @@ impl App {
         }
     }
 
+    /// Re-reads the file in front from disk, replacing the buffer's text.
+    /// What an outside edit — a formatter, a script, another editor — asks
+    /// for; the undo history is kept so the reload itself can be undone.
+    pub fn reload_active_from_disk(&mut self) {
+        let Some(buf) = self.editor.buffers.active_mut() else {
+            return;
+        };
+        if let Ok(text) = std::fs::read_to_string(&buf.path) {
+            let cursor = 0;
+            buf.record(crate::core::history::EditKind::Bulk, cursor);
+            buf.text = text.clone();
+            buf.saved_text = text;
+        }
+    }
+
     /// Quitting with unsaved work asks about each dirty buffer in turn, the
     /// way closing a tab does, and only then closes the window.
     fn request_quit(&mut self, ctx: &egui::Context) {
@@ -672,8 +739,10 @@ impl App {
         self.show_theme_picker
             || self.show_recent
             || self.show_help
+            || self.show_indent_picker
             || self.goto_picker.is_some()
             || self.pending_delete.is_some()
+            || self.pending_replace_all
             || self.editor.pending_close.is_some()
     }
 
@@ -775,7 +844,7 @@ impl App {
                 }
             }
         }
-        self.editor.open(path.clone());
+        self.open_file(path.clone());
         self.tree.reveal(&path);
         self.editor.pending_jump = Some((path, line));
     }
@@ -785,7 +854,7 @@ impl App {
             match event {
                 TreeEvent::Open(path) => {
                     self.tree.reveal(&path);
-                    self.editor.open(path);
+                    self.open_file(path);
                 }
                 TreeEvent::RequestDelete(path) => self.pending_delete = Some(path),
                 TreeEvent::Moved { from, to } => {
@@ -800,6 +869,17 @@ impl App {
                 }
                 TreeEvent::RemoveFolder(path) => self.remove_folder(&path),
             }
+        }
+    }
+
+    /// Opens a file in the editor, reporting the one thing that can go wrong.
+    fn open_file(&mut self, path: PathBuf) {
+        if !self.editor.open(path.clone()) {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.status = Some(format!("cannot open {name} as text"));
         }
     }
 
@@ -991,6 +1071,11 @@ impl App {
                                         ui.separator();
                                         continue;
                                     };
+                                    // Install Update is offered only once a
+                                    // check has found one to install.
+                                    if *command == Command::InstallUpdate && self.update.is_none() {
+                                        continue;
+                                    }
                                     let shortcut = self
                                         .settings
                                         .gui_chord(*command)
@@ -1012,6 +1097,51 @@ impl App {
         }
     }
 
+    /// Spaces of a width, or tabs — the same choices the terminal offers.
+    fn indent_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_indent_picker {
+            return;
+        }
+        let theme = self.theme().clone();
+        let current = self.settings.indent.choice_index();
+        let mut chosen: Option<usize> = None;
+        egui::Modal::new(egui::Id::new("indent_picker")).show(ctx, |ui| {
+            ui.set_width(300.0);
+            ui.label(
+                egui::RichText::new("Indentation")
+                    .color(color(theme.ui.fg))
+                    .size(13.5),
+            );
+            ui.add_space(6.0);
+            for (i, (label, _, _)) in crate::core::settings::Indent::CHOICES.iter().enumerate() {
+                let text = egui::RichText::new(*label)
+                    .color(if i == current {
+                        color(theme.ui.fg_bright)
+                    } else {
+                        color(theme.ui.fg_dim)
+                    })
+                    .size(12.5);
+                if ui
+                    .add(egui::Button::new(text).frame(false))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    chosen = Some(i);
+                }
+            }
+        });
+        if let Some(i) = chosen {
+            let (_, style, width) = crate::core::settings::Indent::CHOICES[i];
+            self.settings.indent.style = style;
+            self.settings.indent.width = width;
+            let _ = self.settings.save();
+            self.status = Some(format!("indentation: {}", self.settings.indent.label()));
+            self.show_indent_picker = false;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.show_indent_picker = false;
+        }
+    }
+
     /// Every binding in effect, opened from Help → Show Key Bindings.
     fn help_modal(&mut self, ctx: &egui::Context) {
         if !self.show_help {
@@ -1021,12 +1151,9 @@ impl App {
         egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
             ui.set_width(460.0);
             ui.label(
-                egui::RichText::new(format!(
-                    "Yara Code {} — key bindings",
-                    env!("CARGO_PKG_VERSION")
-                ))
-                .color(color(theme.ui.fg))
-                .size(13.5),
+                egui::RichText::new("Key Bindings")
+                    .color(color(theme.ui.fg))
+                    .size(13.5),
             );
             ui.add_space(6.0);
             egui::ScrollArea::vertical()
@@ -1077,7 +1204,7 @@ impl App {
         egui::Modal::new(egui::Id::new("recent")).show(ctx, |ui| {
             ui.set_width(460.0);
             ui.label(
-                egui::RichText::new("Recent projects")
+                egui::RichText::new("Recent Projects")
                     .color(color(theme.ui.fg))
                     .size(13.5),
             );
@@ -1203,6 +1330,76 @@ impl App {
         }
     }
 
+    /// Rewrites every match in the project, once the user has said yes.
+    fn replace_all_in_project(&mut self) {
+        match self.search.replace_all(self.project.roots()) {
+            Ok((count, files)) => {
+                self.reload_unmodified();
+                self.status = Some(format!(
+                    "replaced {} in {}",
+                    crate::core::count(count, "occurrence"),
+                    crate::core::count(files, "file")
+                ));
+            }
+            Err(message) => self.status = Some(message),
+        }
+    }
+
+    fn replace_all_modal(&mut self, ctx: &egui::Context) {
+        if !self.pending_replace_all {
+            return;
+        }
+        let theme = self.theme().clone();
+        let mut answer: Option<bool> = None;
+        egui::Modal::new(egui::Id::new("confirm_replace_all")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.label(
+                egui::RichText::new(self.search.replace_all_question())
+                    .color(color(theme.ui.fg))
+                    .size(14.0),
+            );
+            ui.label(
+                egui::RichText::new(search::Search::REPLACE_ALL_WARNING)
+                    .color(color(theme.ui.fg_dim))
+                    .size(12.0),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(egui::RichText::new("Cancel").color(color(theme.ui.fg)))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    answer = Some(false);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let replace = egui::Button::new(
+                        egui::RichText::new("Replace All").color(egui::Color32::WHITE),
+                    )
+                    .fill(color(theme.ui.danger));
+                    if ui
+                        .add(replace)
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        answer = Some(true);
+                    }
+                });
+            });
+        });
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            answer = Some(false);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            answer = Some(true);
+        }
+        if let Some(yes) = answer {
+            self.pending_replace_all = false;
+            if yes {
+                self.replace_all_in_project();
+            }
+        }
+    }
+
     fn delete_modal(&mut self, ctx: &egui::Context) {
         let Some(path) = self.pending_delete.clone() else {
             return;
@@ -1255,6 +1452,11 @@ impl App {
         });
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.pending_delete = None;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            if fs_ops::delete(&path).is_ok() {
+                self.editor.buffers.close_path(&path);
+            }
+            self.pending_delete = None;
         }
     }
 
@@ -1262,7 +1464,6 @@ impl App {
     /// grouped results — laid out so every field spans the panel exactly.
     fn search_ui(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         let mut rerun = false;
-        let mut replace_all = false;
 
         egui::Frame::default()
             .inner_margin(egui::Margin::symmetric(10, 0))
@@ -1366,16 +1567,7 @@ impl App {
 
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let summary = match (&self.search.error, self.search.query.is_empty()) {
-                        (Some(error), _) => error.clone(),
-                        (None, true) => String::new(),
-                        (None, false) => format!(
-                            "{}{} results in {} files",
-                            self.search.total_matches(),
-                            if self.search.truncated { "+" } else { "" },
-                            self.search.results.len()
-                        ),
-                    };
+                    let summary = self.search.summary();
                     let tone = if self.search.error.is_some() {
                         theme.ui.danger
                     } else {
@@ -1393,7 +1585,7 @@ impl App {
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .clicked()
                             {
-                                replace_all = true;
+                                self.pending_replace_all = true;
                             }
                         });
                     }
@@ -1404,16 +1596,6 @@ impl App {
             self.search.run(self.project.roots());
         } else {
             self.search.run_if_changed(self.project.roots());
-        }
-        if replace_all {
-            match self.search.replace_all(self.project.roots()) {
-                Ok((count, files)) => {
-                    self.reload_unmodified();
-                    self.status =
-                        Some(format!("replaced {count} occurrence(s) in {files} file(s)"));
-                }
-                Err(message) => self.status = Some(message),
-            }
         }
 
         ui.add_space(4.0);
@@ -1588,7 +1770,13 @@ impl App {
                     refresh = true;
                 }
                 if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    step = 1;
+                    // Enter steps forward, Shift+Enter back — as in the
+                    // terminal frontend and every find bar since.
+                    step = if ui.input(|i| i.modifiers.shift) {
+                        -1
+                    } else {
+                        1
+                    };
                     self.editor.find.focus_pending = true;
                 }
 
@@ -1664,17 +1852,12 @@ impl App {
         }
         if replace_all {
             let replaced = self.editor.find_replace_all();
-            self.status = Some(format!("replaced {replaced} occurrence(s)"));
+            self.status = Some(format!(
+                "replaced {}",
+                crate::core::count(replaced, "occurrence")
+            ));
         }
     }
-}
-
-/// Whether a status message reports something that failed, as opposed to
-/// something that merely happened or is worth knowing.
-fn is_failure(message: &str) -> bool {
-    const FAILED: [&str; 6] = ["failed", "could not", "cannot", "no such", "not a", "gone:"];
-    let lower = message.to_ascii_lowercase();
-    FAILED.iter().any(|word| lower.contains(word))
 }
 
 /// A menu in the top bar: its title, its entries, and a line about itself.
@@ -1718,6 +1901,7 @@ impl App {
     /// One frame of the editor. `eframe` calls it through `update`; a test
     /// calls it through `egui::Context::run`.
     pub fn ui(&mut self, ctx: &egui::Context) {
+        self.poll_settings(ctx);
         // Every shortcut comes from settings.json, so a rebind takes effect
         // the moment the file is saved.
         //
@@ -1740,9 +1924,13 @@ impl App {
                     + usize::from(m.shift),
             )
         });
-        for (command, chord) in bindings {
-            if keys::consumed(ctx, &chord) {
-                self.execute(ctx, command);
+        // A dialog owns the keyboard while it is up: a chord pressed then is
+        // meant for it, not for whatever lies underneath.
+        if !self.modal_open() {
+            for (command, chord) in bindings {
+                if keys::consumed(ctx, &chord) {
+                    self.execute(ctx, command);
+                }
             }
         }
 
@@ -1855,7 +2043,7 @@ impl App {
                         // keeps red for what actually went wrong.
                         ui.label(
                             egui::RichText::new(message)
-                                .color(if is_failure(message) {
+                                .color(if crate::core::is_failure(message) {
                                     color(theme.ui.danger)
                                 } else {
                                     ansi_color(&theme, 3)
@@ -1896,6 +2084,21 @@ impl App {
                                     .color(color(theme.ui.accent_light))
                                     .size(11.5),
                             );
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(self.settings.indent.label())
+                                            .color(color(theme.ui.fg_dim))
+                                            .size(11.5),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text("Indentation")
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                self.show_indent_picker = true;
+                            }
                             if let Some((line, col)) = self.editor.cursor {
                                 ui.label(
                                     egui::RichText::new(format!("Ln {line}, Col {col}"))
@@ -1966,12 +2169,19 @@ impl App {
 
         // Tab bar: files and diffs share it, so it stands whenever either is
         // open.
-        if !self.editor.buffers.is_empty() || !self.editor.diffs.is_empty() {
+        if !self.editor.buffers.is_empty()
+            || !self.editor.diffs.is_empty()
+            || !self.editor.previews.is_empty()
+        {
             egui::TopBottomPanel::top("tabs")
                 .exact_height(34.0)
                 .frame(egui::Frame::default().fill(color(theme.ui.status_bg)))
                 .show(ctx, |ui| {
-                    self.editor.tab_bar(ui, &theme);
+                    let preview_chord = self
+                        .settings
+                        .gui_chord(Command::TogglePreview)
+                        .map(|c| c.to_string());
+                    self.editor.tab_bar(ui, &theme, preview_chord.as_deref());
                 });
         }
 
@@ -1983,11 +2193,22 @@ impl App {
                     .inner_margin(egui::Margin {
                         left: 4,
                         right: 0,
-                        top: 8,
+                        top: 0,
                         bottom: 0,
                     }),
             )
             .show(ctx, |ui| {
+                // A preview tab shows the rendered file in place of the text.
+                if let Some(index) = self.editor.active_preview {
+                    let Some(preview) = self.editor.previews.get(index) else {
+                        self.editor.active_preview = None;
+                        return;
+                    };
+                    if preview.ui(ui, &theme) == crate::gui::preview::PreviewEvent::Close {
+                        self.editor.close_preview(index);
+                    }
+                    return;
+                }
                 // A diff tab shows its two panes in place of the text.
                 if let Some(index) = self.editor.active_diff {
                     let Some(diff) = self.editor.diffs.get(index) else {
@@ -2001,7 +2222,7 @@ impl App {
                             self.editor.close_diff(index);
                             if let Some(path) = path {
                                 self.tree.reveal(&path);
-                                self.editor.open(path);
+                                self.open_file(path);
                             }
                         }
                         DiffEvent::None => {}
@@ -2010,6 +2231,7 @@ impl App {
                 }
                 self.find_bar(ui, &theme);
                 if self.editor.buffers.is_empty() {
+                    ui.add_space(8.0);
                     self.start_page(ui, &theme);
                 } else {
                     self.editor.ui(
@@ -2025,9 +2247,11 @@ impl App {
         self.handle_goto();
         self.recent_modal(ctx);
         self.help_modal(ctx);
+        self.indent_modal(ctx);
         self.goto_modal(ctx);
         self.theme_modal(ctx);
         self.delete_modal(ctx);
+        self.replace_all_modal(ctx);
         self.close_modal(ctx);
     }
 }

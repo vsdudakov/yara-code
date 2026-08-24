@@ -12,15 +12,32 @@ use crate::core::git::LineState;
 use crate::core::history::EditKind;
 use crate::core::indent;
 use crate::core::settings::{Indent, Modifier};
+use crate::core::theme as core_theme;
 use crate::core::theme::Theme;
 use crate::gui::diff::DiffView;
 use crate::gui::fold_view::Mapping;
 use crate::gui::highlight;
-use crate::gui::theme::{ansi_color, color, CODE_FONT_SIZE};
+use crate::gui::theme::{ansi_color, code_font, color};
+
+/// Space between the tab strip and the first line of text.
+const EDITOR_TOP_PAD: f32 = 8.0;
 
 #[derive(Default)]
 pub struct Editor {
     pub buffers: Buffers,
+    /// Open markdown previews, tabs of their own beside the files.
+    pub previews: Vec<crate::gui::preview::PreviewView>,
+    /// Where the tab strip is scrolled to, and where a `‹`/`›` click asks it
+    /// to go on the next frame.
+    tab_offset: f32,
+    tab_scroll_to: Option<f32>,
+    /// Whether the tabs ran past the strip last frame, so the arrows show.
+    tabs_overflow: bool,
+    /// The tab in front last frame; when it changes the new one is scrolled
+    /// into view.
+    shown_tab: Option<(usize, Option<usize>, Option<usize>)>,
+    /// Which preview tab is in front; `None` while a file or diff is.
+    pub active_preview: Option<usize>,
     /// Open diffs, tabs of their own beside the files.
     pub diffs: Vec<DiffView>,
     /// Which diff tab is in front; `None` while a file is.
@@ -49,8 +66,17 @@ pub struct Editor {
 struct TabDrag(usize);
 
 impl Editor {
-    pub fn open(&mut self, path: PathBuf) {
-        self.buffers.open(path);
+    /// Opens `path` in a tab. False when it cannot be read as text, so the
+    /// caller can say so rather than let a click do nothing.
+    pub fn open(&mut self, path: PathBuf) -> bool {
+        if !self.buffers.open(path) {
+            return false;
+        }
+        // The file asked for is what should be in front — not a diff or a
+        // preview that happened to be showing.
+        self.active_diff = None;
+        self.active_preview = None;
+        true
     }
 
     // ----- find in file --------------------------------------------------
@@ -101,6 +127,13 @@ impl Editor {
         if let Some(index) = self.find.hits.iter().position(|h| h.line + 1 == line) {
             self.find.current = index;
         }
+    }
+
+    /// The identifier the caret is on or touching, for go-to-definition
+    /// from the keyboard — the same word Cmd+click would pick.
+    pub fn word_at_cursor(&self) -> Option<String> {
+        let text = &self.buffers.active()?.text;
+        word_at(text, self.cursor_char_index()).map(|(word, _, _)| word)
     }
 
     fn cursor_char_index(&self) -> usize {
@@ -311,6 +344,41 @@ impl Editor {
         }
     }
 
+    /// Opens a rendered view of the file in front, or closes the one already
+    /// open for it. Only markdown has a preview to show.
+    pub fn toggle_preview(&mut self) -> Result<(), String> {
+        let Some(buf) = self.buffers.active() else {
+            return Err("open a markdown file first".into());
+        };
+        if !matches!(buf.extension.as_str(), "md" | "markdown") {
+            return Err(format!("{} is not markdown", buf.name()));
+        }
+        let path = buf.path.clone();
+        if let Some(i) = self.previews.iter().position(|p| p.path == path) {
+            self.close_preview(i);
+            return Ok(());
+        }
+        self.previews.push(crate::gui::preview::PreviewView {
+            path,
+            blocks: crate::core::markdown::parse(&buf.text),
+        });
+        self.active_preview = Some(self.previews.len() - 1);
+        self.active_diff = None;
+        Ok(())
+    }
+
+    pub fn close_preview(&mut self, index: usize) {
+        if index >= self.previews.len() {
+            return;
+        }
+        self.previews.remove(index);
+        self.active_preview = match self.active_preview {
+            Some(a) if a == index => None,
+            Some(a) if a > index => Some(a - 1),
+            other => other,
+        };
+    }
+
     pub fn close_diff(&mut self, index: usize) {
         if index >= self.diffs.len() {
             return;
@@ -325,127 +393,243 @@ impl Editor {
 
     /// The tab strip: the open files, then any open diffs. Tabs can be dragged
     /// onto one another to reorder them.
-    pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    /// The strip of tabs: files, then diffs, then previews. More than fit
+    /// scroll behind `‹ ›` at the right; a markdown file in front gets a
+    /// Preview button there too, `preview_chord` being the key that does the
+    /// same.
+    pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme, preview_chord: Option<&str>) {
         let mut close: Option<usize> = None;
+        let mut preview_clicked = false;
+        let in_front = (self.buffers.active, self.active_diff, self.active_preview);
+        let reveal = self.shown_tab != Some(in_front);
+        self.shown_tab = Some(in_front);
+        let markdown_in_front = self.active_diff.is_none()
+            && self.active_preview.is_none()
+            && self
+                .buffers
+                .active()
+                .is_some_and(|buf| matches!(buf.extension.as_str(), "md" | "markdown"));
         let mut activate: Option<usize> = None;
         let mut moved: Option<(usize, usize)> = None;
         let mut close_diff: Option<usize> = None;
         let mut show_diff: Option<usize> = None;
+        let mut close_preview: Option<usize> = None;
+        let mut show_preview: Option<usize> = None;
         ui.spacing_mut().item_spacing.x = 1.0;
         ui.horizontal(|ui| {
-            for (i, buf) in self.buffers.list.iter().enumerate() {
-                let selected = i == self.buffers.active && self.active_diff.is_none();
-                let fill = if selected {
-                    color(theme.ui.tab_active_bg)
-                } else {
-                    color(theme.ui.tab_inactive_bg)
-                };
-                let frame = egui::Frame::default()
-                    .fill(fill)
-                    .inner_margin(egui::Margin::symmetric(10, 7));
-                let tab = frame.show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let fg = if selected {
-                        color(theme.ui.fg)
-                    } else {
-                        color(theme.ui.fg_dim)
-                    };
-                    let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
-                    let resp = ui
-                        .add(egui::Label::new(title).sense(egui::Sense::click_and_drag()))
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    resp.dnd_set_drag_payload(TabDrag(i));
-                    // Answered below, once the tab's full rect is known.
-                    let dropped = resp.dnd_release_payload::<TabDrag>().map(|src| src.0);
-                    let hovering = resp.dnd_hover_payload::<TabDrag>().is_some();
-
-                    // Modified dot / close cross, drawn as shapes so they show
-                    // up regardless of font coverage. Hovering the dot turns it
-                    // into a cross, like VS Code.
-                    let (icon_rect, close_resp) =
-                        ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
-                    let close_resp = close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if ui.is_rect_visible(icon_rect) {
-                        let hovered = close_resp.hovered();
-                        let mark = if hovered {
-                            color(theme.ui.fg)
+            // What stands at the right edge is measured first so the strip
+            // knows how much room it has.
+            let controls = if self.tabs_overflow { 52.0 } else { 0.0 }
+                + if markdown_in_front { 96.0 } else { 0.0 };
+            let strip_width = (ui.available_width() - controls).max(0.0);
+            let mut area = egui::ScrollArea::horizontal()
+                .id_salt("tab_strip")
+                .max_width(strip_width)
+                .auto_shrink([false, false])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+            if let Some(x) = self.tab_scroll_to.take() {
+                area = area.horizontal_scroll_offset(x);
+            }
+            let strip = area.show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                ui.horizontal(|ui| {
+                    for (i, buf) in self.buffers.list.iter().enumerate() {
+                        let selected = i == self.buffers.active && self.active_diff.is_none();
+                        let fill = if selected {
+                            color(theme.ui.tab_active_bg)
                         } else {
-                            color(theme.ui.fg_dim)
+                            color(theme.ui.tab_inactive_bg)
                         };
-                        if hovered {
-                            ui.painter().rect_filled(
-                                icon_rect,
-                                egui::CornerRadius::same(3),
-                                color(theme.ui.hover_bg),
+                        let frame = egui::Frame::default()
+                            .fill(fill)
+                            .inner_margin(egui::Margin::symmetric(10, 7));
+                        let tab = frame.show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let fg = if selected {
+                                color(theme.ui.fg)
+                            } else {
+                                color(theme.ui.fg_dim)
+                            };
+                            let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
+                            let resp = ui
+                                .add(egui::Label::new(title).sense(egui::Sense::click_and_drag()))
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            resp.dnd_set_drag_payload(TabDrag(i));
+                            // Answered below, once the tab's full rect is known.
+                            let dropped = resp.dnd_release_payload::<TabDrag>().map(|src| src.0);
+                            let hovering = resp.dnd_hover_payload::<TabDrag>().is_some();
+
+                            // Modified dot / close cross, drawn as shapes so they show
+                            // up regardless of font coverage. Hovering the dot turns it
+                            // into a cross, like VS Code.
+                            let (icon_rect, close_resp) = ui
+                                .allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
+                            let close_resp =
+                                close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if ui.is_rect_visible(icon_rect) {
+                                let hovered = close_resp.hovered();
+                                let mark = if hovered {
+                                    color(theme.ui.fg)
+                                } else {
+                                    color(theme.ui.fg_dim)
+                                };
+                                if hovered {
+                                    ui.painter().rect_filled(
+                                        icon_rect,
+                                        egui::CornerRadius::same(3),
+                                        color(theme.ui.hover_bg),
+                                    );
+                                }
+                                if buf.modified() && !hovered {
+                                    ui.painter().circle_filled(icon_rect.center(), 3.5, mark);
+                                } else {
+                                    let r = 3.2;
+                                    let c = icon_rect.center();
+                                    let stroke = egui::Stroke::new(1.3_f32, mark);
+                                    ui.painter().line_segment(
+                                        [c + egui::vec2(-r, -r), c + egui::vec2(r, r)],
+                                        stroke,
+                                    );
+                                    ui.painter().line_segment(
+                                        [c + egui::vec2(r, -r), c + egui::vec2(-r, r)],
+                                        stroke,
+                                    );
+                                }
+                            }
+                            if close_resp.clicked() {
+                                close = Some(i);
+                            } else if resp.clicked() {
+                                activate = Some(i);
+                            }
+                            (dropped, hovering)
+                        });
+                        // Dropping is answered by the tab's own label — adding a
+                        // second widget over the tab would swallow its clicks — but the
+                        // mark is painted over the whole tab, which is what reads as
+                        // "this tab moves here".
+                        let (dropped, hovering) = tab.inner;
+                        if selected && self.active_preview.is_none() && reveal {
+                            tab.response.scroll_to_me(None);
+                        }
+                        if hovering {
+                            ui.painter().rect_stroke(
+                                tab.response.rect,
+                                egui::CornerRadius::ZERO,
+                                egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
+                                egui::StrokeKind::Inside,
                             );
                         }
-                        if buf.modified() && !hovered {
-                            ui.painter().circle_filled(icon_rect.center(), 3.5, mark);
-                        } else {
-                            let r = 3.2;
-                            let c = icon_rect.center();
-                            let stroke = egui::Stroke::new(1.3_f32, mark);
-                            ui.painter().line_segment(
-                                [c + egui::vec2(-r, -r), c + egui::vec2(r, r)],
-                                stroke,
-                            );
-                            ui.painter().line_segment(
-                                [c + egui::vec2(r, -r), c + egui::vec2(-r, r)],
-                                stroke,
-                            );
+                        if let Some(src) = dropped {
+                            moved = Some((src, i));
                         }
                     }
-                    if close_resp.clicked() {
-                        close = Some(i);
-                    } else if resp.clicked() {
-                        activate = Some(i);
+                    for (i, diff) in self.diffs.iter().enumerate() {
+                        let name = diff
+                            .path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&diff.path)
+                            .to_string();
+                        let (tab, cross) =
+                            Self::side_tab(ui, theme, "≠", &name, self.active_diff == Some(i));
+                        if self.active_diff == Some(i) && reveal {
+                            tab.scroll_to_me(None);
+                        }
+                        if cross.clicked() {
+                            close_diff = Some(i);
+                        } else if tab.clicked() {
+                            show_diff = Some(i);
+                        }
                     }
-                    (dropped, hovering)
+                    for (i, preview) in self.previews.iter().enumerate() {
+                        let (tab, cross) = Self::side_tab(
+                            ui,
+                            theme,
+                            "◫",
+                            &format!("{} preview", preview.name()),
+                            self.active_preview == Some(i),
+                        );
+                        if self.active_preview == Some(i) && reveal {
+                            tab.scroll_to_me(None);
+                        }
+                        if cross.clicked() {
+                            close_preview = Some(i);
+                        } else if tab.clicked() {
+                            show_preview = Some(i);
+                        }
+                    }
                 });
-                // Dropping is answered by the tab's own label — adding a
-                // second widget over the tab would swallow its clicks — but the
-                // mark is painted over the whole tab, which is what reads as
-                // "this tab moves here".
-                let (dropped, hovering) = tab.inner;
-                if hovering {
-                    ui.painter().rect_stroke(
-                        tab.response.rect,
-                        egui::CornerRadius::ZERO,
-                        egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
-                        egui::StrokeKind::Inside,
-                    );
+            });
+            self.tab_offset = strip.state.offset.x;
+            let overflow = strip.content_size.x > strip.inner_rect.width() + 0.5;
+            self.tabs_overflow = overflow;
+            if overflow {
+                let step = (strip.inner_rect.width() * 0.6).max(120.0);
+                let farthest = (strip.content_size.x - strip.inner_rect.width()).max(0.0);
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let arrow = |ui: &mut egui::Ui, text: &str, enabled: bool| -> bool {
+                    let label = egui::RichText::new(text)
+                        .size(16.0)
+                        .color(color(if enabled {
+                            theme.ui.fg
+                        } else {
+                            theme.ui.fg_faint
+                        }));
+                    ui.add_enabled(enabled, egui::Button::new(label).frame(false))
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                };
+                if arrow(ui, " ‹ ", self.tab_offset > 0.5) {
+                    self.tab_scroll_to = Some((self.tab_offset - step).max(0.0));
                 }
-                if let Some(src) = dropped {
-                    moved = Some((src, i));
+                if arrow(ui, " › ", self.tab_offset < farthest - 0.5) {
+                    self.tab_scroll_to = Some((self.tab_offset + step).min(farthest));
                 }
             }
-            for (i, diff) in self.diffs.iter().enumerate() {
-                let name = diff
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&diff.path)
-                    .to_string();
-                let (tab, cross) = Self::diff_tab(ui, theme, &name, self.active_diff == Some(i));
-                if cross.clicked() {
-                    close_diff = Some(i);
-                } else if tab.clicked() {
-                    show_diff = Some(i);
+            if markdown_in_front {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let hint = match preview_chord {
+                    Some(chord) => format!("Render this markdown ({chord})"),
+                    None => "Render this markdown".to_string(),
+                };
+                let label = egui::RichText::new("◫ Preview")
+                    .size(12.5)
+                    .color(color(theme.ui.fg));
+                if ui
+                    .add(egui::Button::new(label).frame(false))
+                    .on_hover_text(hint)
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    preview_clicked = true;
                 }
             }
         });
+        if preview_clicked {
+            // Cannot fail: the button is only there when markdown is in front.
+            let _ = self.toggle_preview();
+        }
         if let Some((from, to)) = moved {
             self.buffers.reorder(from, to);
         }
         if let Some(i) = activate {
             self.buffers.active = i;
             self.active_diff = None;
+            self.active_preview = None;
         }
         if let Some(i) = close {
             self.request_close(i);
         }
         if let Some(i) = show_diff {
             self.active_diff = Some(i);
+            self.active_preview = None;
+        }
+        if let Some(i) = show_preview {
+            self.active_preview = Some(i);
+            self.active_diff = None;
+        }
+        if let Some(i) = close_preview {
+            self.close_preview(i);
         }
         if let Some(i) = close_diff {
             self.close_diff(i);
@@ -453,9 +637,12 @@ impl Editor {
     }
 
     /// A diff's own tab, drawn after the files it sits beside.
-    fn diff_tab(
+    /// A tab that is not a file: a diff or a preview, told apart by its
+    /// glyph — `≠` and `◫`, the same two the terminal frontend draws.
+    fn side_tab(
         ui: &mut egui::Ui,
         theme: &Theme,
+        glyph: &str,
         label: &str,
         selected: bool,
     ) -> (egui::Response, egui::Response) {
@@ -475,7 +662,7 @@ impl Editor {
                 } else {
                     color(theme.ui.fg_dim)
                 };
-                let title = egui::RichText::new(format!("≠ {label}"))
+                let title = egui::RichText::new(format!("{glyph} {label}"))
                     .color(fg)
                     .size(13.0);
                 let tab = ui
@@ -606,13 +793,16 @@ impl Editor {
             ui.fonts(|f| f.layout_job(job))
         };
 
-        let row_height = ui.fonts(|f| f.row_height(&egui::FontId::monospace(CODE_FONT_SIZE)));
+        let row_height = ui.fonts(|f| f.row_height(&code_font(ui)));
         let mut toggle: Option<usize> = None;
 
         let scroll = egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let mut jumped_to: Option<usize> = None;
+                // Breathing room over the first line. It scrolls with the
+                // text, so a pinned header can sit flush under the tabs.
+                ui.add_space(EDITOR_TOP_PAD);
                 ui.spacing_mut().item_spacing.x = 14.0;
                 ui.horizontal_top(|ui| {
                     // Gutter: real line numbers plus a fold marker per row.
@@ -645,7 +835,7 @@ impl Editor {
                                 egui::pos2(gutter.min.x + 40.0, center_y),
                                 egui::Align2::RIGHT_CENTER,
                                 (line + 1).to_string(),
-                                egui::FontId::monospace(CODE_FONT_SIZE),
+                                code_font(ui),
                                 color(theme.ui.line_number),
                             );
                             if fold::region_at(&regions, *line).is_some() {
@@ -786,6 +976,27 @@ impl Editor {
                         .layouter(&mut layouter)
                         .show(ui);
 
+                    // Indent guides: a hairline per level of indentation,
+                    // drawn over the leading whitespace of the rows on screen.
+                    let guide = color(core_theme::indent_guide(theme));
+                    let char_w = ui.fonts(|f| f.glyph_width(&code_font(ui), ' '));
+                    let clip = ui.clip_rect();
+                    let guide_width = indent_config.width.max(1);
+                    for (row, count) in indent::guides(&shown, guide_width).iter().enumerate() {
+                        let y = output.galley_pos.y + row as f32 * row_height;
+                        if *count == 0 || y + row_height < clip.min.y || y > clip.max.y {
+                            continue;
+                        }
+                        for level in 0..*count {
+                            let x = output.galley_pos.x + (level * guide_width) as f32 * char_w;
+                            ui.painter().vline(
+                                x + 0.5,
+                                y..=y + row_height,
+                                egui::Stroke::new(1.0_f32, guide),
+                            );
+                        }
+                    }
+
                     if let Some(row) = jumped_to {
                         let rect = output.response.rect;
                         let y = rect.min.y + row as f32 * row_height;
@@ -891,7 +1102,8 @@ impl Editor {
         }
 
         // Sticky scroll: pin the headers enclosing the topmost visible row.
-        let first_row = (scroll.state.offset.y / row_height).floor() as usize;
+        let first_row =
+            ((scroll.state.offset.y - EDITOR_TOP_PAD).max(0.0) / row_height).floor() as usize;
         let first_line = visible.get(first_row).copied().unwrap_or(0);
         let sticky: Vec<usize> = fold::context(&self.regions, first_line, 3)
             .into_iter()
@@ -927,7 +1139,7 @@ impl Editor {
                 egui::pos2(band.min.x + 40.0, y + row_height / 2.0),
                 egui::Align2::RIGHT_CENTER,
                 (header + 1).to_string(),
-                egui::FontId::monospace(CODE_FONT_SIZE),
+                code_font(ui),
                 color(theme.ui.line_number),
             );
             let job = highlight::highlight(

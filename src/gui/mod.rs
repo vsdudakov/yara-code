@@ -8,5 +8,6 @@ pub mod fold_view;
 pub mod git;
 pub mod highlight;
 pub mod keys;
+pub mod preview;
 pub mod terminal;
 pub mod theme;

@@ -4,8 +4,9 @@
 //! draws the grid with egui, the terminal frontend with ratatui.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
@@ -17,7 +18,15 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     size: (u16, u16), // (rows, cols)
+    /// Where the shell was started; the first half of the tab title.
+    cwd: PathBuf,
+    /// The last title worked out, and when — asking the system what is in
+    /// front costs a process, so it is done once a second, not once a frame.
+    title: Mutex<Option<(Instant, String)>>,
 }
+
+/// How long a worked-out title is trusted before asking again.
+const TITLE_REFRESH: Duration = Duration::from_secs(1);
 
 /// The user's shell, and the arguments that make it a login shell. Windows has
 /// neither `$SHELL` nor `/bin/sh`, so it gets what it does have.
@@ -80,11 +89,56 @@ impl Pty {
             master: pair.master,
             child,
             size: (rows, cols),
+            cwd: cwd.to_path_buf(),
+            title: Mutex::new(None),
         })
     }
 
     pub fn size(&self) -> (u16, u16) {
         self.size
+    }
+
+    /// What the session is doing, as a tab title: the folder it runs in and
+    /// the program in front — `yara-code — zsh` at the prompt, `yara-code —
+    /// claude` once an agent is running. Refreshed at most once a second.
+    pub fn title(&self) -> String {
+        let mut cached = self.title.lock().unwrap();
+        if let Some((at, title)) = cached.as_ref() {
+            if at.elapsed() < TITLE_REFRESH {
+                return title.clone();
+            }
+        }
+        let folder = self
+            .cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.cwd.display().to_string());
+        let title = match self.foreground() {
+            Some(program) => format!("{folder} — {program}"),
+            None => folder,
+        };
+        *cached = Some((Instant::now(), title.clone()));
+        title
+    }
+
+    /// The program in the foreground of the terminal, by name. On Unix that
+    /// is the leader of the pty's foreground process group, asked of `ps`;
+    /// elsewhere the title the program set for itself, or nothing.
+    fn foreground(&self) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let pid = self.master.process_group_leader()?;
+            let out = std::process::Command::new("ps")
+                .args(["-o", "comm=", "-p", &pid.to_string()])
+                .output()
+                .ok()?;
+            let name = program_name(&String::from_utf8_lossy(&out.stdout));
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+        let title = self.with_screen(|screen| screen.title().to_string());
+        (!title.trim().is_empty()).then(|| title.trim().to_string())
     }
 
     /// Matches the shell's grid to the visible area. A no-op when unchanged.
@@ -127,6 +181,13 @@ impl Pty {
     }
 }
 
+/// `ps` reports a login shell as `-zsh` and some programs by their full
+/// path; the tab wants only the name.
+fn program_name(comm: &str) -> String {
+    let comm = comm.trim().trim_start_matches('-');
+    comm.rsplit(['/', '\\']).next().unwrap_or(comm).to_string()
+}
+
 impl Drop for Pty {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -146,12 +207,15 @@ pub struct Terminals {
 }
 
 impl Terminals {
-    /// What the tab strip shows: the name the user gave the session, or its
-    /// position when it has none.
+    /// What the tab strip shows: the name the user gave the session, or what
+    /// the session is doing when it has none — see [`Pty::title`].
     pub fn name(&self, index: usize) -> String {
         match self.names.get(index) {
             Some(name) if !name.is_empty() => name.clone(),
-            _ => (index + 1).to_string(),
+            _ => match self.list.get(index) {
+                Some(pty) => pty.title(),
+                None => (index + 1).to_string(),
+            },
         }
     }
 
@@ -294,22 +358,61 @@ mod tests {
     }
 
     #[test]
-    fn sessions_are_numbered_until_they_are_named() {
-        let (_dir, mut terminals) = two_sessions();
-        assert_eq!(terminals.name(0), "1");
-        assert_eq!(terminals.name(1), "2");
+    fn sessions_say_what_they_run_until_they_are_named() {
+        let (dir, mut terminals) = two_sessions();
+        let folder = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let title = terminals.name(0);
+        assert!(title.starts_with(&folder), "{title}");
+        assert_eq!(
+            terminals.name(1),
+            title,
+            "two shells in one folder read alike"
+        );
         assert!(!terminals.is_named(0));
 
         terminals.rename(0, "  build  ");
         assert_eq!(terminals.name(0), "build", "the name is trimmed");
         assert!(terminals.is_named(0));
-        // An empty name puts it back to its position.
+        // An empty name puts it back to what the session is doing.
         terminals.rename(0, "   ");
-        assert_eq!(terminals.name(0), "1");
+        assert_eq!(terminals.name(0), title);
         assert!(!terminals.is_named(0));
         // A session that is not there is not renamed, and does not panic.
         terminals.rename(9, "ghost");
         assert_eq!(terminals.name(9), "10");
+    }
+
+    #[test]
+    fn a_title_names_the_folder_and_the_program_in_front() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-title");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active().unwrap();
+        let title = pty.title();
+        assert!(title.starts_with("yara-pty-title"), "{title}");
+        if cfg!(unix) {
+            // Fresh from spawn the shell itself is in front, by its bare name.
+            let (_, program) = title.split_once(" — ").expect(&title);
+            assert!(
+                !program.contains('/') && !program.starts_with('-'),
+                "{title}"
+            );
+        }
+        // Asked again at once, the cached answer comes back unchanged.
+        assert_eq!(pty.title(), title);
+    }
+
+    #[test]
+    fn a_program_name_is_the_bare_command() {
+        assert_eq!(program_name("-zsh\n"), "zsh");
+        assert_eq!(program_name("/usr/local/bin/claude"), "claude");
+        assert_eq!(program_name("C:\\Windows\\cmd.exe"), "cmd.exe");
+        assert_eq!(program_name("  "), "");
     }
 
     #[test]

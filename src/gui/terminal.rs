@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::core::pty::{Pty, Terminals};
 use crate::core::theme::Theme;
-use crate::gui::theme::{ansi_color, color, CODE_FONT_SIZE};
+use crate::gui::theme::{ansi_color, code_font, color};
 
 #[derive(Default)]
 pub struct Terminal {
@@ -184,7 +184,7 @@ impl Terminal {
             return;
         };
 
-        let font_id = egui::FontId::monospace(CODE_FONT_SIZE);
+        let font_id = code_font(ui);
         let (cell_w, cell_h) = ui.fonts(|f| (f.glyph_width(&font_id, ' '), f.row_height(&font_id)));
 
         let avail = ui.available_size();

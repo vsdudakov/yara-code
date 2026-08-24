@@ -5,32 +5,66 @@ description: Everything in settings.json: themes, indentation, font size, go-to-
 # Settings
 
 Everything Yara Code reads lives in one JSON file, editable from inside the editor
-(**File → Settings**, `Cmd+,` / `Ctrl+,`). Saving it applies the changes
-immediately. It is written on first run to:
+(**File → Settings**, `Cmd+,` / `Ctrl+,`) or with anything else. The editor
+looks at the file once a second, so a change applies the moment it is saved —
+from either frontend, a script, or a hand edit — without a restart. It is
+written on first run to:
 
 ```
 ~/.config/yara-code/settings.json
 ```
 
+The file explains itself: every key is written out with a comment over it, and
+`//` comments survive the editor writing the file back.
+
 ```jsonc
+// Yara Code settings. Every key is optional: leave one out and the built-in
+// default applies.
 {
+  // Colour theme: "Dark+", "Light+", "Monokai". Also View → Theme.
   "theme": "Dark+",
-  "indent": { "style": "spaces", "width": 4, "detect_from_file": true },
+
+  // Editor font size in points. Window frontend only: the terminal frontend
+  // draws in whatever font the terminal itself uses.
   "font_size": 13.5,
+
+  "indent": {
+    // "spaces" or "tabs". Also View → Indentation.
+    "style": "spaces",
+    // Spaces per level, and how wide a tab is drawn.
+    "width": 4,
+    // Follow the indentation a file already uses, falling back to the above.
+    "detect_from_file": true
+  },
+
+  // Panels open at start.
   "show_sidebar": true,
   "show_terminal": true,
+
+  // Modifier held while clicking an identifier to jump to its definition.
   "goto_modifiers": { "gui": ["cmd"], "tui": ["ctrl", "alt"] },
+
+  // Key bindings per frontend; only what differs from the defaults is listed.
   "keys": { "gui": { "save": "Cmd+S" }, "tui": { "save": "Ctrl+S" } },
+
+  // Folders offered by File → Open Recent, newest first.
   "recent_projects": ["/path/to/project"]
 }
 ```
+
+## Per-project settings
+
+A project can carry its own `.ycode/settings.json` at its root. Whatever it
+sets — indentation and theme are the usual reasons — is laid over the global
+file while that project is open, and nothing else changes. The folder is hidden
+from the navigator and from project search.
 
 | Field | What it does |
 | --- | --- |
 | `theme` | Name of the active theme, as the picker shows it. |
 | `indent.width` | Spaces per level; `style` picks `spaces` or `tabs`. |
 | `indent.detect_from_file` | When on, a file that already uses another width wins and these values are only the fallback. |
-| `font_size` | The window's code font size — what Zoom In and Zoom Out change. The terminal frontend uses your terminal's font. |
+| `font_size` | The window's code font size; it takes effect the moment the file is saved. The terminal frontend draws in your terminal's own font, so it does not apply there. |
 | `show_sidebar`, `show_terminal` | Which panels are open at startup. |
 | `goto_modifiers` | Which modifier turns a click into go-to-definition. A list, because terminals differ in which ones they deliver — and none deliver Cmd, which is why the terminal default is Ctrl or Alt. |
 | `keys` | Every binding, per frontend. See [Key bindings](keys.md). |

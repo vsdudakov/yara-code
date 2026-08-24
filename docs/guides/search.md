@@ -17,7 +17,8 @@ Three fields, each with a lit heading over it: `SEARCH`, `REPLACE`, `EXCLUDE`.
 The toggles at the right of the heading row are `Aa` (match case), `ab` (whole
 word) and `.*` (regular expression) — VS Code's own.
 
-**Replace All** rewrites every match in the results and reloads any open buffer
+**Replace All** asks first — the files are rewritten on disk and there is no
+undo — then replaces every match in the results and reloads any open buffer
 that was not modified.
 
 ### The exclude box
@@ -45,8 +46,9 @@ along the bottom with `Replace` · `Replace All` · `<` · `>` at its right end 
 the two replace actions appear once the replace field has something in it.
 
 - <kbd>Tab</kbd> switches field.
-- `F3` / `Shift+F3` (or `Cmd+G` / `Cmd+Shift+G` in the window) step through
-  matches; `Ctrl+Alt+Enter` replaces them all.
+- `F3` / `Shift+F3` (or `Cmd+G` / `Cmd+Shift+G` in the window on macOS) step
+  through matches — <kbd>Enter</kbd> and <kbd>Shift+Enter</kbd> in the query do
+  the same; `Ctrl+Alt+Enter` replaces them all.
 - The bar **belongs to the file it was opened on**: switching tabs hides it, and
   coming back brings the query, the options and the counter with it. Closing
   that file closes it.

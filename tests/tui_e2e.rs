@@ -19,11 +19,32 @@ use ratatui::Terminal;
 use yara::tui::app::App;
 use yara::tui::ui;
 
-/// A project to open, removed when the test ends.
-struct Project(PathBuf);
+/// A project to open, removed when the test ends. `YARA_CONFIG_DIR` is one
+/// variable for the whole process, so the tests in this binary take turns:
+/// each holds the lock for as long as its project lives.
+struct Project(
+    PathBuf,
+    /// Held by the first project a test makes; a second folder in the same
+    /// test rides on it rather than waiting for itself.
+    #[allow(dead_code)]
+    Option<std::sync::MutexGuard<'static, ()>>,
+);
+
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+thread_local! {
+    static HOLDS_CONFIG_LOCK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 impl Project {
     fn new(tag: &str) -> Self {
+        // A test that panicked while holding the lock poisons it; the next
+        // test still gets its turn.
+        let lock = if HOLDS_CONFIG_LOCK.with(|held| held.replace(true)) {
+            None
+        } else {
+            Some(CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+        };
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("{tag}-{}-{n}", std::process::id()));
@@ -35,7 +56,7 @@ impl Project {
         let config = path.with_extension("config");
         std::fs::create_dir_all(&config).unwrap();
         std::env::set_var("YARA_CONFIG_DIR", &config);
-        let project = Self(path);
+        let project = Self(path, lock);
         project.file("README.md", "# Title\nA line of prose.\n");
         project.file("src/main.rs", "fn main() {\n    let total = 1;\n}\n");
         project
@@ -56,6 +77,9 @@ impl Project {
 impl Drop for Project {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        if self.1.is_some() {
+            HOLDS_CONFIG_LOCK.with(|held| held.set(false));
+        }
     }
 }
 
@@ -301,7 +325,7 @@ fn the_bindings_overlay_lists_what_is_actually_bound() {
     let mut harness = Harness::open(&project);
     harness.key(KeyCode::F(1));
     let screen = harness.screen();
-    assert!(screen.contains("Key bindings"), "{screen}");
+    assert!(screen.contains("Key Bindings"), "{screen}");
     assert!(screen.contains("Save"));
     assert!(screen.contains("Ctrl+S") || screen.contains("Ctrl+"));
 }
@@ -498,7 +522,11 @@ fn the_navigator_makes_and_renames_and_deletes_files() {
     // Delete asks first, and takes no for an answer.
     // The cursor followed the rename, so delete acts on the new name.
     harness.key(KeyCode::Char('d'));
-    assert!(harness.shows("Delete renamed.txt"), "{}", harness.screen());
+    assert!(
+        harness.shows("Delete \"renamed.txt\"?"),
+        "{}",
+        harness.screen()
+    );
     harness.key(KeyCode::Char('n'));
     assert!(project.path().join("renamed.txt").exists(), "n means no");
     harness.key(KeyCode::Char('d'));
@@ -530,12 +558,12 @@ fn the_theme_picker_switches_the_colours() {
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     );
     let screen = harness.screen();
-    assert!(screen.contains("Color theme"), "{screen}");
+    assert!(screen.contains("Color Theme"), "{screen}");
     assert!(screen.contains("Light+") && screen.contains("Monokai"));
     harness.key(KeyCode::Down);
     harness.key(KeyCode::Enter);
     // The picker is gone and the status bar names the theme now in effect.
-    assert!(!harness.shows("Color theme"), "{}", harness.screen());
+    assert!(!harness.shows("Monokai"), "{}", harness.screen());
     let status = harness
         .screen()
         .lines()
@@ -736,6 +764,9 @@ fn replacing_across_the_project_rewrites_every_file() {
         .find("Replace All")
         .unwrap() as u16;
     harness.click(col + 2, action);
+    // Rewriting the project is asked about first.
+    assert!(harness.shows("cannot be undone"), "{}", harness.screen());
+    harness.key(KeyCode::Enter);
     assert_eq!(
         std::fs::read_to_string(project.path().join("b.txt")).unwrap(),
         "omega omega\n"
@@ -852,7 +883,7 @@ fn opening_a_folder_switches_the_project() {
     assert!(harness.shows("only-here.txt"), "{}", harness.screen());
     // Open Recent lists where we came from.
     harness.ctrl('r');
-    assert!(harness.shows("Recent projects"), "{}", harness.screen());
+    assert!(harness.shows("Recent Projects"), "{}", harness.screen());
     harness.key(KeyCode::Esc);
 }
 
@@ -899,13 +930,19 @@ fn the_shell_takes_the_keyboard_and_gives_it_back() {
         KeyModifiers::CONTROL | KeyModifiers::ALT,
     );
     harness.draw();
-    assert!(harness.shows(" 2 "), "{}", harness.screen());
+    let sessions = |h: &Harness| {
+        h.screen()
+            .lines()
+            .find(|l| l.contains("TERMINAL"))
+            .map_or(0, |l| l.matches('×').count())
+    };
+    assert_eq!(sessions(&harness), 2, "{}", harness.screen());
     harness.press(
         KeyCode::Char('w'),
         KeyModifiers::CONTROL | KeyModifiers::ALT,
     );
     harness.draw();
-    assert!(!harness.shows(" 2 "), "{}", harness.screen());
+    assert_eq!(sessions(&harness), 1, "{}", harness.screen());
 }
 
 #[test]
@@ -1180,4 +1217,220 @@ fn a_folder_row_offers_to_leave_the_project() {
         .any(|line| line.starts_with(" ▾") && line.contains(&name));
     assert!(!in_navigator, "{}", harness.screen());
     assert!(harness.shows("removed"), "{}", harness.screen());
+}
+
+#[test]
+fn a_markdown_file_previews_as_a_reader_sees_it() {
+    let project = Project::new("yara-e2e-preview");
+    project.file(
+        "README.md",
+        "# Yara Code\n\nSome **bold** text.\n\n- one\n- two\n\n```rust\nfn main() {}\n```\n",
+    );
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    harness.press(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let screen = harness.screen();
+    // The heading without its hash, the list with bullets, the fence gone.
+    assert!(
+        screen.contains("Yara Code") && !screen.contains("# Yara Code"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("• one") && screen.contains("• two"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("fn main() {}") && !screen.contains("```"),
+        "{screen}"
+    );
+    assert!(screen.contains("◫ README.md"), "a tab of its own: {screen}");
+    // The toggle again puts it away; a non-markdown file has none.
+    harness.press(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    assert!(!harness.shows("◫ README.md"), "{}", harness.screen());
+    let src = harness.row_of("src").unwrap();
+    harness.click(4, src);
+    let main = harness.row_of("main.rs").unwrap();
+    harness.click(6, main);
+    harness.press(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    assert!(harness.shows("is not markdown"), "{}", harness.screen());
+}
+
+#[test]
+fn the_indentation_picker_changes_what_enter_inserts() {
+    let project = Project::new("yara-e2e-indent");
+    let mut harness = Harness::open(&project);
+    harness.press(
+        KeyCode::Char('i'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+    let screen = harness.screen();
+    assert!(
+        screen.contains("Indentation") && screen.contains("Tabs"),
+        "{screen}"
+    );
+    // Down to "Tabs" (the last choice) and Enter.
+    harness.key(KeyCode::End);
+    for _ in 0..3 {
+        harness.key(KeyCode::Down);
+    }
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("indentation: Tabs"), "{}", harness.screen());
+    assert_eq!(
+        harness.app.settings.indent.style,
+        yara::core::settings::IndentStyle::Tabs
+    );
+}
+
+#[test]
+fn saving_the_settings_file_applies_it_and_says_what_it_cannot() {
+    let project = Project::new("yara-e2e-live-settings");
+    let settings = project.file(
+        ".ycode/settings.json",
+        "{\"theme\": \"Dark+\", \"show_terminal\": true}\n",
+    );
+    let mut harness = Harness::open(&project);
+    assert!(harness.shows("TERMINAL"), "{}", harness.screen());
+
+    std::fs::write(
+        &settings,
+        "{\"theme\": \"Monokai\", \"show_terminal\": false, \"font_size\": 20.0}\n",
+    )
+    .unwrap();
+    harness.app.open(settings);
+    harness.draw();
+    harness.ctrl('s');
+    let screen = harness.screen();
+    assert!(screen.contains("settings applied"), "{screen}");
+    // The theme and the panel flag took effect; the font size is the
+    // terminal's, and the status bar says so instead of pretending.
+    assert!(screen.contains("Monokai"), "{screen}");
+    assert!(!screen.contains(" TERMINAL "), "{screen}");
+    // The status bar is clipped to fit beside the cursor readout, so only
+    // the start of the note is guaranteed on a 120-column screen.
+    assert!(screen.contains("font_size is the"), "{screen}");
+}
+
+#[test]
+fn indented_code_shows_a_guide_per_level_through_blank_lines() {
+    let project = Project::new("yara-e2e-guides");
+    project.file(
+        "nested.rs",
+        "fn a() {\n    if x {\n        y();\n\n    }\n}\n",
+    );
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("nested.rs").unwrap();
+    harness.click(4, row);
+    let screen = harness.screen();
+    // Guides land where the leading spaces were: one at the first level, two
+    // on the deepest line, and the blank line inside the block keeps one.
+    // The first bar on a row is the sidebar's edge; the guides come after.
+    let guide = |text: &str| {
+        screen
+            .lines()
+            .find(|l| l.contains(text))
+            .and_then(|l| l.split_once('\u{2502}'))
+            .map(|(_, editor)| editor.matches('\u{2502}').count())
+            .unwrap_or(0)
+    };
+    assert_eq!(guide("if x {"), 1, "{screen}");
+    assert_eq!(guide("y();"), 2, "{screen}");
+    let y = screen.lines().position(|l| l.contains("y();")).unwrap();
+    let blank = screen.lines().nth(y + 1).unwrap();
+    assert!(blank.contains('\u{2502}'), "{screen}");
+    assert_eq!(guide("fn a() {"), 0, "{screen}");
+}
+
+#[test]
+fn a_markdown_file_in_front_offers_a_preview_button_on_the_strip() {
+    let project = Project::new("yara-e2e-preview-hint");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    let screen = harness.screen();
+    assert!(screen.contains("◫ Preview Ctrl+Shift+V"), "{screen}");
+    // Clicking it renders the file in a preview tab; the button then goes,
+    // as the preview, not the markdown, is in front.
+    let strip = screen
+        .lines()
+        .position(|l| l.contains("◫ Preview"))
+        .unwrap() as u16;
+    let column = screen
+        .lines()
+        .nth(strip as usize)
+        .unwrap()
+        .find("◫ Preview")
+        .unwrap();
+    let column = screen.lines().nth(strip as usize).unwrap()[..column]
+        .chars()
+        .count() as u16
+        + 2;
+    harness.click(column, strip);
+    let screen = harness.screen();
+    assert!(screen.contains("◫ README.md"), "{screen}");
+    assert!(!screen.contains("◫ Preview Ctrl"), "{screen}");
+    // A file that is not markdown gets no such button.
+    let src = harness.row_of("src").unwrap();
+    harness.click(4, src);
+    let row = harness.row_of("main.rs").unwrap();
+    harness.click(4, row);
+    assert!(!harness.shows("◫ Preview"), "{}", harness.screen());
+}
+
+#[test]
+fn too_many_tabs_scroll_behind_arrows_and_the_front_one_stays_in_view() {
+    let project = Project::new("yara-e2e-tab-scroll");
+    for i in 0..12 {
+        project.file(&format!("long_file_name_{i:02}.rs"), "fn f() {}\n");
+    }
+    let mut harness = Harness::with_size(Some(project.path().to_path_buf()), 100, 30);
+    for i in 0..12 {
+        let name = format!("long_file_name_{i:02}.rs");
+        let row = harness.row_of(&name).unwrap();
+        harness.click(4, row);
+    }
+    let screen = harness.screen();
+    let strip = screen
+        .lines()
+        .find(|l| l.contains("‹") && l.contains("›"))
+        .expect(&screen);
+    // The last file opened is in front and on screen; the first scrolled off.
+    assert!(strip.contains("name_11.rs"), "{strip}");
+    assert!(!strip.contains("name_00.rs"), "{strip}");
+    // ‹ brings earlier tabs back, a few columns per press; pressing past the
+    // first tab is harmless.
+    let row = screen.lines().position(|l| l.contains('‹')).unwrap() as u16;
+    let at = strip.find('‹').unwrap();
+    let at = strip[..at].chars().count() as u16;
+    for _ in 0..40 {
+        harness.click(at, row);
+    }
+    let strip = harness
+        .screen()
+        .lines()
+        .find(|l| l.contains('‹'))
+        .unwrap()
+        .to_string();
+    assert!(strip.contains("name_00.rs"), "{strip}");
+    // Switching back to the last tab from the keyboard scrolls it into view:
+    // Next Tab wraps, so a full round lands on it again.
+    for _ in 0..12 {
+        harness.press(KeyCode::PageDown, KeyModifiers::CONTROL);
+    }
+    let strip = harness
+        .screen()
+        .lines()
+        .find(|l| l.contains('‹'))
+        .unwrap()
+        .to_string();
+    assert!(strip.contains("name_11.rs"), "{strip}");
 }

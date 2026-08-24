@@ -34,8 +34,11 @@ ycode-gui ~/code/project    # the same editor, in a window
 - **Git**: changed files tinted in the navigator, changed lines marked in the
   gutter, a side-by-side diff in a tab of its own, and blame for the line under
   the cursor.
-- **A real shell** on a pseudo-terminal in both frontends.
-- **VS Code key bindings**, all rebindable in `settings.json`.
+- **A real shell** on a pseudo-terminal in both frontends; its tabs say what
+  is running in them.
+- **Markdown preview** and indent guides in both frontends.
+- **VS Code key bindings**, all rebindable in a commented `settings.json` that
+  applies on save, with per-project overrides in `.ycode/settings.json`.
 
 ## Where to go next
 

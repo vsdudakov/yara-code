@@ -102,6 +102,43 @@ struct Key {
 }
 
 impl Search {
+    /// The line under the query: the pattern error if there is one, nothing
+    /// for an empty query, otherwise how much was found — and whether the
+    /// search stopped early, since a bare "1000" would read as the total.
+    pub fn summary(&self) -> String {
+        if let Some(error) = &self.error {
+            return error.clone();
+        }
+        if self.query.is_empty() {
+            return String::new();
+        }
+        let total = self.total_matches();
+        if total == 0 {
+            return "No results".to_string();
+        }
+        let files = crate::core::count(self.results.len(), "file");
+        if self.truncated {
+            format!("more than {total} results in {files}")
+        } else {
+            format!("{} in {files}", crate::core::count(total, "result"))
+        }
+    }
+
+    /// The question asked before every match in the project is rewritten on
+    /// disk — there is no undo for that, so it is asked in these words in
+    /// both frontends.
+    pub fn replace_all_question(&self) -> String {
+        format!(
+            "Replace {} in {} with \"{}\"?",
+            crate::core::count(self.total_matches(), "match"),
+            crate::core::count(self.results.len(), "file"),
+            self.replace
+        )
+    }
+
+    pub const REPLACE_ALL_WARNING: &'static str =
+        "The files are rewritten on disk. This cannot be undone.";
+
     pub fn total_matches(&self) -> usize {
         self.results.iter().map(|f| f.matches.len()).sum()
     }

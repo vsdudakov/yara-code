@@ -4,6 +4,10 @@
 //! folders and git are the things worth testing — so they need somewhere of
 //! their own to work, one per test, never the user's own files.
 
+/// `YARA_CONFIG_DIR` is one variable for the whole test binary; a test that
+/// sets it holds this for as long as it relies on it.
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -41,6 +41,32 @@ impl Default for Indent {
 }
 
 impl Indent {
+    /// What the indentation picker offers, in the order it lists them.
+    pub const CHOICES: [(&'static str, IndentStyle, usize); 4] = [
+        ("Spaces: 2", IndentStyle::Spaces, 2),
+        ("Spaces: 4", IndentStyle::Spaces, 4),
+        ("Spaces: 8", IndentStyle::Spaces, 8),
+        ("Tabs", IndentStyle::Tabs, 4),
+    ];
+
+    /// Which of `CHOICES` this is, for a picker to start on.
+    pub fn choice_index(&self) -> usize {
+        Self::CHOICES
+            .iter()
+            .position(|(_, style, width)| {
+                *style == self.style && (*style == IndentStyle::Tabs || *width == self.width)
+            })
+            .unwrap_or(1)
+    }
+
+    /// How the setting reads in a status bar: "Spaces: 4" or "Tabs".
+    pub fn label(&self) -> String {
+        match self.style {
+            IndentStyle::Tabs => "Tabs".to_string(),
+            IndentStyle::Spaces => format!("Spaces: {}", self.width),
+        }
+    }
+
     /// The literal string one indent level inserts.
     pub fn unit(&self) -> String {
         match self.style {
@@ -188,14 +214,26 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::PickRepository => "Cmd+Alt+G",
         Command::PickWorktree => "Cmd+Alt+K",
         Command::ThemePicker => "Cmd+Shift+T",
+        Command::IndentPicker => "Cmd+Alt+I",
+        // VS Code's own key for the markdown preview.
+        Command::TogglePreview => "Cmd+Shift+V",
         Command::GotoDefinition => "F12",
-        Command::GoBack => "Ctrl+-",
+        // ⌃- is VS Code's back on macOS; elsewhere it is Alt+Left, as in the
+        // terminal frontend.
+        Command::GoBack => mac_or("Ctrl+-", "Alt+Left"),
         Command::NewFolder => "Cmd+Alt+N",
         Command::Rename => "F2",
-        Command::Delete => "Cmd+Backspace",
+        // Cmd+Backspace deletes to the start of the line in every macOS text
+        // field, so it is not the key for deleting a file from under the
+        // editor. Shift+Delete is the terminal frontend's, and has no meaning
+        // in the text.
+        Command::Delete => "Shift+Delete",
         Command::MoveTo => "Cmd+Alt+M",
-        Command::FindNext => "Cmd+G",
-        Command::FindPrev => "Cmd+Shift+G",
+        // Cmd+G / Cmd+Shift+G on macOS; F3 / Shift+F3 elsewhere, where
+        // Ctrl+Shift+G is the Git sidebar and would otherwise collide, since
+        // Cmd means Ctrl on those platforms.
+        Command::FindNext => mac_or("Cmd+G", "F3"),
+        Command::FindPrev => mac_or("Cmd+Shift+G", "Shift+F3"),
         Command::ReplaceAll => "Cmd+Alt+Enter",
         // Panes are switched with the mouse in the window.
         Command::NextPane | Command::PrevPane => return None,
@@ -212,9 +250,6 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::NextTab => "Ctrl+PageDown",
         Command::PrevTab => "Ctrl+PageUp",
         Command::Help => "F1",
-        Command::ZoomIn => "Cmd+=",
-        Command::ZoomOut => "Cmd+-",
-        Command::ResetZoom => "Cmd+0",
         // Driven by the mouse and the menu bar in the window frontend.
         Command::ContextMenu | Command::FileMenu | Command::ViewMenu | Command::HelpMenu => {
             return None
@@ -224,6 +259,15 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         // accident.
         Command::CheckForUpdates | Command::InstallUpdate => return None,
     })
+}
+
+/// The macOS chord, or the one the other platforms use where VS Code differs.
+fn mac_or(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
 }
 
 /// The same bindings with Ctrl in place of Cmd, and Ctrl+Shift where VS Code
@@ -254,6 +298,8 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
         Command::PickRepository => "Ctrl+Alt+G",
         Command::PickWorktree => "Ctrl+Alt+K",
         Command::ThemePicker => "Ctrl+Shift+T",
+        Command::IndentPicker => "Ctrl+Alt+I",
+        Command::TogglePreview => "Ctrl+Shift+V",
         Command::GotoDefinition => "F12",
         // VS Code's own back on Windows and Linux, where ⌃- does not exist.
         Command::GoBack => "Alt+Left",
@@ -285,8 +331,6 @@ fn tui_default_chord(command: Command) -> Option<&'static str> {
         Command::Help => "F1",
         Command::Documentation => "Ctrl+Shift+H",
         Command::CheckForUpdates | Command::InstallUpdate => return None,
-        // The terminal owns its own font size.
-        Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => return None,
     })
 }
 
@@ -381,6 +425,51 @@ impl Default for Settings {
     }
 }
 
+/// Serialises one value the way the file writes it. A trait object so the
+/// template above can hold values of different types in one closure.
+mod erased_json {
+    pub trait ToJson {
+        fn to_json(&self) -> String;
+    }
+    impl<T: serde::Serialize> ToJson for T {
+        fn to_json(&self) -> String {
+            serde_json::to_string_pretty(self).unwrap_or_else(|_| "null".to_string())
+        }
+    }
+}
+
+/// Removes `//` comments so the file can carry them and serde need not know.
+/// A `//` inside a string — a URL in a recent project, say — is left alone.
+pub fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                in_string = !in_string;
+                out.push(c);
+            }
+            '\\' if in_string => {
+                out.push(c);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '/' if !in_string && chars.peek() == Some(&'/') => {
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 impl Settings {
     /// `$XDG_CONFIG_HOME/yara/settings.json`, else `~/.config/...`.
     pub fn path() -> Option<PathBuf> {
@@ -401,7 +490,7 @@ impl Settings {
     pub fn load_for(root: Option<&Path>) -> (Self, Option<String>) {
         let mut complaint = None;
         let mut settings = match Self::path().and_then(|p| std::fs::read_to_string(p).ok()) {
-            Some(text) => match serde_json::from_str::<Self>(&text) {
+            Some(text) => match serde_json::from_str::<Self>(&strip_comments(&text)) {
                 Ok(settings) => settings,
                 Err(e) => {
                     complaint = Some(format!("settings.json ignored: {e}"));
@@ -412,7 +501,7 @@ impl Settings {
         };
         if let Some(project) = root.map(Self::project_path) {
             if let Ok(text) = std::fs::read_to_string(&project) {
-                match serde_json::from_str::<ProjectOverrides>(&text) {
+                match serde_json::from_str::<ProjectOverrides>(&strip_comments(&text)) {
                     Ok(overrides) => overrides.apply(&mut settings),
                     Err(e) => {
                         complaint = Some(format!(".ycode/settings.json ignored: {e}"));
@@ -424,6 +513,12 @@ impl Settings {
             complaint = settings.binding_complaint();
         }
         (settings, complaint)
+    }
+
+    /// Whether `path` is a settings file the editor reads — the user's own or
+    /// a project's — so a save to it can take effect on the spot.
+    pub fn is_settings_file(path: &Path, root: Option<&Path>) -> bool {
+        Self::path().as_deref() == Some(path) || root.is_some_and(|r| Self::project_path(r) == path)
     }
 
     /// Where a project keeps its own settings.
@@ -460,6 +555,8 @@ impl Settings {
         None
     }
 
+    /// Writes the global file: every setting, each with a line saying what it
+    /// is for, so the file explains itself when opened.
     pub fn save(&self) -> std::io::Result<PathBuf> {
         let path = Self::path().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "no config directory")
@@ -467,10 +564,113 @@ impl Settings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let text = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&path, format!("{text}\n"))?;
+        std::fs::write(&path, self.to_commented_json())?;
         Ok(path)
+    }
+
+    /// The settings as JSON with a comment over each key. The values are what
+    /// serde would write; only the words around them are added.
+    pub fn to_commented_json(&self) -> String {
+        let json = |value: &dyn erased_json::ToJson| value.to_json();
+        let themes = crate::core::theme::builtin()
+            .iter()
+            .map(|t| format!("\"{}\"", t.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let nested = |text: String| text.replace('\n', "\n  ");
+        let reference = Self::keys_reference();
+        format!(
+            r#"// Yara Code settings. Every key is optional: leave one out and the built-in
+// default applies. Lines starting with // are comments and are kept when the
+// editor writes the file. A project can override any of these from its own
+// .ycode/settings.json.
+{{
+  // Colour theme: {themes}. Also View → Theme.
+  "theme": {theme},
+
+  // Editor font size in points. Window frontend only: the terminal frontend
+  // draws in whatever font the terminal itself uses.
+  "font_size": {font_size},
+
+  "indent": {{
+    // "spaces" or "tabs". Also View → Indentation.
+    "style": {indent_style},
+    // Spaces per level, and how wide a tab is drawn.
+    "width": {indent_width},
+    // Follow the indentation a file already uses, falling back to the above.
+    "detect_from_file": {detect_from_file}
+  }},
+
+  // Panels open at start. View → Toggle Sidebar / Toggle Terminal.
+  "show_sidebar": {show_sidebar},
+  "show_terminal": {show_terminal},
+
+  // Modifier held while clicking an identifier to jump to its definition,
+  // per frontend: any of "cmd", "ctrl", "alt", "shift". A terminal cannot see
+  // Cmd, so the tui list is what the terminal frontend uses.
+  "goto_modifiers": {goto_modifiers},
+
+  // Key bindings per frontend, command id to chord. Only bindings that
+  // differ from the defaults need listing, for example
+  //   "keys": {{ "gui": {{ "save": "Cmd+S" }}, "tui": {{ "save": "Ctrl+S" }} }}
+  // Chords are written Cmd/Ctrl/Alt/Shift + a key: "Cmd+Shift+F", "Ctrl+-",
+  // "Alt+Left", "F12". The commands and their defaults, window then terminal
+  // (see also {docs}guides/keys/):
+{reference}
+  "keys": {keys},
+
+  // Folders offered by File → Open Recent, newest first. Kept by the editor.
+  "recent_projects": {recent_projects}
+}}
+"#,
+            theme = json(&self.theme),
+            font_size = json(&self.font_size),
+            indent_style = json(&self.indent.style),
+            indent_width = json(&self.indent.width),
+            detect_from_file = json(&self.indent.detect_from_file),
+            show_sidebar = json(&self.show_sidebar),
+            show_terminal = json(&self.show_terminal),
+            goto_modifiers = nested(json(&self.goto_modifiers)),
+            keys = nested(json(&self.keys)),
+            recent_projects = nested(json(&self.recent_projects)),
+            docs = crate::core::DOCUMENTATION,
+            reference = reference,
+        )
+    }
+
+    /// Every command with its default chord in each frontend, as comment
+    /// lines for the settings file — so a rebind starts from what is there
+    /// rather than from the documentation.
+    fn keys_reference() -> String {
+        let id_width = ALL.iter().map(|c| c.id().len()).max().unwrap_or(0);
+        let gui_width = ALL
+            .iter()
+            .map(|c| gui_default_chord(*c).map_or(1, str::len))
+            .max()
+            .unwrap_or(0);
+        ALL.iter()
+            .map(|command| {
+                format!(
+                    "  //   {:id_width$}  {:gui_width$}  {}",
+                    command.id(),
+                    gui_default_chord(*command).unwrap_or("—"),
+                    tui_default_chord(*command).unwrap_or("—"),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// When the files the settings come from were last written — the global
+    /// one and the project's — so a frontend can notice an edit made outside
+    /// the editor and apply it without being told.
+    pub fn stamp(root: Option<&Path>) -> Vec<Option<std::time::SystemTime>> {
+        let mut paths = vec![Self::path()];
+        paths.push(root.map(Self::project_path));
+        paths
+            .into_iter()
+            .map(|path| path.and_then(|p| std::fs::metadata(p).ok()?.modified().ok()))
+            .collect()
     }
 
     /// Path to the settings file, writing the current values first if it does
@@ -608,13 +808,7 @@ mod tests {
         ];
         // The terminal has no font of its own to scale, and neither frontend
         // has a documentation page to open yet.
-        let unbound_in_tui = [
-            Command::ZoomIn,
-            Command::ZoomOut,
-            Command::ResetZoom,
-            Command::CheckForUpdates,
-            Command::InstallUpdate,
-        ];
+        let unbound_in_tui = [Command::CheckForUpdates, Command::InstallUpdate];
         for command in ALL {
             assert!(
                 unbound_in_tui.contains(command) || tui_default_chord(*command).is_some(),
@@ -823,6 +1017,11 @@ mod settings_tests {
     #[test]
     fn a_project_file_lays_over_the_global_one() {
         let dir = crate::core::test_support::Dir::new("yara-project-settings");
+        // Read against an empty global file, not whatever the machine has.
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path().join("config"));
         std::fs::create_dir_all(dir.path().join(PROJECT_DIR)).unwrap();
         std::fs::write(
             Settings::project_path(dir.path()),
@@ -843,11 +1042,16 @@ mod settings_tests {
             "Ctrl+Q"
         );
         assert_eq!(settings.theme, Settings::default().theme);
+        std::env::remove_var("YARA_CONFIG_DIR");
     }
 
     #[test]
     fn a_broken_project_file_is_reported_and_the_rest_still_loads() {
         let dir = crate::core::test_support::Dir::new("yara-project-settings-bad");
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path().join("config"));
         std::fs::create_dir_all(dir.path().join(PROJECT_DIR)).unwrap();
         std::fs::write(Settings::project_path(dir.path()), "{not json").unwrap();
         let (settings, complaint) = Settings::load_for(Some(dir.path()));
@@ -859,13 +1063,103 @@ mod settings_tests {
         // No project file at all is simply the global settings.
         let (_, none) = Settings::load_for(Some(Path::new("/nowhere/at/all")));
         assert_eq!(none, None);
+        std::env::remove_var("YARA_CONFIG_DIR");
     }
 
     #[test]
     fn the_settings_file_lives_under_the_editor_s_own_config_directory() {
+        // Another test may be pointing the directory elsewhere; wait for it.
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let path = Settings::path().expect("a config directory on every platform");
         assert!(
-            path.ends_with("yara-code/settings.json") || path.ends_with("yara-code\\settings.json")
+            path.ends_with("yara-code/settings.json") || path.ends_with("yara-code\\settings.json"),
+            "{}",
+            path.display()
         );
+    }
+
+    #[test]
+    fn comments_are_stripped_outside_strings_only() {
+        let text = "{\n  // a note\n  \"theme\": \"Dark+\", // trailing\n  \"recent_projects\": [\"http://x//y\", \"a\\\"//b\"]\n}\n";
+        let stripped = strip_comments(text);
+        let value: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(value["theme"], "Dark+");
+        assert_eq!(value["recent_projects"][0], "http://x//y");
+        assert_eq!(value["recent_projects"][1], "a\"//b");
+    }
+
+    #[test]
+    fn the_written_file_explains_itself_and_reads_back_whole() {
+        let mut settings = Settings {
+            theme: "Monokai".into(),
+            font_size: 17.0,
+            ..Default::default()
+        };
+        settings
+            .keys
+            .gui
+            .insert("save".into(), "Cmd+Shift+S".parse().unwrap());
+        settings.recent_projects.push(PathBuf::from("/tmp/p"));
+        let text = settings.to_commented_json();
+        // Every top-level key is there with a comment somewhere above it.
+        for key in [
+            "\"theme\"",
+            "\"font_size\"",
+            "\"indent\"",
+            "\"show_sidebar\"",
+            "\"show_terminal\"",
+            "\"goto_modifiers\"",
+            "\"keys\"",
+            "\"recent_projects\"",
+        ] {
+            let at = text
+                .find(key)
+                .unwrap_or_else(|| panic!("{key} missing:\n{text}"));
+            assert!(text[..at].contains("//"), "{key} has no comment");
+        }
+        assert!(text.contains("Monokai"), "the theme names are listed");
+        // Every command is named over the keys, with both of its defaults.
+        for command in ALL {
+            let line = text
+                .lines()
+                .find(|l| l.starts_with("  //") && l.contains(command.id()))
+                .unwrap_or_else(|| panic!("{} missing from the reference", command.id()));
+            if let Some(chord) = tui_default_chord(*command) {
+                assert!(line.contains(chord), "{line}");
+            }
+        }
+        let back: Settings = serde_json::from_str(&strip_comments(&text)).unwrap();
+        assert_eq!(back.theme, "Monokai");
+        assert_eq!(back.font_size, 17.0);
+        assert_eq!(
+            back.keys.gui.get("save").unwrap().to_string(),
+            "Cmd+Shift+S"
+        );
+        assert_eq!(back.recent_projects, vec![PathBuf::from("/tmp/p")]);
+    }
+
+    #[test]
+    fn a_commented_file_on_disk_loads_and_a_stamp_moves_when_it_is_written() {
+        let dir = crate::core::test_support::Dir::new("yara-settings-comments");
+        let lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path());
+        let before = Settings::stamp(None);
+        assert_eq!(before, vec![None, None], "nothing written yet");
+        let settings = Settings {
+            theme: "Light+".into(),
+            ..Default::default()
+        };
+        settings.save().unwrap();
+        let (loaded, complaint) = Settings::load();
+        assert_eq!(complaint, None);
+        assert_eq!(loaded.theme, "Light+");
+        let after = Settings::stamp(None);
+        assert!(after[0].is_some() && after != before);
+        std::env::remove_var("YARA_CONFIG_DIR");
+        drop(lock);
     }
 }

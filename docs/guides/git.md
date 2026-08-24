@@ -9,7 +9,7 @@ works in both frontends.
 
 ## The panel
 
-`Cmd+Shift+G` / `Ctrl+Shift+G` opens the Git view in the sidebar:
+`Ctrl+Shift+G` in both frontends opens the Git view in the sidebar:
 
 - a **repository** picker (`Cmd+Alt+G` / `Ctrl+Alt+G`) listing every repository
   found under the project;

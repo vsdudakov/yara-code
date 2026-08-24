@@ -56,6 +56,15 @@ pub enum Focus {
     Shell,
 }
 
+/// A markdown file rendered rather than edited: headings, lists and code laid
+/// out as a reader sees them, in a tab beside the file itself.
+pub struct Preview {
+    pub path: PathBuf,
+    pub blocks: Vec<crate::core::markdown::Block>,
+    /// First drawn line.
+    pub scroll: usize,
+}
+
 /// A changed file shown side by side: what it was on the left, what it is now
 /// on the right.
 pub struct Diff {
@@ -104,10 +113,14 @@ pub enum Prompt {
     Rename(PathBuf),
     MoveTo(PathBuf),
     ConfirmDelete(PathBuf),
+    /// Every match in the project is about to be rewritten on disk.
+    ConfirmReplaceAll,
     /// Closing buffer `index`, which has unsaved changes.
     ConfirmClose {
         index: usize,
         name: String,
+        /// The question is being asked on the way out of the editor.
+        then_quit: bool,
     },
     GitRepo,
     GitWorktree,
@@ -117,6 +130,8 @@ pub enum Prompt {
     AddFolderPath,
     /// Renaming terminal session `index`, from its tab's right-click.
     RenameTerminal(usize),
+    /// The indentation picker: spaces of a width, or tabs.
+    Indent,
     SaveAs,
     /// The built-in file browser: the terminal frontend's stand-in for the
     /// window's native Open dialog.
@@ -143,9 +158,17 @@ impl Prompt {
             Self::NewDir(dir) => format!("New folder in {}", short(dir)),
             Self::Rename(path) => format!("Rename {}", short(path)),
             Self::MoveTo(path) => format!("Move {} into folder", short(path)),
-            Self::ConfirmDelete(path) => format!("Delete {}?  (y / n)", short(path)),
-            Self::ConfirmClose { name, .. } => {
-                format!("Save changes to {name}?  (y = save / n = discard / esc = cancel)")
+            Self::ConfirmDelete(path) => format!("Delete \"{}\"?", short(path)),
+            // The question itself is built by the caller, from the search.
+            Self::ConfirmReplaceAll => String::new(),
+            Self::ConfirmClose {
+                name, then_quit, ..
+            } => {
+                if *then_quit {
+                    format!("Save changes to \"{name}\" before quitting?")
+                } else {
+                    format!("Save changes to \"{name}\"?")
+                }
             }
             Self::GitRepo => "Repository".to_string(),
             Self::GitWorktree => "Worktree".to_string(),
@@ -165,9 +188,10 @@ impl Prompt {
                 )
             }
             Self::SaveAs => "Save as (path relative to the project)".to_string(),
-            Self::Themes => "Color theme".to_string(),
-            Self::Recent => "Recent projects".to_string(),
-            Self::Help(_) => "Key bindings".to_string(),
+            Self::Themes => "Color Theme".to_string(),
+            Self::Indent => "Indentation".to_string(),
+            Self::Recent => "Recent Projects".to_string(),
+            Self::Help(_) => "Key Bindings".to_string(),
             Self::Goto {
                 word,
                 is_definition,
@@ -181,6 +205,37 @@ impl Prompt {
                 },
                 word
             ),
+        }
+    }
+
+    /// Whether this prompt is a yes-or-no question, answered with `y`/`n`.
+    pub fn is_question(&self) -> bool {
+        matches!(
+            self,
+            Self::ConfirmDelete(_) | Self::ConfirmClose { .. } | Self::ConfirmReplaceAll
+        )
+    }
+
+    /// The lines under a question: what it will do, and which keys answer it.
+    /// The window's dialogs say the same in the same words.
+    pub fn detail(&self) -> Vec<String> {
+        match self {
+            Self::ConfirmDelete(path) => {
+                let mut lines = Vec::new();
+                if path.is_dir() {
+                    lines.push("The folder and all its contents will be removed.".to_string());
+                }
+                lines.push("Enter / y  Delete      Esc / n  Cancel".to_string());
+                lines
+            }
+            Self::ConfirmClose { .. } => {
+                vec!["Enter / y  Save      n  Don't Save      Esc  Cancel".to_string()]
+            }
+            Self::ConfirmReplaceAll => vec![
+                crate::core::search::Search::REPLACE_ALL_WARNING.to_string(),
+                "Enter / y  Replace All      Esc / n  Cancel".to_string(),
+            ],
+            _ => Vec::new(),
         }
     }
 
@@ -203,6 +258,7 @@ impl Prompt {
     pub fn list_len(&self, themes: usize, recent: usize, repos: usize, worktrees: usize) -> usize {
         match self {
             Self::Themes => themes,
+            Self::Indent => crate::core::settings::Indent::CHOICES.len(),
             Self::Recent => recent,
             Self::Help(entries) => entries.len(),
             Self::Goto { candidates, .. } => candidates.len(),
@@ -213,6 +269,15 @@ impl Prompt {
             }
             _ => 0,
         }
+    }
+}
+
+/// Whether a chord is one no shell program would be listening for: a
+/// function key, or Ctrl with Shift or Alt on top.
+fn shell_has_no_use_for(chord: &Chord) -> bool {
+    match &chord.key {
+        Key::Named(name) if name.starts_with('f') && name[1..].parse::<u8>().is_ok() => true,
+        _ => chord.mods.ctrl && (chord.mods.shift || chord.mods.alt),
     }
 }
 
@@ -269,6 +334,9 @@ fn short(path: &std::path::Path) -> String {
 
 /// Where each pane landed in the last frame, so mouse coordinates can be
 /// mapped back to what the user clicked.
+/// Columns one `‹`/`›` press moves the tab strip by.
+pub const TAB_SCROLL_STEP: u16 = 12;
+
 #[derive(Default, Clone)]
 pub struct Layout {
     pub sidebar: Rect,
@@ -311,6 +379,10 @@ pub struct Layout {
     /// First change row currently drawn, for mapping clicks when scrolled.
     pub git_list_offset: usize,
     pub tabs: Rect,
+    /// The `‹` and `›` at the strip's right edge, when the tabs overflow.
+    pub tab_scroll_buttons: Option<(u16, u16)>,
+    /// The Preview button shown while a markdown file is in front.
+    pub preview_hint: Option<(u16, u16)>,
     /// (start_x, end_x, buffer index, is_close_button) for each drawn tab.
     pub tab_spans: Vec<(u16, u16, usize, bool)>,
     pub editor: Rect,
@@ -321,11 +393,14 @@ pub struct Layout {
     pub shell_tabs: Vec<(u16, u16, usize, bool)>,
     /// Diff tabs in the editor strip: (start, end, index, is_close).
     pub diff_tabs: Vec<(u16, u16, usize, bool)>,
+    /// Preview tabs, laid out the same way.
+    pub preview_tabs: Vec<(u16, u16, usize, bool)>,
     /// The `+` button in the shell header that opens another session.
     pub shell_new: Rect,
     /// The theme name in the status bar; clicking it opens the theme picker,
     /// as in the window frontend.
     pub status_theme: Rect,
+    pub status_indent: Rect,
     pub prompt_list: Rect,
     pub menu: Rect,
 }
@@ -362,6 +437,10 @@ pub struct App {
     pub edit: Vec<EditState>,
     pub search: Search,
     pub git: GitState,
+    /// Open markdown previews, tabs of their own beside the files.
+    pub previews: Vec<Preview>,
+    /// Which preview tab is in front; `None` while a file or diff is.
+    pub active_preview: Option<usize>,
     /// Open diffs, tabs of their own beside the files.
     pub diffs: Vec<Diff>,
     /// Which diff tab is in front; `None` while a file is.
@@ -407,6 +486,11 @@ pub struct App {
     /// True while the left button is dragging out a selection in the editor.
     selecting: bool,
     pub settings: Settings,
+    /// When the settings files were last written, as of the last look; `None`
+    /// before the first look.
+    settings_stamp: Option<Vec<Option<std::time::SystemTime>>>,
+    /// When the files were last looked at.
+    settings_polled: std::time::Instant,
     pub layout: Layout,
     /// Rect of the "File" label in the top bar, for clicking it.
     /// Where the top bar's menus sit, in `MenuBar` order.
@@ -424,6 +508,11 @@ pub struct App {
     /// A tab being dragged along its strip, and the tab it is over.
     pub tab_drag: Option<(TabStrip, usize)>,
     pub tab_drag_over: Option<usize>,
+    /// How many columns the tab strip is scrolled by.
+    pub tab_scroll: u16,
+    /// The tab in front when the strip was last drawn; a change scrolls the
+    /// new one into view.
+    pub shown_tab: Option<(usize, Option<usize>, Option<usize>)>,
     /// Navigator row the left button went down on, if any. The click only acts
     /// on release, so a press that turns into a drag doesn't also open or
     /// expand the row.
@@ -457,6 +546,10 @@ impl App {
             edit: Vec::new(),
             search: Search::default(),
             git: GitState::default(),
+            previews: Vec::new(),
+            tab_scroll: 0,
+            shown_tab: None,
+            active_preview: None,
             diffs: Vec::new(),
             active_diff: None,
             quit_after_close: false,
@@ -490,6 +583,8 @@ impl App {
             resizing: None,
             selecting: false,
             settings,
+            settings_stamp: None,
+            settings_polled: std::time::Instant::now(),
             layout: Layout::default(),
             menu_buttons: [Rect::default(); 3],
             menu: None,
@@ -517,6 +612,7 @@ impl App {
     /// the git marks and any update that has landed. The run loop calls it
     /// before drawing, and so must anything else that draws.
     pub fn prepare(&mut self) {
+        self.poll_settings();
         self.refresh_highlight();
         self.refresh_git_marks();
         self.collect_update();
@@ -591,6 +687,10 @@ impl App {
         if !known {
             self.edit.insert(self.buffers.active, EditState::default());
         }
+        // The file asked for is what should be in front — not a diff or a
+        // preview that happened to be showing.
+        self.active_diff = None;
+        self.active_preview = None;
         self.focus = Focus::Editor;
     }
 
@@ -614,14 +714,20 @@ impl App {
 
     /// Closes the active tab outright when it is clean; otherwise asks first.
     fn close_tab(&mut self) {
-        if self.buffers.is_empty() {
+        self.close_tab_at(self.buffers.active);
+    }
+
+    /// Closes tab `i` without bringing it to the front first, so the tab the
+    /// user was reading stays where it is if they cancel.
+    fn close_tab_at(&mut self, i: usize) {
+        if i >= self.buffers.list.len() {
             return;
         }
-        let i = self.buffers.active;
         if self.buffers.list[i].modified() {
             self.prompt = Some(Prompt::ConfirmClose {
                 index: i,
                 name: self.buffers.list[i].name(),
+                then_quit: self.quit_after_close,
             });
             return;
         }
@@ -629,23 +735,25 @@ impl App {
     }
 
     fn close_tab_now(&mut self, i: usize) {
+        let closed = self.buffers.list.get(i).map(|b| b.path.clone());
         self.buffers.close(i);
-        if self.quit_after_close {
-            self.continue_quit();
-        }
         if i < self.edit.len() {
             self.edit.remove(i);
         }
-        // The find bar searches the file that was open; closing it closes the
-        // search with it.
-        if self.find.open {
+        // A find bar belonging to that file closes with it; one belonging to
+        // another tab stays as it was.
+        if closed.is_some() && self.find.owner == closed {
             self.find.open = false;
+            self.find.owner = None;
             if self.focus == Focus::Find {
                 self.focus = Focus::Editor;
             }
         }
         if self.buffers.is_empty() {
             self.focus = Focus::Tree;
+        }
+        if self.quit_after_close {
+            self.continue_quit();
         }
     }
 
@@ -813,7 +921,8 @@ impl App {
             Some(index) => {
                 self.prompt = Some(Prompt::ConfirmClose {
                     index,
-                    name: format!("{} (then quit)", self.buffers.list[index].name()),
+                    name: self.buffers.list[index].name(),
+                    then_quit: true,
                 });
             }
             None => self.quit = true,
@@ -1531,6 +1640,10 @@ impl App {
             self.prompt = Some(Prompt::Themes);
             return;
         }
+        if hits(self.layout.status_indent, x, y) {
+            self.execute(Command::IndentPicker);
+            return;
+        }
         if hits(self.layout.sidebar_header, x, y) {
             return;
         }
@@ -1599,12 +1712,29 @@ impl App {
             return;
         }
         if hits(self.layout.tabs, x, y) {
+            if let Some((left, right)) = self.layout.tab_scroll_buttons {
+                if x >= left && x < left + 2 {
+                    self.tab_scroll = self.tab_scroll.saturating_sub(TAB_SCROLL_STEP);
+                    return;
+                }
+                if x >= right && x < right + 2 {
+                    // Clamped against the strip's width when it is drawn.
+                    self.tab_scroll = self.tab_scroll.saturating_add(TAB_SCROLL_STEP);
+                    return;
+                }
+            }
+            if let Some((start, end)) = self.layout.preview_hint {
+                if x >= start && x < end {
+                    self.toggle_preview();
+                    return;
+                }
+            }
             for (start, end, index, is_close) in self.layout.tab_spans.clone() {
                 if x >= start && x < end {
                     self.active_diff = None;
+                    self.active_preview = None;
                     if is_close {
-                        self.buffers.active = index;
-                        self.close_tab();
+                        self.close_tab_at(index);
                     } else {
                         self.buffers.active = index;
                         self.focus = Focus::Editor;
@@ -1614,10 +1744,23 @@ impl App {
             }
             for (start, end, index, is_close) in self.layout.diff_tabs.clone() {
                 if x >= start && x < end {
+                    self.active_preview = None;
                     if is_close {
                         self.close_diff(index);
                     } else {
                         self.active_diff = Some(index);
+                        self.focus = Focus::Diff;
+                    }
+                    return;
+                }
+            }
+            for (start, end, index, is_close) in self.layout.preview_tabs.clone() {
+                if x >= start && x < end {
+                    if is_close {
+                        self.close_preview(index);
+                    } else {
+                        self.active_preview = Some(index);
+                        self.active_diff = None;
                         self.focus = Focus::Diff;
                     }
                     return;
@@ -1918,8 +2061,10 @@ impl App {
             return;
         }
         // Anything bound in settings.json wins over pane-local handling.
-        if let Some(command) = chord_of(key).and_then(|c| self.settings.tui_command(&c)) {
-            if self.command_applies(command) {
+        if let Some((chord, command)) =
+            chord_of(key).and_then(|c| self.settings.tui_command(&c).map(|command| (c, command)))
+        {
+            if self.command_applies(command, &chord) {
                 self.execute(command);
                 return;
             }
@@ -1953,7 +2098,7 @@ impl App {
     /// Whether a binding means anything where the keyboard currently is. Keys
     /// like Tab and Enter carry a command *and* a job inside a pane; a pane
     /// that needs the key keeps it.
-    fn command_applies(&self, command: Command) -> bool {
+    fn command_applies(&self, command: Command, chord: &Chord) -> bool {
         match command {
             // Tab indents in the editor, switches fields in the find bar and
             // completes in the shell.
@@ -1963,8 +2108,15 @@ impl App {
             Command::Rename | Command::MoveTo | Command::Delete => self.focus == Focus::Tree,
             Command::FindNext | Command::FindPrev | Command::ReplaceAll => self.find_showing(),
             Command::PickRepository | Command::PickWorktree => self.focus == Focus::Git,
-            // The shell takes every ordinary key; only the panel's own
-            // bindings are reserved.
+            // Selecting, copying and cutting are the editor's; a paste goes
+            // to whichever field is being typed in.
+            Command::SelectAll | Command::Copy | Command::Cut => self.focus == Focus::Editor,
+            Command::Paste => matches!(self.focus, Focus::Editor | Focus::Find | Focus::Search),
+            // The shell keeps every key a program inside it could want —
+            // plain keys, Ctrl+letter, Escape, Tab — so vim and tmux work.
+            // Function keys and Ctrl+Shift / Ctrl+Alt chords mean nothing to
+            // a shell, and without them the editor could not be reached from
+            // the terminal by keyboard at all.
             _ => {
                 self.focus != Focus::Shell
                     || matches!(
@@ -1974,6 +2126,7 @@ impl App {
                             | Command::CloseTerminal
                             | Command::Quit
                     )
+                    || shell_has_no_use_for(chord)
             }
         }
     }
@@ -1981,6 +2134,7 @@ impl App {
     /// Runs a bound command, whatever triggered it: a key, the File menu, or a
     /// click in the top bar.
     pub fn execute(&mut self, command: Command) {
+        self.status.clear();
         match command {
             Command::NewFile => match self.tree.target_dir() {
                 Some(dir) => {
@@ -2000,15 +2154,18 @@ impl App {
                     self.prompt = Some(Prompt::Recent);
                 }
             }
-            Command::Save => {
-                self.status = match self.buffers.try_save_active() {
-                    Ok(()) => {
-                        self.after_save();
-                        "saved".into()
+            Command::Save => match self.buffers.try_save_active() {
+                Ok(()) => {
+                    // after_save says "settings applied" when the file was a
+                    // settings file; that message must not be written over.
+                    self.status.clear();
+                    self.after_save();
+                    if self.status.is_empty() {
+                        self.status = "saved".into();
                     }
-                    Err(e) => e.to_string(),
-                };
-            }
+                }
+                Err(e) => self.status = e.to_string(),
+            },
             Command::SaveAs => {
                 if self.buffers.is_empty() {
                     self.status = "nothing to save".into();
@@ -2020,15 +2177,21 @@ impl App {
             Command::SaveAll => {
                 let previous = self.buffers.active;
                 let mut saved = 0;
+                let mut failed = Vec::new();
                 for i in 0..self.buffers.list.len() {
                     self.buffers.active = i;
-                    if self.buffers.list[i].modified() && self.buffers.save_active() {
+                    if !self.buffers.list[i].modified() {
+                        continue;
+                    }
+                    if self.buffers.save_active() {
                         saved += 1;
+                    } else {
+                        failed.push(self.buffers.list[i].name());
                     }
                 }
                 self.buffers.active = previous;
                 self.after_save();
-                self.status = format!("saved {saved} file(s)");
+                self.status = crate::core::save_all_report(saved, &failed);
             }
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => {
@@ -2146,10 +2309,6 @@ impl App {
                     self.prompt = Some(Prompt::GitWorktree);
                 }
             }
-            // The window scales its own font; here the terminal does.
-            Command::ZoomIn | Command::ZoomOut | Command::ResetZoom => {
-                self.status = "the terminal controls the font size".into()
-            }
             Command::CheckForUpdates => {
                 self.status = format!("checking for updates (this is {})…", core_update::CURRENT);
                 let dirty = Arc::clone(&self.shell_dirty);
@@ -2183,6 +2342,11 @@ impl App {
                     )
                 }
             }
+            Command::IndentPicker => {
+                self.prompt_selected = self.settings.indent.choice_index();
+                self.prompt = Some(Prompt::Indent);
+            }
+            Command::TogglePreview => self.toggle_preview(),
             Command::Undo => self.step_history(true),
             Command::Redo => self.step_history(false),
             Command::SelectAll => self.select_all(),
@@ -2193,7 +2357,7 @@ impl App {
                 if text.is_empty() {
                     self.status = "clipboard is empty".into();
                 } else {
-                    self.paste_text(&text);
+                    self.paste_event(&text);
                 }
             }
             Command::ToggleFold => self.toggle_fold_at_cursor(),
@@ -2306,16 +2470,49 @@ impl App {
     fn after_save(&mut self) {
         // A save changes the git status; show it right away, not on the timer.
         self.git.invalidate();
+        let root = self.project.root().map(Path::to_path_buf);
         let is_settings = self
             .buffers
             .active()
-            .zip(Settings::path())
-            .is_some_and(|(buf, path)| buf.path == path);
+            .is_some_and(|buf| Settings::is_settings_file(&buf.path, root.as_deref()));
         if !is_settings {
             return;
         }
-        let (settings, error) = Settings::load();
+        self.reload_settings();
+    }
+
+    /// Once a second, looks whether a settings file was written by something
+    /// other than this editor — the other frontend, a script, a hand edit —
+    /// and applies it, so a change lands without a restart either way.
+    fn poll_settings(&mut self) {
+        if self.settings_polled.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.settings_polled = std::time::Instant::now();
+        let stamp = Settings::stamp(self.project.root());
+        match &self.settings_stamp {
+            // The first look only remembers what is there.
+            None => self.settings_stamp = Some(stamp),
+            Some(known) if *known != stamp => {
+                self.reload_settings();
+                self.mark_dirty();
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Reads the settings files again and puts everything they say into
+    /// effect: theme, panels, bindings, icons.
+    fn reload_settings(&mut self) {
+        let root = self.project.root().map(Path::to_path_buf);
+        self.settings_stamp = Some(Settings::stamp(root.as_deref()));
+        let previous_font = self.settings.font_size;
+        let (settings, error) = Settings::load_for(root.as_deref());
+        let recent = std::mem::take(&mut self.settings.recent_projects);
         self.settings = settings;
+        self.settings.recent_projects = recent;
+        self.show_sidebar = self.settings.show_sidebar;
+        self.show_shell = self.settings.show_terminal;
         if let Some(index) = self
             .themes
             .iter()
@@ -2326,7 +2523,15 @@ impl App {
             self.mark_dirty();
         }
         self.icons = icons::detect();
-        self.status = error.unwrap_or_else(|| "settings applied".to_string());
+        self.status = match error {
+            Some(error) => error,
+            // A terminal draws in the font the terminal has; there is nothing
+            // here to scale, and better to say so than to look ignored.
+            None if self.settings.font_size != previous_font => {
+                "settings applied — font_size is the terminal's own, not the editor's".into()
+            }
+            None => "settings applied".into(),
+        };
     }
 
     /// Every binding, for the help overlay: chord in a fixed column, then the
@@ -2358,12 +2563,15 @@ impl App {
                 Some(format!("Yara Code {}", env!("CARGO_PKG_VERSION"))),
             ),
         };
-        self.menu = Some(Menu::commands(
+        let has_update = self.update.is_some();
+        self.menu = Some(Menu::commands_where(
             entries,
             title,
             button.x,
             button.y + 1,
             |command| settings.tui_chord(command).map(|c| c.to_string()),
+            // Install Update is offered only once a check has found one.
+            move |command| command != Command::InstallUpdate || has_update,
         ));
     }
 
@@ -2468,6 +2676,12 @@ impl App {
             }
             return;
         }
+        // The bar is the one thing open over the text, so Escape closes it
+        // from here as well as from inside it.
+        if key.code == KeyCode::Esc && self.find_showing() {
+            self.find.open = false;
+            return;
+        }
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         if alt {
             match key.code {
@@ -2551,7 +2765,15 @@ impl App {
     }
 
     /// Rewrites every match in the project, then refreshes open buffers.
+    /// Asks before rewriting the project; the prompt's yes runs the rewrite.
     fn replace_all_in_project(&mut self) {
+        if self.search.results.is_empty() {
+            return;
+        }
+        self.prompt = Some(Prompt::ConfirmReplaceAll);
+    }
+
+    fn replace_all_in_project_now(&mut self) {
         match self.search.replace_all(self.project.roots()) {
             Ok((count, files)) => {
                 for buf in &mut self.buffers.list {
@@ -2564,7 +2786,11 @@ impl App {
                     }
                 }
                 self.mark_dirty();
-                self.status = format!("replaced {count} occurrence(s) in {files} file(s)");
+                self.status = format!(
+                    "replaced {} in {}",
+                    crate::core::count(count, "occurrence"),
+                    crate::core::count(files, "file")
+                );
             }
             Err(message) => self.status = message,
         }
@@ -2640,7 +2866,7 @@ impl App {
             }
             self.mark_dirty();
             self.find.refresh(&updated);
-            self.status = format!("replaced {count} occurrence(s)");
+            self.status = format!("replaced {}", crate::core::count(count, "occurrence"));
         }
     }
 
@@ -2822,6 +3048,52 @@ impl App {
         }
     }
 
+    /// Opens a rendered view of the markdown file in front, or closes the one
+    /// already open for it. Anything else is not markdown, and says so.
+    fn toggle_preview(&mut self) {
+        let Some(buf) = self.buffers.active() else {
+            self.status = "open a markdown file first".into();
+            return;
+        };
+        if !matches!(buf.extension.as_str(), "md" | "markdown") {
+            self.status = format!("{} is not markdown", buf.name());
+            return;
+        }
+        let path = buf.path.clone();
+        if let Some(i) = self.previews.iter().position(|p| p.path == path) {
+            self.close_preview(i);
+            return;
+        }
+        self.previews.push(Preview {
+            path,
+            blocks: crate::core::markdown::parse(&buf.text),
+            scroll: 0,
+        });
+        self.active_preview = Some(self.previews.len() - 1);
+        self.active_diff = None;
+        self.focus = Focus::Diff;
+    }
+
+    pub fn active_preview(&self) -> Option<&Preview> {
+        self.active_preview.and_then(|i| self.previews.get(i))
+    }
+
+    pub fn close_preview(&mut self, index: usize) {
+        if index >= self.previews.len() {
+            return;
+        }
+        self.previews.remove(index);
+        self.active_preview = match self.active_preview {
+            Some(a) if a == index => None,
+            Some(a) if a > index => Some(a - 1),
+            other => other,
+        };
+        if self.active_preview.is_none() && self.focus == Focus::Diff && self.active_diff.is_none()
+        {
+            self.focus = Focus::Editor;
+        }
+    }
+
     /// The diff tab in front, if one is.
     pub fn active_diff(&self) -> Option<&Diff> {
         self.active_diff.and_then(|i| self.diffs.get(i))
@@ -2862,6 +3134,26 @@ impl App {
 
     fn diff_key(&mut self, key: KeyEvent) {
         let height = self.layout.editor.height as usize;
+        if let Some(index) = self.active_preview {
+            if key.code == KeyCode::Esc {
+                self.close_preview(index);
+                return;
+            }
+            let Some(preview) = self.previews.get_mut(index) else {
+                return;
+            };
+            let last = preview.blocks.len().saturating_sub(1);
+            match key.code {
+                KeyCode::Down => preview.scroll = (preview.scroll + 1).min(last),
+                KeyCode::Up => preview.scroll = preview.scroll.saturating_sub(1),
+                KeyCode::PageDown => preview.scroll = (preview.scroll + height).min(last),
+                KeyCode::PageUp => preview.scroll = preview.scroll.saturating_sub(height),
+                KeyCode::Home => preview.scroll = 0,
+                KeyCode::End => preview.scroll = last,
+                _ => {}
+            }
+            return;
+        }
         let Some(index) = self.active_diff else {
             return;
         };
@@ -2973,8 +3265,10 @@ impl App {
                     }
                 }
                 KeyCode::Up => self.prompt_selected = self.prompt_selected.saturating_sub(1),
-                KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_prompt(),
-                KeyCode::Char('n') | KeyCode::Char('N') => {
+                KeyCode::Char('y') | KeyCode::Char('Y') if prompt.is_question() => {
+                    self.confirm_prompt()
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') if prompt.is_question() => {
                     self.prompt = None;
                 }
                 KeyCode::Enter => self.confirm_prompt(),
@@ -3065,6 +3359,7 @@ impl App {
                     Err(e) => self.status = format!("move failed: {e}"),
                 }
             }
+            Prompt::ConfirmReplaceAll => self.replace_all_in_project_now(),
             Prompt::ConfirmDelete(path) => match fs_ops::delete(&path) {
                 Ok(()) => {
                     // close_path may drop buffers from the middle of the
@@ -3088,7 +3383,7 @@ impl App {
                 }
                 Err(e) => self.status = format!("delete failed: {e}"),
             },
-            Prompt::ConfirmClose { index, name } => {
+            Prompt::ConfirmClose { index, name, .. } => {
                 if self.buffers.save(index) {
                     self.git.invalidate();
                     self.close_tab_now(index);
@@ -3156,6 +3451,15 @@ impl App {
                         self.status = format!("gone: {}", path.display());
                     }
                 }
+            }
+            Prompt::Indent => {
+                let (_, style, width) = crate::core::settings::Indent::CHOICES[self
+                    .prompt_selected
+                    .min(crate::core::settings::Indent::CHOICES.len() - 1)];
+                self.settings.indent.style = style;
+                self.settings.indent.width = width;
+                let _ = self.settings.save();
+                self.status = format!("indentation: {}", self.settings.indent.label());
             }
             Prompt::Themes => {
                 self.theme_index = self.prompt_selected.min(self.themes.len() - 1);

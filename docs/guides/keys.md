@@ -19,18 +19,19 @@ where the window has `Cmd+Shift`. Every command is rebindable in
 | Close tab / Quit | `Cmd+W` / `Cmd+Q` | `Ctrl+W` / `Ctrl+Q` |
 | Undo / Redo | `Cmd+Z` / `Cmd+Shift+Z` | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Find in file | `Cmd+F` | `Ctrl+F` |
-| Search / Files / Git sidebar | `Cmd+Shift+F` / `Cmd+Shift+E` / `Cmd+Shift+G` | `Ctrl+Shift+F` / `Ctrl+Shift+E` / `Ctrl+Shift+G` |
+| Search / Files / Git sidebar | `Cmd+Shift+F` / `Cmd+Shift+E` / `Ctrl+Shift+G` | `Ctrl+Shift+F` / `Ctrl+Shift+E` / `Ctrl+Shift+G` |
 | Toggle sidebar / terminal | `Cmd+B` / `Cmd+J` | `Ctrl+B` / `Ctrl+J` |
 | New / close terminal | `Cmd+Alt+T` / `Cmd+Alt+W` | `Ctrl+Alt+T` / `Ctrl+Alt+W` |
 | Theme picker | `Cmd+Shift+T` | `Ctrl+Shift+T` |
+| Indentation picker | `Cmd+Alt+I` | `Ctrl+Alt+I` |
+| Markdown preview | `Cmd+Shift+V`, or **◫ Preview** on the tab strip | `Ctrl+Shift+V`, or click **◫ Preview** |
 | New folder / Rename / Move to… | `Cmd+Alt+N` / `F2` / `Cmd+Alt+M` | `Ctrl+Alt+N` / `F2` / `Ctrl+Alt+M` |
-| Delete | `Cmd+Backspace` | `Shift+Delete` |
-| Find next / previous | `Cmd+G` / `Cmd+Shift+G` | `F3` / `Shift+F3` |
+| Delete | `Shift+Delete` | `Shift+Delete` |
+| Find next / previous | `Cmd+G` / `Cmd+Shift+G` on macOS, `F3` / `Shift+F3` elsewhere | `F3` / `Shift+F3` |
 | Replace all in file | `Cmd+Alt+Enter` | `Ctrl+Alt+Enter` |
-| Zoom in / out / reset | `Cmd+=` / `Cmd+-` / `Cmd+0` | the terminal's own |
 | Repository / worktree picker | `Cmd+Alt+G` / `Cmd+Alt+K` | `Ctrl+Alt+G` / `Ctrl+Alt+K` |
 | Go to definition | `F12`, `Cmd+click` | `F12`, `Ctrl`/`Alt+click` |
-| Back | `Ctrl+-` | `Alt+←` |
+| Back | `Ctrl+-` on macOS, `Alt+←` elsewhere | `Alt+←` |
 | Previous / next tab | `Ctrl+PageUp` / `Ctrl+PageDown` | `Ctrl+PageUp` / `Ctrl+PageDown` |
 | Fold / unfold | `Cmd+Alt+F` | `Ctrl+Alt+F` |
 | Fold all / unfold all | `Cmd+Alt+0` / `Cmd+Alt+9` | `Ctrl+Alt+0` / `Ctrl+Alt+9` |
@@ -49,8 +50,9 @@ own; everything else is the binding you already know.
 Telling `Ctrl+Shift+S` from `Ctrl+S` needs the **kitty keyboard protocol**. The
 terminal frontend asks for it at startup and gets it in iTerm2, Kitty, WezTerm,
 Ghostty and Alacritty; in a terminal without it (macOS Terminal.app), rebind
-that handful of commands to something plainer in `settings.json`. Bindings that
-collide are reported in the status bar at startup, naming both commands.
+that handful of commands to something plainer in `settings.json` — the status
+bar says so at startup when the protocol is missing. Bindings that collide are
+reported there too, naming both commands.
 
 ## In the navigator
 
@@ -72,8 +74,9 @@ The terminal frontend mirrors the window's layout throughout: a top bar with the
 YARA label and the File menu separated by a rule, the sidebar down the left, the
 terminal under the editor only, the same start page in an empty editor, a `TERMINAL`
 panel header that brightens when the panel has the keyboard, and a status bar
-carrying just the file, cursor position, language and theme. Key bindings
-live in an overlay (`F1`), not along the bottom edge.
+carrying the file, cursor position, indentation, language and theme — the
+indentation and the theme are clickable in both. Key bindings live in an
+overlay (`F1`), not along the bottom edge.
 
 ## Mouse (terminal frontend)
 

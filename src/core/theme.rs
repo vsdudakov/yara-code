@@ -299,10 +299,7 @@ pub fn builtin() -> Vec<Theme> {
 /// Where user themes live: `$XDG_CONFIG_HOME/yara/themes` or
 /// `~/.config/yara-code/themes`.
 pub fn user_theme_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("yara-code").join("themes"))
+    Some(crate::core::config_dir()?.join("themes"))
 }
 
 /// Built-in themes plus every `*.json` in the user theme directory. User themes

@@ -325,10 +325,7 @@ impl Default for Settings {
 impl Settings {
     /// `$XDG_CONFIG_HOME/yara/settings.json`, else `~/.config/...`.
     pub fn path() -> Option<PathBuf> {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("yara-code").join("settings.json"))
+        Some(crate::core::config_dir()?.join("settings.json"))
     }
 
     /// Loads the settings file, falling back to defaults for anything missing

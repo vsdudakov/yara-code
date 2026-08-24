@@ -19,6 +19,17 @@ pub struct Pty {
     size: (u16, u16), // (rows, cols)
 }
 
+/// The user's shell, and the arguments that make it a login shell. Windows has
+/// neither `$SHELL` nor `/bin/sh`, so it gets what it does have.
+fn login_shell() -> (String, Vec<String>) {
+    if cfg!(windows) {
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        return (shell, Vec::new());
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    (shell, vec!["-l".to_string()])
+}
+
 impl Pty {
     /// Spawns the user's login shell in `cwd`. `notify` is called from the
     /// reader thread whenever new output arrives, so the frontend can redraw.
@@ -36,9 +47,9 @@ impl Pty {
             })
             .map_err(|e| e.to_string())?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let (shell, args) = login_shell();
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.args(["-l"]);
+        cmd.args(&args);
         cmd.env("TERM", "xterm-256color");
         cmd.cwd(cwd);
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;

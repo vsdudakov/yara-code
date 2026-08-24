@@ -139,13 +139,16 @@ jobs:
           arm_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz.sha256)
           intel_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz.sha256)
           linux_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256)
-          sed -e "s/@VERSION@/$version/g" \
-              -e "s/@TAG@/$GITHUB_REF_NAME/g" \
-              -e "s/@ARM_SHA@/$arm_sha/g" \
-              -e "s/@INTEL_SHA@/$intel_sha/g" \
-              -e "s/@LINUX_SHA@/$linux_sha/g" \
-              packaging/homebrew/yara-gui.rb.tmpl > yara-gui.rb
-          cat yara-gui.rb
+          for template in packaging/homebrew/ycode.rb.tmpl packaging/aur/PKGBUILD.tmpl; do
+            out="$(basename "${template%.tmpl}")"
+            sed -e "s/@VERSION@/$version/g" \
+                -e "s/@TAG@/$GITHUB_REF_NAME/g" \
+                -e "s/@ARM_SHA@/$arm_sha/g" \
+                -e "s/@INTEL_SHA@/$intel_sha/g" \
+                -e "s/@LINUX_SHA@/$linux_sha/g" \
+                "$template" > "$out"
+            cat "$out"
+          done
       - name: Push it to the tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -153,10 +156,10 @@ jobs:
         run: |
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/vsdudakov/homebrew-tap.git" tap
           mkdir -p tap/Formula
-          cp yara-gui.rb tap/Formula/yara-gui.rb
+          cp ycode.rb tap/Formula/ycode.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/yara-gui.rb
-          git commit -m "yara-gui ${GITHUB_REF_NAME#v}"
+          git add Formula/ycode.rb
+          git commit -m "ycode ${GITHUB_REF_NAME#v}"
           git push

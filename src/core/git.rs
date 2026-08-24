@@ -193,10 +193,13 @@ pub fn repo_root(dir: &Path) -> Option<PathBuf> {
     let out = git(dir, &["rev-parse", "--show-toplevel"]).ok()?;
     let line = out.lines().next()?.trim();
     if line.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(line))
+        return None;
     }
+    // git answers with forward slashes even on Windows; canonicalising brings
+    // it into the same shape as the paths the navigator hands us, so prefix
+    // comparisons work there too.
+    let path = PathBuf::from(line);
+    Some(path.canonicalize().unwrap_or(path))
 }
 
 /// Repositories the project can see: the one holding the root itself, plus
@@ -233,6 +236,12 @@ pub fn worktrees(repo: &Path) -> Vec<Worktree> {
             branch: String::new(),
         }],
     }
+}
+
+/// Same reason as `repo_root`: a worktree path from git is compared against
+/// filesystem paths.
+fn canonical(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
 }
 
 fn parse_worktrees(out: &str) -> Vec<Worktree> {

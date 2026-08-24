@@ -24,6 +24,21 @@ pub mod update;
 
 use std::path::PathBuf;
 
+/// Where the editor keeps its own files: `%APPDATA%` on Windows, and the XDG
+/// config directory — or `~/.config` — everywhere else.
+pub fn config_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return Some(PathBuf::from(appdata).join("yara-code"));
+        }
+    }
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("yara-code"))
+}
+
 /// The documentation site, opened from Help → Documentation.
 pub const DOCUMENTATION: &str = "https://vsdudakov.github.io/yara-code/";
 

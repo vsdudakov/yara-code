@@ -53,7 +53,8 @@ struct Harness {
     app: App,
     ctx: egui::Context,
     events: Vec<Event>,
-    text: Vec<String>,
+    /// Every string laid out last frame, and where it was drawn.
+    text: Vec<(String, Pos2)>,
 }
 
 impl Harness {
@@ -85,7 +86,7 @@ impl Harness {
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                egui::Shape::Text(text) => Some((text.galley.text().to_string(), text.pos)),
                 _ => None,
             })
             .collect();
@@ -128,11 +129,26 @@ impl Harness {
     }
 
     fn shows(&self, text: &str) -> bool {
-        self.text.iter().any(|drawn| drawn.contains(text))
+        self.text.iter().any(|(drawn, _)| drawn.contains(text))
     }
 
     fn screen(&self) -> String {
-        self.text.join(" | ")
+        self.text
+            .iter()
+            .map(|(drawn, _)| drawn.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// The middle of a piece of text on screen — where a user would click it.
+    fn position_of(&self, text: &str) -> Option<Pos2> {
+        self.text
+            .iter()
+            .find(|(drawn, _)| drawn.contains(text))
+            .map(|(drawn, pos)| {
+                // The position is the galley's corner; aim a little inside it.
+                Pos2::new(pos.x + drawn.len().min(6) as f32 * 3.0, pos.y + 7.0)
+            })
     }
 }
 
@@ -232,4 +248,21 @@ fn a_window_the_size_of_a_postage_stamp_still_draws() {
         };
         let _ = ctx.run(input, |ctx| app.ui(ctx));
     }
+}
+
+#[test]
+fn clicking_a_file_in_the_navigator_opens_it() {
+    let project = Project::new("yara-gui-e2e-click");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness
+        .position_of("README.md")
+        .expect("the navigator lists it");
+    harness.click(at);
+    // The file is in front: its text is drawn, and the status bar says where
+    // the cursor is.
+    assert!(
+        harness.shows("A line of prose.") || harness.shows("Ln 1"),
+        "{}",
+        harness.screen()
+    );
 }

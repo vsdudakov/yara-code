@@ -80,18 +80,10 @@ fn set_system_text(text: &str) {
     if cfg!(target_os = "macos") {
         feed("pbcopy", &[], text);
     } else if cfg!(windows) {
-        // Not `clip`: it reads its input in the console's code page, which
-        // turns anything beyond ASCII into the wrong letters.
-        feed(
-            "powershell",
-            &[
-                "-NoProfile",
-                "-Command",
-                "[Console]::InputEncoding = [Text.Encoding]::UTF8; \
-                 Set-Clipboard -Value ([Console]::In.ReadToEnd())",
-            ],
-            text,
-        );
+        // clip.exe, and not PowerShell: it is on the clipboard by the time
+        // this returns, and a paste that follows a copy at once reads what
+        // was just copied. PowerShell would still be starting up.
+        feed("clip", &[], text);
     } else if wayland() {
         feed("wl-copy", &[], text);
     } else if x11() {

@@ -24,6 +24,11 @@ impl Project {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         let path = path.canonicalize().unwrap_or(path);
+        // Settings the editor writes — the theme it was switched to, the
+        // recent list — land here, never in the user's own config.
+        let config = path.join(".config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::env::set_var("YARA_CONFIG_DIR", &config);
         let project = Self(path);
         project.file("README.md", "# Title\nA line of prose.\n");
         project.file("src/main.rs", "fn main() {\n    let total = 1;\n}\n");

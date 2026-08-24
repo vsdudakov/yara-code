@@ -27,6 +27,12 @@ use std::path::PathBuf;
 /// Where the editor keeps its own files: `%APPDATA%` on Windows, and the XDG
 /// config directory — or `~/.config` — everywhere else.
 pub fn config_dir() -> Option<PathBuf> {
+    // An explicit directory wins over every convention: it is how tests keep
+    // their settings out of the user's, and how a portable install carries
+    // its own.
+    if let Some(dir) = std::env::var_os("YARA_CONFIG_DIR") {
+        return Some(PathBuf::from(dir));
+    }
     if cfg!(windows) {
         if let Some(appdata) = std::env::var_os("APPDATA") {
             return Some(PathBuf::from(appdata).join("yara-code"));
@@ -72,6 +78,19 @@ pub fn project_root(arg: Option<PathBuf>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_explicit_config_directory_wins() {
+        // Set for this process only; the other tests read their own.
+        let dir = crate::core::test_support::Dir::new("yara-config-override");
+        std::env::set_var("YARA_CONFIG_DIR", dir.path());
+        assert_eq!(config_dir().as_deref(), Some(dir.path()));
+        std::env::remove_var("YARA_CONFIG_DIR");
+        assert!(
+            config_dir().is_some(),
+            "a convention answers when nothing is set"
+        );
+    }
 
     #[test]
     fn no_path_argument_means_no_project() {

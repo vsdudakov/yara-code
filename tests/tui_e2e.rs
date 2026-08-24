@@ -30,6 +30,11 @@ impl Project {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         let path = path.canonicalize().unwrap_or(path);
+        // Settings the editor writes — the theme it was switched to, the
+        // recent list — land here, never in the user's own config.
+        let config = path.join(".config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::env::set_var("YARA_CONFIG_DIR", &config);
         let project = Self(path);
         project.file("README.md", "# Title\nA line of prose.\n");
         project.file("src/main.rs", "fn main() {\n    let total = 1;\n}\n");
@@ -353,4 +358,247 @@ fn a_changed_file_shows_its_diff_in_a_tab_of_its_own() {
         "the old line: {screen}"
     );
     assert!(screen.contains("A changed line."), "and the new one");
+}
+
+#[test]
+fn editing_a_file_covers_the_keys_a_hand_actually_uses() {
+    let project = Project::new("yara-e2e-keys");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+
+    // Move about, then type at the end of the first line.
+    harness.key(KeyCode::End);
+    harness.type_text(" more");
+    assert!(harness.shows("# Title more"), "{}", harness.screen());
+
+    // Enter carries the indentation, backspace takes a character back.
+    harness.key(KeyCode::Enter);
+    harness.type_text("second");
+    harness.key(KeyCode::Backspace);
+    assert!(harness.shows("secon"), "{}", harness.screen());
+
+    // Home, arrows and delete-forward.
+    harness.key(KeyCode::Home);
+    harness.key(KeyCode::Delete);
+    assert!(harness.shows("econ"), "{}", harness.screen());
+    for code in [KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
+        harness.key(code);
+    }
+    harness.key(KeyCode::PageDown);
+    harness.key(KeyCode::PageUp);
+
+    // Select all and cut, then paste it back.
+    harness.ctrl('a');
+    harness.ctrl('x');
+    assert!(!harness.shows("# Title more"), "{}", harness.screen());
+    harness.ctrl('v');
+    assert!(harness.shows("# Title more"), "{}", harness.screen());
+
+    // Save writes it to disk.
+    harness.ctrl('s');
+    let body = std::fs::read_to_string(project.path().join("README.md")).unwrap();
+    assert!(body.contains("# Title more"), "{body}");
+}
+
+#[test]
+fn two_files_share_the_tab_strip_and_close_one_at_a_time() {
+    let project = Project::new("yara-e2e-tabs");
+    let mut harness = Harness::open(&project);
+
+    // Open README, then walk into src/ and open the file inside it.
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    let src = harness.row_of("src").unwrap();
+    harness.click(4, src);
+    let main = harness.row_of("main.rs").unwrap();
+    harness.click(6, main);
+    assert!(harness.shows("main.rs ×"), "{}", harness.screen());
+    assert!(
+        harness.shows("README.md ×"),
+        "both tabs: {}",
+        harness.screen()
+    );
+
+    // Ctrl+PageUp walks back to the first tab.
+    harness.press(KeyCode::PageUp, KeyModifiers::CONTROL);
+    assert!(harness.shows("A line of prose."), "{}", harness.screen());
+    harness.press(KeyCode::PageDown, KeyModifiers::CONTROL);
+    assert!(harness.shows("fn main()"), "{}", harness.screen());
+
+    // Closing leaves the other one open.
+    harness.ctrl('w');
+    assert!(!harness.shows("main.rs ×"), "{}", harness.screen());
+    assert!(harness.shows("README.md ×"));
+}
+
+#[test]
+fn the_navigator_makes_and_renames_and_deletes_files() {
+    let project = Project::new("yara-e2e-files");
+    let mut harness = Harness::open(&project);
+
+    // New entries go beside what the cursor is on, so put it on a file at the
+    // top level first.
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    harness.press(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    harness.key(KeyCode::Char('a'));
+    assert!(harness.shows("New file in"), "{}", harness.screen());
+    harness.type_text("notes.txt");
+    harness.key(KeyCode::Enter);
+    assert!(
+        project.path().join("notes.txt").is_file(),
+        "{}",
+        harness.screen()
+    );
+    assert!(harness.shows("notes.txt"), "{}", harness.screen());
+
+    // Creating a file opens it, so the keyboard goes back to the navigator.
+    harness.press(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+
+    // New folder.
+    harness.key(KeyCode::Char('A'));
+    assert!(harness.shows("New folder in"), "{}", harness.screen());
+    harness.type_text("docs");
+    harness.key(KeyCode::Enter);
+    assert!(project.path().join("docs").is_dir());
+
+    // Rename what the cursor is on: walk the cursor onto the file with the
+    // keyboard, since the folder just made has shifted every row below it.
+    harness.press(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    harness.key(KeyCode::Home);
+    let mut steps = 0;
+    while steps < 10 && !harness.shows("Rename notes.txt") {
+        harness.key(KeyCode::Down);
+        harness.key(KeyCode::F(2));
+        if harness.shows("Rename notes.txt") {
+            break;
+        }
+        harness.key(KeyCode::Esc);
+        steps += 1;
+    }
+    assert!(harness.shows("Rename notes.txt"), "{}", harness.screen());
+    for _ in 0..20 {
+        harness.key(KeyCode::Backspace);
+    }
+    harness.type_text("renamed.txt");
+    harness.key(KeyCode::Enter);
+    assert!(project.path().join("renamed.txt").is_file());
+
+    // Delete asks first, and takes no for an answer.
+    // The cursor followed the rename, so delete acts on the new name.
+    harness.key(KeyCode::Char('d'));
+    assert!(harness.shows("Delete renamed.txt"), "{}", harness.screen());
+    harness.key(KeyCode::Char('n'));
+    assert!(project.path().join("renamed.txt").exists(), "n means no");
+    harness.key(KeyCode::Char('d'));
+    harness.key(KeyCode::Char('y'));
+    assert!(!project.path().join("renamed.txt").exists(), "y means yes");
+}
+
+#[test]
+fn the_context_menu_opens_on_a_row_and_runs_an_entry() {
+    let project = Project::new("yara-e2e-context");
+    let mut harness = Harness::open(&project);
+    harness.press(KeyCode::F(10), KeyModifiers::SHIFT);
+    let screen = harness.screen();
+    assert!(screen.contains("New File"), "{screen}");
+    assert!(screen.contains("Move To..."), "{screen}");
+    // Down to "New Folder", then Enter opens its prompt.
+    harness.key(KeyCode::Down);
+    harness.key(KeyCode::Enter);
+    assert!(harness.shows("New folder in"), "{}", harness.screen());
+    harness.key(KeyCode::Esc);
+}
+
+#[test]
+fn the_theme_picker_switches_the_colours() {
+    let project = Project::new("yara-e2e-theme");
+    let mut harness = Harness::open(&project);
+    harness.press(
+        KeyCode::Char('t'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let screen = harness.screen();
+    assert!(screen.contains("Color theme"), "{screen}");
+    assert!(screen.contains("Light+") && screen.contains("Monokai"));
+    harness.key(KeyCode::Down);
+    harness.key(KeyCode::Enter);
+    // The picker is gone and the status bar names the theme now in effect.
+    assert!(!harness.shows("Color theme"), "{}", harness.screen());
+    let status = harness
+        .screen()
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!status.contains("Dark+"), "the theme changed: {status}");
+    assert!(
+        status.contains("Light+") || status.contains("Monokai"),
+        "status bar: {status}"
+    );
+}
+
+#[test]
+fn folding_hides_a_block_and_unfolding_brings_it_back() {
+    let project = Project::new("yara-e2e-fold");
+    project.file(
+        "deep.py",
+        "def outer():\n    first = 1\n    second = 2\n\nprint(outer())\n",
+    );
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("deep.py").unwrap();
+    harness.click(4, row);
+    assert!(harness.shows("first = 1"), "{}", harness.screen());
+
+    harness.press(
+        KeyCode::Char('f'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+    assert!(!harness.shows("first = 1"), "folded: {}", harness.screen());
+    harness.press(
+        KeyCode::Char('9'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+    assert!(harness.shows("first = 1"), "unfolded: {}", harness.screen());
+    harness.press(
+        KeyCode::Char('0'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    );
+    assert!(
+        !harness.shows("first = 1"),
+        "fold all: {}",
+        harness.screen()
+    );
+}
+
+#[test]
+fn replacing_in_a_file_rewrites_every_match() {
+    let project = Project::new("yara-e2e-replace");
+    project.file("many.txt", "one\none\none\n");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("many.txt").unwrap();
+    harness.click(4, row);
+
+    harness.ctrl('f');
+    harness.type_text("one");
+    assert!(harness.shows("1 of 3"), "{}", harness.screen());
+    // Tab moves to the replace field; the actions appear once it has text.
+    harness.key(KeyCode::Tab);
+    harness.type_text("two");
+    assert!(harness.shows("Replace All"), "{}", harness.screen());
+    harness.press(KeyCode::Enter, KeyModifiers::ALT);
+    harness.ctrl('s');
+    let body = std::fs::read_to_string(project.path().join("many.txt")).unwrap();
+    assert_eq!(body, "two\ntwo\ntwo\n", "every match was rewritten");
 }

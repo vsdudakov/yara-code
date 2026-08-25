@@ -242,21 +242,38 @@ impl GitPanel {
                 color: c,
                 ..Default::default()
             };
+            // The same indent the headings above use, so the letters line up
+            // under CHANGES rather than starting somewhere of their own.
             job.append(
-                &format!(" {letter}  "),
-                0.0,
+                &format!("{letter}  "),
+                10.0,
                 fmt(letter_color(letter, theme)),
             );
             job.append(&change.path, 0.0, fmt(color(theme.ui.fg_dim)));
             job.wrap.max_rows = 1;
             job.wrap.break_anywhere = true;
             let width = ui.available_width() - 26.0;
-            if ui
-                .add_sized([width, 18.0], egui::Button::new(job).frame(false))
-                .on_hover_text(&change.path)
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
+            // Laid out left to right rather than with `add_sized`, which
+            // centres what it is given: a centred row drifts away from the
+            // heading above it as the panel widens, and a list of paths reads
+            // down its left edge or not at all.
+            let clicked = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(width, 18.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Button::new(job)
+                                .frame(false)
+                                .min_size(egui::vec2(width, 18.0)),
+                        )
+                        .on_hover_text(&change.path)
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    },
+                )
+                .inner;
+            if clicked {
                 result = RowClick::Open;
             }
             let (glyph, hint) = match mark {

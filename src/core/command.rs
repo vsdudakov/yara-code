@@ -19,7 +19,8 @@ pub enum Command {
     SaveAs,
     SaveAll,
     Settings,
-    CloseEditor,
+    CloseTab,
+    CloseAllTabs,
     Quit,
     ToggleSidebar,
     ToggleTerminal,
@@ -82,7 +83,8 @@ impl Command {
             Self::SaveAs => "save_as",
             Self::SaveAll => "save_all",
             Self::Settings => "settings",
-            Self::CloseEditor => "close_editor",
+            Self::CloseTab => "close_tab",
+            Self::CloseAllTabs => "close_all_tabs",
             Self::Quit => "quit",
             Self::ToggleSidebar => "toggle_sidebar",
             Self::ToggleTerminal => "toggle_terminal",
@@ -149,7 +151,8 @@ impl Command {
             Self::SaveAs => "Save As...",
             Self::SaveAll => "Save All",
             Self::Settings => "Settings",
-            Self::CloseEditor => "Close Editor",
+            Self::CloseTab => "Close Tab",
+            Self::CloseAllTabs => "Close All Tabs",
             Self::Quit => "Quit",
             Self::ToggleSidebar => "Toggle Sidebar",
             Self::ToggleTerminal => "Toggle Terminal",
@@ -211,7 +214,8 @@ pub const ALL: &[Command] = &[
     Command::SaveAs,
     Command::SaveAll,
     Command::Settings,
-    Command::CloseEditor,
+    Command::CloseTab,
+    Command::CloseAllTabs,
     Command::Quit,
     Command::ToggleSidebar,
     Command::ToggleTerminal,
@@ -265,10 +269,12 @@ pub const ALL: &[Command] = &[
 pub const FILE_MENU: &[Option<Command>] = &[
     Some(Command::NewFile),
     None,
+    Some(Command::OpenRecent),
+    None,
     Some(Command::OpenFile),
     Some(Command::OpenFolder),
+    None,
     Some(Command::AddFolder),
-    Some(Command::OpenRecent),
     None,
     Some(Command::Save),
     Some(Command::SaveAs),
@@ -276,9 +282,14 @@ pub const FILE_MENU: &[Option<Command>] = &[
     None,
     Some(Command::Settings),
     None,
-    Some(Command::CloseEditor),
+    Some(Command::CloseTab),
+    Some(Command::CloseAllTabs),
     Some(Command::Quit),
 ];
+
+/// What a tab's own menu lists. Right-clicking a tab picks it first, so both
+/// entries speak about the tab under the pointer.
+pub const TAB_MENU: &[Option<Command>] = &[Some(Command::CloseTab), Some(Command::CloseAllTabs)];
 
 /// What the View menu lists, in order; `None` is a separator.
 pub const VIEW_MENU: &[Option<Command>] = &[
@@ -333,7 +344,7 @@ pub const START_PAGE: &[(&str, &[Command])] = &[
             Command::Redo,
             Command::Save,
             Command::FindInFile,
-            Command::CloseEditor,
+            Command::CloseTab,
         ],
     ),
     (
@@ -560,6 +571,26 @@ mod command_tests {
             assert!(menu.first().is_some_and(Option::is_some), "{name}");
             assert!(menu.last().is_some_and(Option::is_some), "{name}");
         }
+    }
+
+    #[test]
+    fn the_file_menu_groups_what_belongs_together() {
+        let groups: Vec<Vec<Command>> = FILE_MENU
+            .split(|entry| entry.is_none())
+            .map(|group| group.iter().flatten().copied().collect())
+            .collect();
+        assert_eq!(groups[0], [Command::NewFile]);
+        assert_eq!(groups[1], [Command::OpenRecent], "recent stands alone");
+        assert_eq!(
+            groups[2],
+            [Command::OpenFile, Command::OpenFolder],
+            "opening something is one group"
+        );
+        assert_eq!(groups[3], [Command::AddFolder]);
+        assert!(
+            groups.last().unwrap().contains(&Command::CloseAllTabs),
+            "closing and quitting end the menu"
+        );
     }
 
     #[test]

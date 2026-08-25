@@ -4620,7 +4620,7 @@ dependencies = [
 
 [[package]]
 name = "yara"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "crossterm",
  "eframe",

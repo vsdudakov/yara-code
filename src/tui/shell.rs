@@ -109,11 +109,17 @@ impl Shell {
             return;
         };
         if pty.wants_mouse() {
-            let bytes = pty.wheel_bytes(up, row, col);
+            // Two notches for one, so a pager or an agent moves at the pace
+            // the panels themselves do.
+            let bytes = pty.wheel_bytes(up, row, col).repeat(2);
             pty.write(&bytes);
             return;
         }
-        self.scroll(if up { 3 } else { -3 });
+        self.scroll(if up {
+            crate::tui::app::SCROLL_STEP
+        } else {
+            -crate::tui::app::SCROLL_STEP
+        });
     }
 
     /// Forwards a key press to the shell as the bytes a terminal would send.

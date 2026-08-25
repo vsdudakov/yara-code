@@ -181,6 +181,17 @@ impl Harness {
         self.draw();
     }
 
+    /// The right button at a point, which is what opens a context menu.
+    fn right_click(&mut self, column: u16, row: u16) {
+        self.app.handle(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        self.draw();
+    }
+
     fn wheel(&mut self, column: u16, row: u16, up: bool) {
         self.app.handle(Event::Mouse(MouseEvent {
             kind: if up {
@@ -1545,9 +1556,9 @@ fn the_wheel_scrolls_the_view_and_leaves_the_caret() {
     for _ in 0..2 {
         harness.wheel(editor.x + 10, editor.y + 2, false);
     }
-    // The view moved on; the caret did not.
+    // The view moved on by two notches of six rows; the caret did not.
     assert!(!harness.shows("line 1\n"), "{}", harness.screen());
-    assert!(harness.shows("line 7"), "{}", harness.screen());
+    assert!(harness.shows("line 13"), "{}", harness.screen());
     assert!(harness.shows("Ln 1, Col 1"), "{}", harness.screen());
     // Moving the caret brings the view back to wherever it lands.
     harness.key(KeyCode::Down);
@@ -1573,4 +1584,30 @@ fn a_file_changed_on_disk_is_reloaded_while_clean() {
         harness.screen()
     );
     assert!(harness.shows("changed on disk"), "{}", harness.screen());
+}
+
+#[test]
+fn a_tabs_own_menu_closes_that_tab_and_every_other_one() {
+    let project = Project::new("yara-e2e-tabmenu");
+    project.file("one.txt", "first\n");
+    project.file("two.txt", "second\n");
+    let mut harness = Harness::open(&project);
+    for name in ["one.txt", "two.txt"] {
+        let row = harness.row_of(name).unwrap();
+        harness.click(4, row);
+    }
+    // Right-clicking the first tab picks it and offers what can be done to
+    // tabs.
+    let strip = harness.app.layout.tabs;
+    let (start, _, _, _) = harness.app.layout.tab_spans[0];
+    harness.right_click(start + 1, strip.y);
+    assert!(harness.shows("Close Tab"), "{}", harness.screen());
+    assert!(harness.shows("Close All Tabs"), "{}", harness.screen());
+
+    // Down lands on the second entry, and Enter runs it.
+    harness.key(KeyCode::Down);
+    harness.key(KeyCode::Enter);
+    assert!(harness.app.buffers.is_empty(), "{}", harness.screen());
+    // Nothing is open, so the start page is what stands in the editor.
+    assert!(harness.shows("Open Folder..."), "{}", harness.screen());
 }

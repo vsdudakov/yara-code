@@ -50,6 +50,12 @@ clipboard has nowhere to go in a grid of characters, so it is written to a file
 and the path is pasted instead — which is what a program running in the shell
 can actually open.
 
-The wheel walks the 5000 lines of scrollback, unless the program in front asked
+In the terminal frontend that is <kbd>Ctrl+V</kbd>'s job, because
+<kbd>Cmd+V</kbd> never reaches the editor at all: on macOS the *host* terminal
+owns that key and pastes the clipboard's text itself, which for an image is
+nothing — iTerm2 3.6 offers its own dialog instead. Where the host does send an
+empty paste, the editor takes it as a paste of its own and finds the image.
+
+The wheel walks the 5000 lines of scrollback, six rows a notch, unless the program in front asked
 to hear about the mouse: a full-screen program keeps a transcript of its own, so
 it is handed the notch and scrolls that instead.

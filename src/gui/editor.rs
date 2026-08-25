@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::buffer::{word_at, Buffers};
+use crate::core::command::Command;
 use crate::core::find::Find;
 use crate::core::fold::{self, Region};
 use crate::core::git::LineState;
@@ -15,9 +16,10 @@ use crate::core::settings::{Indent, Modifier};
 use crate::core::theme as core_theme;
 use crate::core::theme::Theme;
 use crate::gui::diff::DiffView;
+use crate::gui::file_tree::menu_item;
 use crate::gui::fold_view::Mapping;
 use crate::gui::highlight;
-use crate::gui::theme::{ansi_color, code_font, color};
+use crate::gui::theme::{ansi_color, code_font, color, glyph, icons};
 
 /// Space between the tab strip and the first line of text.
 const EDITOR_TOP_PAD: f32 = 8.0;
@@ -50,6 +52,9 @@ pub struct Editor {
     pub goto_request: Option<String>,
     /// Buffer whose close is awaiting the save/discard confirmation.
     pub pending_close: Option<usize>,
+    /// Set by a tab's own menu; the app answers it, because closing every tab
+    /// is a question about unsaved work and the app owns that dialog.
+    pub close_all_requested: bool,
     /// Collapsed block headers, per file.
     folds: HashMap<PathBuf, BTreeSet<usize>>,
     /// Foldable blocks of the active buffer, recomputed when its text changes.
@@ -405,6 +410,7 @@ impl Editor {
             }
         }
         let mut close: Option<usize> = None;
+        let mut self_close_all = false;
         let mut preview_clicked = false;
         let in_front = (self.buffers.active, self.active_diff, self.active_preview);
         let reveal = self.shown_tab != Some(in_front);
@@ -461,9 +467,9 @@ impl Editor {
                                 .add(egui::Label::new(title).sense(egui::Sense::click()))
                                 .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                            // Modified dot / close cross, drawn as shapes so they show
-                            // up regardless of font coverage. Hovering the dot turns it
-                            // into a cross, like VS Code.
+                            // The modified dot and the close cross, in the glyphs
+                            // the terminal frontend prints. Hovering the dot turns
+                            // it into a cross, like VS Code.
                             let (icon_rect, close_resp) = ui
                                 .allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
                             let close_resp =
@@ -482,21 +488,13 @@ impl Editor {
                                         color(theme.ui.hover_bg),
                                     );
                                 }
-                                if buf.modified() && !hovered {
-                                    ui.painter().circle_filled(icon_rect.center(), 3.5, mark);
+                                let icons = icons();
+                                let mark_glyph = if buf.modified() && !hovered {
+                                    icons.modified
                                 } else {
-                                    let r = 3.2;
-                                    let c = icon_rect.center();
-                                    let stroke = egui::Stroke::new(1.3_f32, mark);
-                                    ui.painter().line_segment(
-                                        [c + egui::vec2(-r, -r), c + egui::vec2(r, r)],
-                                        stroke,
-                                    );
-                                    ui.painter().line_segment(
-                                        [c + egui::vec2(r, -r), c + egui::vec2(-r, r)],
-                                        stroke,
-                                    );
-                                }
+                                    icons.close
+                                };
+                                glyph(ui.painter(), icon_rect.center(), mark_glyph, 13.0, mark);
                             }
                             if close_resp.clicked() {
                                 close = Some(i);
@@ -515,6 +513,23 @@ impl Editor {
                             ui.interact(tab.response.rect, tab_id, egui::Sense::click_and_drag());
                         if handle.dragged() || handle.drag_started() {
                             handle.dnd_set_drag_payload(TabDrag(i));
+                        }
+                        // A tab's own menu, the same two entries the terminal
+                        // frontend opens on a right-click. Picking the tab
+                        // first is what makes "this tab" unambiguous.
+                        let mut close_all = false;
+                        handle.context_menu(|ui| {
+                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
+                                close = Some(i);
+                                ui.close_menu();
+                            }
+                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
+                                close_all = true;
+                                ui.close_menu();
+                            }
+                        });
+                        if close_all {
+                            self_close_all = true;
                         }
                         let dropped = handle.dnd_release_payload::<TabDrag>().map(|src| src.0);
                         let hovering = handle.dnd_hover_payload::<TabDrag>().is_some();
@@ -540,8 +555,13 @@ impl Editor {
                             .next()
                             .unwrap_or(&diff.path)
                             .to_string();
-                        let (tab, cross) =
-                            Self::side_tab(ui, theme, "≠", &name, self.active_diff == Some(i));
+                        let (tab, cross) = Self::side_tab(
+                            ui,
+                            theme,
+                            icons().diff,
+                            &name,
+                            self.active_diff == Some(i),
+                        );
                         if self.active_diff == Some(i) && reveal {
                             tab.scroll_to_me(None);
                         }
@@ -555,7 +575,7 @@ impl Editor {
                         let (tab, cross) = Self::side_tab(
                             ui,
                             theme,
-                            "◫",
+                            icons().preview,
                             &format!("{} preview", preview.name()),
                             self.active_preview == Some(i),
                         );
@@ -602,7 +622,7 @@ impl Editor {
                     Some(chord) => format!("Render this markdown ({chord})"),
                     None => "Render this markdown".to_string(),
                 };
-                let label = egui::RichText::new("◫ Preview")
+                let label = egui::RichText::new(format!("{} Preview", icons().preview))
                     .size(12.5)
                     .color(color(theme.ui.fg));
                 if ui
@@ -630,6 +650,9 @@ impl Editor {
         if let Some(i) = close {
             self.request_close(i);
         }
+        if self_close_all {
+            self.close_all_requested = true;
+        }
         if let Some(i) = show_diff {
             self.active_diff = Some(i);
             self.active_preview = None;
@@ -652,7 +675,7 @@ impl Editor {
     fn side_tab(
         ui: &mut egui::Ui,
         theme: &Theme,
-        glyph: &str,
+        mark: &str,
         label: &str,
         selected: bool,
     ) -> (egui::Response, egui::Response) {
@@ -672,7 +695,7 @@ impl Editor {
                 } else {
                     color(theme.ui.fg_dim)
                 };
-                let title = egui::RichText::new(format!("{glyph} {label}"))
+                let title = egui::RichText::new(format!("{mark} {label}"))
                     .color(fg)
                     .size(13.0);
                 let tab = ui
@@ -687,13 +710,7 @@ impl Editor {
                     } else {
                         color(theme.ui.fg_dim)
                     };
-                    let r = 3.2;
-                    let c = icon_rect.center();
-                    let stroke = egui::Stroke::new(1.3_f32, mark);
-                    ui.painter()
-                        .line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
-                    ui.painter()
-                        .line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+                    glyph(ui.painter(), icon_rect.center(), icons().close, 13.0, mark);
                 }
                 clicks = Some((tab, cross));
             });

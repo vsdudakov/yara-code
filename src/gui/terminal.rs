@@ -282,15 +282,20 @@ impl Terminal {
         let scrollback = pty.scrollback() as isize;
         let selected_bg = color(theme.ui.selection);
         pty.with_screen(|screen| {
+            // A terminal is a grid, so every cell is painted at the column it
+            // belongs to. Laying a whole row out as one string was cheaper,
+            // but a glyph the code face lacks is not a cell wide, and the
+            // whole line after it slid sideways every time an agent's spinner
+            // turned.
             for row in 0..rows {
-                let mut job = egui::text::LayoutJob::default();
-                let mut run = String::new();
-                let mut run_fmt: Option<egui::text::TextFormat> = None;
                 let highlighted = selection
                     .and_then(|s| s.span_on(row as isize - scrollback, cols))
                     .unwrap_or((0, 0));
+                let y = origin.y + row as f32 * cell_h;
+                let mut cells: Vec<(String, egui::text::TextFormat, bool)> =
+                    Vec::with_capacity(cols as usize);
                 for col in 0..cols {
-                    let (mut text, mut fmt) = match screen.cell(row, col) {
+                    let (text, mut fmt) = match screen.cell(row, col) {
                         Some(cell) => {
                             let contents = cell.contents();
                             let text = if contents.is_empty() {
@@ -305,26 +310,76 @@ impl Terminal {
                     if (highlighted.0..highlighted.1).contains(&col) {
                         fmt.background = selected_bg;
                     }
+                    // The background belongs to the cell, not to the glyph:
+                    // painted as a rectangle it lines up whatever is in it.
+                    if fmt.background != egui::Color32::TRANSPARENT {
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::pos2(origin.x + col as f32 * cell_w, y),
+                                egui::vec2(cell_w, cell_h),
+                            ),
+                            egui::CornerRadius::ZERO,
+                            fmt.background,
+                        );
+                        fmt.background = egui::Color32::TRANSPARENT;
+                    }
+                    let fits = fits_a_cell(ui, &font_id, &text, cell_w);
+                    cells.push((text, fmt, fits));
+                }
+
+                // Cells that are exactly a cell wide and share a style are
+                // still drawn together — that is most of a screen, and one
+                // galley a run is what keeps this affordable.
+                let mut run = String::new();
+                let mut run_fmt: Option<egui::text::TextFormat> = None;
+                let mut run_start = 0usize;
+                let flush = |run: &mut String,
+                             run_fmt: &mut Option<egui::text::TextFormat>,
+                             start: usize| {
+                    if let Some(fmt) = run_fmt.take() {
+                        paint_run(
+                            ui,
+                            &painter,
+                            origin.x + start as f32 * cell_w,
+                            y,
+                            std::mem::take(run),
+                            fmt,
+                            color(theme.ui.terminal_fg),
+                        );
+                    }
+                };
+                for (col, (text, fmt, fits)) in cells.into_iter().enumerate() {
+                    if !fits {
+                        flush(&mut run, &mut run_fmt, run_start);
+                        // Off-width glyphs stand in the middle of their own
+                        // cell: a narrow one is not left hanging on the left,
+                        // and a double-width one simply runs into the blank
+                        // cell the terminal left for it.
+                        let width = text_width(ui, &fmt.font_id, &text);
+                        let slack = ((cell_w - width) / 2.0).max(0.0);
+                        paint_run(
+                            ui,
+                            &painter,
+                            origin.x + col as f32 * cell_w + slack,
+                            y,
+                            text,
+                            fmt,
+                            color(theme.ui.terminal_fg),
+                        );
+                        run_start = col + 1;
+                        continue;
+                    }
                     match &run_fmt {
                         Some(f) if *f == fmt => run.push_str(&text),
                         _ => {
-                            if let Some(f) = run_fmt.take() {
-                                job.append(&run, 0.0, f);
-                            }
-                            run = std::mem::take(&mut text);
+                            flush(&mut run, &mut run_fmt, run_start);
+                            run_start = col;
+                            run = text;
                             run_fmt = Some(fmt);
                         }
                     }
                 }
-                if let Some(f) = run_fmt {
-                    job.append(&run, 0.0, f);
-                }
-                let galley = ui.fonts(|f| f.layout_job(job));
-                painter.galley(
-                    origin + egui::vec2(0.0, row as f32 * cell_h),
-                    galley,
-                    color(theme.ui.terminal_fg),
-                );
+                flush(&mut run, &mut run_fmt, run_start);
             }
 
             if !screen.hide_cursor() {
@@ -476,6 +531,42 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
         pty.set_scrollback(0);
         pty.clear_selection();
         pty.write(&bytes);
+    }
+}
+
+/// Paints one run of cells at a point, in one style.
+fn paint_run(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    x: f32,
+    y: f32,
+    text: String,
+    fmt: egui::text::TextFormat,
+    fallback: egui::Color32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&text, 0.0, fmt);
+    let galley = ui.fonts(|f| f.layout_job(job));
+    painter.galley(egui::pos2(x, y), galley, fallback);
+}
+
+/// What a cell's contents measure, whichever face ends up drawing them.
+fn text_width(ui: &egui::Ui, font_id: &egui::FontId, text: &str) -> f32 {
+    ui.fonts(|f| text.chars().map(|c| f.glyph_width(font_id, c)).sum())
+}
+
+/// Whether a cell's contents take exactly the width of a cell, and so can be
+/// drawn shoulder to shoulder with its neighbours. Plain ASCII always does,
+/// and asking is the expensive part, so it is not asked.
+fn fits_a_cell(ui: &egui::Ui, font_id: &egui::FontId, text: &str, cell_w: f32) -> bool {
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_ascii_graphic() || c == ' ' => true,
+        (Some(_), _) => (text_width(ui, font_id, text) - cell_w).abs() < 0.5,
+        (None, _) => true,
     }
 }
 

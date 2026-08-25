@@ -16,7 +16,7 @@ where the window has `Cmd+Shift`. Every command is rebindable in
 | Open recent | `Cmd+R` | `Ctrl+R` |
 | Save / Save As… / Save All | `Cmd+S` / `Cmd+Shift+S` / `Cmd+Alt+S` | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+Alt+S` |
 | Settings | `Cmd+,` | `Ctrl+,` |
-| Close tab / Quit | `Cmd+W` / `Cmd+Q` | `Ctrl+W` / `Ctrl+Q` |
+| Close tab / Close all tabs / Quit | `Cmd+W` / `Cmd+Shift+W` / `Cmd+Q` | `Ctrl+W` / `Ctrl+Shift+W` / `Ctrl+Q` |
 | Command palette / Go to file / Go to line | `Cmd+Shift+P` / `Cmd+P` / `Ctrl+G` | `Ctrl+Shift+P` / `Ctrl+P` / `Ctrl+G` |
 | Undo / Redo | `Cmd+Z` / `Cmd+Shift+Z` | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | Find in file | `Cmd+F` | `Ctrl+F` |
@@ -92,16 +92,17 @@ The terminal frontend is fully mouse-driven, mirroring the GPU window:
   because some terminals grab one of them: macOS Terminal turns Ctrl+click into
   a right click, so use Alt+click there.
 - **Right click** — context menu on the row under the pointer: Open, New File,
-  New Folder, Rename, Move To..., Delete, Add Folder to Project. On a project
-  folder's own row it offers Remove Folder from Project instead of the on-disk
-  operations. `Shift+F10` opens the same menu from the keyboard; arrows and Enter
-  drive it, Esc or a click outside dismisses it. On a **terminal tab**, the right
-  button renames the session.
+  New Folder, Rename, Move To..., Delete. A **folder** also offers Add Folder to
+  Project, and a folder the project already holds offers Remove Folder from
+  Project in its place, instead of the on-disk operations. `Shift+F10` opens the
+  same menu from the keyboard; arrows and Enter drive it, Esc or a click outside
+  dismisses it. On an **editor tab** the right button offers Close Tab and Close
+  All Tabs; on a **terminal tab** it renames the session.
 - **Drag and drop** — press a navigator row and drag it onto a folder to move it;
   the target folder highlights, and dropping on empty space moves to the project
   root. Editor tabs and terminal tabs drag along their own strip to reorder.
 - **Hover** — rows and tabs light up under the pointer.
-- **Wheel** — scrolls whichever pane is under the pointer.
+- **Wheel** — scrolls whichever pane is under the pointer, six rows a notch.
 
 Icons use Unicode by default; set `YARA_ASCII=1` for terminals with sparse
 font coverage. Since the app captures the mouse, use your terminal's usual

@@ -3,7 +3,7 @@
 
 use crate::core::diff::{next_change, previous_change, Kind, Row};
 use crate::core::theme::Theme;
-use crate::gui::theme::{ansi_color, code_font, color};
+use crate::gui::theme::{ansi_color, code_font, color, icons};
 
 pub struct DiffView {
     /// Path as git reports it, relative to the worktree.
@@ -58,7 +58,7 @@ impl DiffView {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(egui::RichText::new("×").size(11.0))
+                            .button(egui::RichText::new(icons().close).size(11.0))
                             .on_hover_text("Close Diff")
                             .clicked()
                         {

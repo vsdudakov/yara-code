@@ -11,6 +11,7 @@ pub mod fuzzy;
 pub mod git;
 pub mod glob;
 pub mod history;
+pub mod icons;
 pub mod indent;
 pub mod markdown;
 pub mod project;

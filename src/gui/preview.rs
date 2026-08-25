@@ -3,7 +3,7 @@
 
 use crate::core::markdown::{Block, Span};
 use crate::core::theme::Theme;
-use crate::gui::theme::{code_font, color};
+use crate::gui::theme::{code_font, color, icons};
 
 pub struct PreviewView {
     pub path: std::path::PathBuf,
@@ -52,7 +52,7 @@ impl PreviewView {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .button(egui::RichText::new("×").size(11.0))
+                            .button(egui::RichText::new(icons().close).size(11.0))
                             .on_hover_text("Close Preview")
                             .clicked()
                         {

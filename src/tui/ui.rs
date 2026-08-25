@@ -1767,7 +1767,7 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
     for (i, diff) in app.diffs.iter().enumerate() {
         let selected = app.active_diff == Some(i);
         let name = diff.path.rsplit('/').next().unwrap_or(&diff.path);
-        let label = format!(" ≠ {name} ");
+        let label = format!(" {} {name} ", icons.diff);
         let label_width = label.chars().count() as u16;
         let (fg, bg) = if selected {
             (theme.ui.fg_bright, theme.ui.tab_active_bg)
@@ -1791,7 +1791,7 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let label = format!(" ◫ {name} ");
+        let label = format!(" {} {name} ", icons.preview);
         let label_width = label.chars().count() as u16;
         let (fg, bg) = if selected {
             (theme.ui.fg_bright, theme.ui.tab_active_bg)
@@ -1816,8 +1816,8 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
             .active()
             .is_some_and(|buf| matches!(buf.extension.as_str(), "md" | "markdown"));
     let hint = markdown_in_front.then(|| match app.settings.tui_chord(Command::TogglePreview) {
-        Some(chord) => format!(" ◫ Preview {chord} "),
-        None => " ◫ Preview ".to_string(),
+        Some(chord) => format!(" {} Preview {chord} ", icons.preview),
+        None => format!(" {} Preview ", icons.preview),
     });
     let hint_width = hint.as_ref().map_or(0, |h| h.chars().count() as u16);
     let total = x.saturating_sub(tab_area.x);

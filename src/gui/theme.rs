@@ -8,6 +8,25 @@ use crate::core::theme::{self as core_theme, Rgb, Theme};
 /// Zoom In and Zoom Out change.
 pub const CODE_FONT_SIZE: f32 = 13.5;
 
+/// The glyphs the window draws in its chrome. They are the terminal
+/// frontend's own set, so a folder, a file, a modified tab or a sidebar
+/// switch is the same shape whichever frontend is looking at it.
+pub fn icons() -> crate::core::icons::Icons {
+    crate::core::icons::unicode()
+}
+
+/// Draws one of those glyphs centred on a point, the way a cell in the
+/// terminal holds it.
+pub fn glyph(painter: &egui::Painter, center: egui::Pos2, mark: &str, size: f32, fill: Color32) {
+    painter.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        mark,
+        FontId::new(size, FontFamily::Monospace),
+        fill,
+    );
+}
+
 /// The code font actually in effect, so measurements follow the zoom.
 pub fn code_font(ui: &egui::Ui) -> FontId {
     ui.style()

@@ -5,10 +5,11 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::core::command::Command;
 use crate::core::fs_ops;
 use crate::core::git::GitState;
 use crate::core::theme::Theme;
-use crate::gui::theme::color;
+use crate::gui::theme::{color, glyph, icons};
 
 pub enum TreeEvent {
     Open(PathBuf),
@@ -273,8 +274,8 @@ impl FileTree {
     }
 
     /// The navigator context menu, identical in both frontends:
-    /// Open | New File, New Folder | Rename, Move To... | Delete | the
-    /// project-level entries — leave the project, add a folder to it.
+    /// Open | New File, New Folder | Rename, Move To... | Delete | and the
+    /// project-level entry, which a folder gets and a file does not.
     fn context_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -341,7 +342,11 @@ impl FileTree {
             }
             None => {}
         }
-        if menu_item(ui, theme, "Add Folder to Project...").clicked() {
+        // The project-level entry is about folders, and reads the other way
+        // round on one the project already holds — that is the Remove above.
+        // A file says nothing about the project at all.
+        let a_folder = target.is_none() || matches!(target, Some((_, true)));
+        if a_folder && !is_root && menu_item(ui, theme, Command::AddFolder.label()).clicked() {
             events.push(TreeEvent::AddFolder);
             ui.close_menu();
         }
@@ -461,10 +466,16 @@ impl FileTree {
             }
             let fg = color(theme.ui.fg_bright);
             let cy = row_rect.center().y;
-            chevron(
+            let icons = icons();
+            glyph(
                 ui.painter(),
                 egui::pos2(row_rect.min.x + 13.0, cy),
-                is_expanded,
+                if is_expanded {
+                    icons.dir_open
+                } else {
+                    icons.dir_closed
+                },
+                12.0,
                 fg,
             );
             ui.painter().text(
@@ -612,11 +623,17 @@ impl FileTree {
                 };
                 let icon_x = row_rect.min.x + indent + 5.0;
                 let cy = row_rect.center().y;
-                if is_dir {
-                    chevron(ui.painter(), egui::pos2(icon_x, cy), is_expanded, icon_fg);
+                let icons = icons();
+                let mark = if is_dir {
+                    if is_expanded {
+                        icons.dir_open
+                    } else {
+                        icons.dir_closed
+                    }
                 } else {
-                    file_glyph(ui.painter(), egui::pos2(icon_x, cy), icon_fg);
-                }
+                    icons.file
+                };
+                glyph(ui.painter(), egui::pos2(icon_x, cy), mark, 12.0, icon_fg);
                 ui.painter().text(
                     egui::pos2(row_rect.min.x + indent + 16.0, cy),
                     egui::Align2::LEFT_CENTER,
@@ -661,36 +678,6 @@ impl FileTree {
 }
 
 /// Disclosure triangle, drawn as a shape — the Unicode arrows aren't covered by
-/// egui's bundled fonts.
-fn chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: egui::Color32) {
-    let r = 3.6;
-    let pts = if expanded {
-        vec![
-            center + egui::vec2(-r, -r * 0.6),
-            center + egui::vec2(r, -r * 0.6),
-            center + egui::vec2(0.0, r * 0.8),
-        ]
-    } else {
-        vec![
-            center + egui::vec2(-r * 0.6, -r),
-            center + egui::vec2(-r * 0.6, r),
-            center + egui::vec2(r * 0.8, 0.0),
-        ]
-    };
-    painter.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
-}
-
-/// A small hollow square — the shape the terminal frontend prints as `▫`.
-fn file_glyph(painter: &egui::Painter, center: egui::Pos2, color: egui::Color32) {
-    let half = 3.0;
-    painter.rect_stroke(
-        egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0)),
-        egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.0_f32, color),
-        egui::StrokeKind::Inside,
-    );
-}
-
 /// Moves `src` into `dest_dir`, reporting either outcome to the app.
 fn report_move(src: &Path, dest_dir: &Path, events: &mut Vec<TreeEvent>) -> bool {
     match fs_ops::move_into(src, dest_dir) {
@@ -710,7 +697,7 @@ fn report_move(src: &Path, dest_dir: &Path, events: &mut Vec<TreeEvent>) -> bool
 
 /// A dropdown row drawn like the terminal one: a `>` marker appears on the
 /// highlighted entry, and the label sits in a fixed column beside it.
-fn menu_item(ui: &mut egui::Ui, theme: &Theme, label: &str) -> egui::Response {
+pub fn menu_item(ui: &mut egui::Ui, theme: &Theme, label: &str) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width().max(150.0), 22.0),
         egui::Sense::click(),
@@ -731,8 +718,8 @@ fn menu_item(ui: &mut egui::Ui, theme: &Theme, label: &str) -> egui::Response {
             ui.painter().text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                ">",
-                egui::FontId::proportional(12.0),
+                icons().menu_marker,
+                egui::FontId::monospace(12.0),
                 fg,
             );
         }

@@ -1703,8 +1703,12 @@ impl App {
             return;
         }
         if hits(self.layout.shell, x, y) {
-            // Positive delta scrolls down, which means less scrollback.
-            self.shell.scroll(-delta);
+            // The grid's own cell, because a program that reads the mouse is
+            // told where the notch happened; a notch on the tab strip above it
+            // belongs to no cell and does nothing.
+            if let Some((row, col)) = self.shell_cell_at(x, y) {
+                self.shell.wheel(row, col, delta < 0);
+            }
         } else if hits(self.layout.tree, x, y) {
             self.tree.move_selection(delta);
         } else if hits(self.layout.search_list, x, y) {

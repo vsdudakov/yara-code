@@ -239,9 +239,13 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::NextPane | Command::PrevPane => return None,
         Command::Undo => "Cmd+Z",
         Command::Redo => "Cmd+Shift+Z",
-        // Select all, copy, cut and paste are the text widget's own; binding
-        // them here would take them away from it.
-        Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => return None,
+        // Select all, copy and cut are the text widget's own; binding them
+        // here would take them away from it. Paste is bound because the
+        // terminal panel needs it for an image — egui delivers pasted *text*
+        // as its own event, which this binding does not touch, so a text
+        // paste still lands in whichever field is being typed in.
+        Command::SelectAll | Command::Copy | Command::Cut => return None,
+        Command::Paste => "Cmd+V",
         // VS Code folds with two-key chords (⌘K ⌘0); these are the single-chord
         // shape of the same three actions.
         Command::ToggleFold => "Cmd+Alt+F",
@@ -797,13 +801,13 @@ mod tests {
 
     #[test]
     fn every_command_is_bound_out_of_the_box() {
-        // The window leaves the clipboard keys to the text widget and opens its
-        // menus with the mouse; everything else answers to a key in both.
+        // The window leaves selection, copy and cut to the text widget and
+        // opens its menus with the mouse; everything else answers to a key in
+        // both.
         let widget_owned = [
             Command::SelectAll,
             Command::Copy,
             Command::Cut,
-            Command::Paste,
             Command::ContextMenu,
             Command::FileMenu,
             Command::ViewMenu,

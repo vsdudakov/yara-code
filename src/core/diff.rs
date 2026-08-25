@@ -179,7 +179,6 @@ fn hunk_start(header: &str) -> Option<(usize, usize)> {
     Some((old?, new?))
 }
 
-/// A file with no old version — every line is an addition.
 /// The row a review jumps to next: the first row of the next run of changed
 /// rows after `from`. Reviewing a diff is going change to change, not line to
 /// line, so the arrows in the two-pane view move by this rather than by one.
@@ -209,6 +208,7 @@ pub fn previous_change(rows: &[Row], from: usize) -> Option<usize> {
     Some(start)
 }
 
+/// A file with no old version — every line is an addition.
 pub fn all_added(text: &str) -> Vec<Row> {
     text.lines()
         .enumerate()

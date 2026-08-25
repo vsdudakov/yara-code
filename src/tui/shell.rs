@@ -100,6 +100,22 @@ impl Shell {
         pty.set_scrollback((current + delta).max(0) as usize);
     }
 
+    /// One notch of the wheel over a cell of the grid. A program that asked
+    /// for the mouse scrolls its own view and is handed the notch; anything
+    /// else leaves the wheel to the panel, which walks the history instead —
+    /// three rows a notch, as the arrow keys of a pager do.
+    pub fn wheel(&mut self, row: u16, col: u16, up: bool) {
+        let Some(pty) = self.sessions.active_mut() else {
+            return;
+        };
+        if pty.wants_mouse() {
+            let bytes = pty.wheel_bytes(up, row, col);
+            pty.write(&bytes);
+            return;
+        }
+        self.scroll(if up { 3 } else { -3 });
+    }
+
     /// Forwards a key press to the shell as the bytes a terminal would send.
     pub fn send_key(&mut self, key: KeyEvent) {
         let Some(pty) = self.sessions.active_mut() else {
@@ -131,6 +147,13 @@ impl Shell {
                     let mut buf = [0u8; 4];
                     bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                 }
+            }
+            // Shift+Enter is the newline an agent's prompt asks for, and
+            // ESC then Return is what a terminal set up for one sends. Telling
+            // it from a plain Return needs the kitty protocol, which
+            // [`crate::tui::run`] asks the host terminal for.
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                bytes.extend_from_slice(b"\x1b\r")
             }
             KeyCode::Enter => bytes.push(b'\r'),
             KeyCode::Tab => bytes.push(b'\t'),

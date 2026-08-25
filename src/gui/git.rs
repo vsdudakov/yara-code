@@ -90,13 +90,7 @@ impl GitPanel {
                 // search panel's form.
                 ui.add_space(6.0);
                 heading(ui, "WORKTREE");
-                let label = |w: &Worktree| {
-                    if w.branch.is_empty() {
-                        w.name()
-                    } else {
-                        format!("{} · {}", w.name(), w.branch)
-                    }
-                };
+                let label = |w: &Worktree| w.label();
                 let current = self
                     .state
                     .worktrees

@@ -53,9 +53,29 @@ pub struct Worktree {
     pub path: PathBuf,
     /// Checked-out branch, or `"detached"`.
     pub branch: String,
+    /// The repository's own working copy, the one `git worktree list` puts
+    /// first. A picker showing a single entry is otherwise indistinguishable
+    /// from one that failed to find the rest.
+    pub main: bool,
 }
 
 impl Worktree {
+    /// What a picker shows: the folder, its branch, and whether this is the
+    /// repository's own working copy.
+    pub fn label(&self) -> String {
+        let name = self.name();
+        let branch = if self.branch.is_empty() {
+            String::new()
+        } else {
+            format!(" \u{b7} {}", self.branch)
+        };
+        if self.main {
+            format!("{name}{branch} (main)")
+        } else {
+            format!("{name}{branch}")
+        }
+    }
+
     /// Directory name, for pickers.
     pub fn name(&self) -> String {
         self.path
@@ -284,6 +304,7 @@ pub fn worktrees(repo: &Path) -> Vec<Worktree> {
         Err(_) => vec![Worktree {
             path: repo.to_path_buf(),
             branch: String::new(),
+            main: true,
         }],
     }
 }
@@ -301,6 +322,8 @@ fn parse_worktrees(out: &str) -> Vec<Worktree> {
         if let Some(path) = line.strip_prefix("worktree ") {
             list.extend(current.take());
             current = Some(Worktree {
+                // git lists the repository's own working copy first.
+                main: list.is_empty() && current.is_none(),
                 path: canonical(PathBuf::from(path)),
                 branch: String::new(),
             });
@@ -614,6 +637,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn the_repositorys_own_working_copy_says_it_is_the_main_one() {
+        let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                   worktree /repo-side\nHEAD def\nbranch refs/heads/side\n";
+        let list = parse_worktrees(out);
+        assert_eq!(list.len(), 2);
+        assert!(list[0].main, "git lists the main working copy first");
+        assert!(!list[1].main);
+        // A picker showing one entry has to say which one it is.
+        assert!(list[0].label().ends_with("(main)"), "{}", list[0].label());
+        assert!(list[0].label().contains("main"));
+        assert!(!list[1].label().contains("(main)"), "{}", list[1].label());
+        assert!(list[1].label().contains("side"));
+    }
 
     #[test]
     fn status_lines_parse() {

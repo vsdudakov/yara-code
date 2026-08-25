@@ -62,7 +62,11 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
     v.window_fill = color(ui.editor_bg);
     v.extreme_bg_color = color(ui.editor_bg);
     v.selection.bg_fill = color(ui.selection);
-    v.selection.stroke = egui::Stroke::NONE;
+    // Not NONE: egui paints a selected row's *text* in this stroke's colour,
+    // and a stroke of none is a transparent one — which is how the repository
+    // and worktree lists came up as an empty coloured box with the name that
+    // was picked nowhere to be seen.
+    v.selection.stroke = egui::Stroke::new(1.0_f32, color(ui.fg_bright));
     v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, color(ui.border));
     v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, color(ui.fg_dim));
     v.widgets.inactive.bg_fill = Color32::TRANSPARENT;
@@ -90,6 +94,22 @@ pub fn apply(ctx: &egui::Context, theme: &Theme, code_size: f32) {
 mod tests {
     use super::*;
     use crate::core::theme::{dark_plus, light_plus};
+
+    #[test]
+    fn a_selected_row_has_text_to_show() {
+        let ctx = egui::Context::default();
+        for theme in [dark_plus(), light_plus()] {
+            apply(&ctx, &theme, 13.0);
+            let stroke = ctx.style().visuals.selection.stroke;
+            assert_ne!(
+                stroke.color,
+                egui::Color32::TRANSPARENT,
+                "{}: a selected row paints its text in this colour",
+                theme.name
+            );
+            assert!(stroke.width > 0.0, "{}", theme.name);
+        }
+    }
 
     #[test]
     fn colours_cross_into_egui_unchanged() {

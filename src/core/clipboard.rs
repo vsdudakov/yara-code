@@ -17,8 +17,30 @@
 //! all there is, and that is enough for copying and pasting within the editor.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// the line, and most of them want it as typed.
+pub fn shell_quoted(path: &Path) -> String {
+    let text = path.display().to_string();
+    // A backslash separates folders on Windows and escapes on Unix, so it
+    // only counts as special on the side where it means something.
+    let special: &[char] = if cfg!(windows) {
+        &[' ', '\t', '"']
+    } else {
+        &[' ', '\t', '\'', '"', '\\']
+    };
+    if !text.contains(special) {
+        return text;
+    }
+    if cfg!(windows) {
+        // Windows shells quote with `"`, and a path cannot contain one.
+        format!("\"{}\"", text.replace('"', ""))
+    } else {
+        // A single quote inside single quotes is closed, escaped, reopened.
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
 
 #[derive(Default)]
 pub struct Clipboard {

@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use crate::core::buffer::{word_at, Buffers};
+use crate::core::clipboard::{self, shell_quoted, Clipboard};
 use crate::core::command::{Chord, Command, Key, Mods, ALL, FILE_MENU, HELP_MENU, VIEW_MENU};
 use crate::core::diff;
 use crate::core::find::Find;
@@ -30,7 +31,6 @@ use crate::core::settings::{Modifier, Settings};
 use crate::core::syntax::Syntax;
 use crate::core::theme::{self as core_theme, Theme};
 use crate::core::update as core_update;
-use crate::tui::clipboard::{self, Clipboard};
 use crate::tui::icons::{self, Icons};
 use crate::tui::menu::{Menu, MenuItem};
 use crate::tui::shell::Shell;
@@ -329,28 +329,6 @@ fn flatten(result: Result<String, String>) -> String {
 /// A path on its way into a shell, quoted when it holds anything the shell
 /// would otherwise split on or read as a quote. Plain paths are left bare:
 /// what a pasted screenshot's path is worth depends on the program reading
-/// the line, and most of them want it as typed.
-fn shell_quoted(path: &Path) -> String {
-    let text = path.display().to_string();
-    // A backslash separates folders on Windows and escapes on Unix, so it
-    // only counts as special on the side where it means something.
-    let special: &[char] = if cfg!(windows) {
-        &[' ', '\t', '"']
-    } else {
-        &[' ', '\t', '\'', '"', '\\']
-    };
-    if !text.contains(special) {
-        return text;
-    }
-    if cfg!(windows) {
-        // Windows shells quote with `"`, and a path cannot contain one.
-        format!("\"{}\"", text.replace('"', ""))
-    } else {
-        // A single quote inside single quotes is closed, escaped, reopened.
-        format!("'{}'", text.replace('\'', "'\\''"))
-    }
-}
-
 fn shell_has_no_use_for(chord: &Chord) -> bool {
     match &chord.key {
         Key::Named(name) if name.starts_with('f') && name[1..].parse::<u8>().is_ok() => true,

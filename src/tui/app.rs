@@ -18,6 +18,9 @@ use ratatui::Terminal;
 use crate::core::buffer::{word_at, Buffers};
 use crate::core::command::{Chord, Command, Key, Mods, ALL, FILE_MENU, HELP_MENU, VIEW_MENU};
 use crate::core::diff;
+// The rows a diff pane holds are called `diff` too, and a local name wins
+// over a module: this is how the module is still reachable inside that scope.
+use crate::core::diff as diff_of;
 use crate::core::find::Find;
 use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
@@ -3582,10 +3585,27 @@ impl App {
             return;
         };
         let last = diff.rows.len().saturating_sub(1);
+        // Reviewing a diff is going change to change: the arrows jump to the
+        // next run of changed rows, and hold Shift to move a line at a time.
+        let by_line = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
             KeyCode::Enter => self.open_diff_file(),
-            KeyCode::Down => diff.scroll = (diff.scroll + 1).min(last),
-            KeyCode::Up => diff.scroll = diff.scroll.saturating_sub(1),
+            KeyCode::Down if by_line => diff.scroll = (diff.scroll + 1).min(last),
+            KeyCode::Up if by_line => diff.scroll = diff.scroll.saturating_sub(1),
+            KeyCode::Down => {
+                if let Some(row) = diff_of::next_change(&diff.rows, diff.scroll) {
+                    diff.scroll = row;
+                } else {
+                    diff.scroll = last;
+                }
+            }
+            KeyCode::Up => {
+                if let Some(row) = diff_of::previous_change(&diff.rows, diff.scroll) {
+                    diff.scroll = row;
+                } else {
+                    diff.scroll = 0;
+                }
+            }
             KeyCode::PageDown => diff.scroll = (diff.scroll + height).min(last),
             KeyCode::PageUp => diff.scroll = diff.scroll.saturating_sub(height),
             KeyCode::Home => diff.scroll = 0,

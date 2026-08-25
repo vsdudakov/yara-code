@@ -2432,14 +2432,18 @@ impl App {
             // Function keys and Ctrl+Shift / Ctrl+Alt chords mean nothing to
             // a shell, and without them the editor could not be reached from
             // the terminal by keyboard at all.
+            //
+            // Hiding the terminal is not one of the exceptions: its default
+            // chord is Ctrl+J, which is a line feed, and an agent prompt in
+            // the terminal reads that as "another line, do not send yet".
+            // Taking it would make Shift+Enter in claude or codex fold the
+            // panel away instead of writing a line. The panel is still
+            // reached from anywhere else, and closed from the View menu.
             _ => {
                 self.focus != Focus::Shell
                     || matches!(
                         command,
-                        Command::ToggleTerminal
-                            | Command::NewTerminal
-                            | Command::CloseTerminal
-                            | Command::Quit
+                        Command::NewTerminal | Command::CloseTerminal | Command::Quit
                     )
                     || shell_has_no_use_for(chord)
             }
@@ -3935,6 +3939,24 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_terminal_keeps_ctrl_j_so_an_agent_can_take_a_new_line() {
+        let mut app = App::new(None);
+        let chord: Chord = "Ctrl+J".parse().expect("a chord");
+        app.focus = Focus::Shell;
+        assert!(
+            !app.command_applies(Command::ToggleTerminal, &chord),
+            "Ctrl+J is a line feed in the terminal, not the panel toggle"
+        );
+        // Everywhere else it still folds the panel away.
+        app.focus = Focus::Editor;
+        assert!(app.command_applies(Command::ToggleTerminal, &chord));
+        // The terminal's own commands stay reachable from inside it.
+        app.focus = Focus::Shell;
+        assert!(app.command_applies(Command::NewTerminal, &chord));
+        assert!(app.command_applies(Command::Quit, &chord));
+    }
 
     #[test]
     fn a_pasted_path_is_quoted_only_when_a_shell_would_split_it() {

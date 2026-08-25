@@ -921,11 +921,17 @@ fn the_shell_takes_the_keyboard_and_gives_it_back() {
     harness.type_text("echo yara-shell-marker");
     harness.key(KeyCode::Enter);
 
-    // Toggle Terminal is one of the few keys the shell does not keep.
+    // Ctrl+J is a line feed, and an agent prompt in the terminal reads it as
+    // another line: the shell keeps it, and the panel stays where it is.
+    harness.ctrl('j');
+    assert!(harness.shows("TERMINAL"), "{}", harness.screen());
+    // From the editor it still folds the panel away, and brings it back.
+    harness.app.focus = yara::tui::app::Focus::Editor;
     harness.ctrl('j');
     assert!(!harness.shows("TERMINAL"), "{}", harness.screen());
     harness.ctrl('j');
     assert!(harness.shows("TERMINAL"), "{}", harness.screen());
+    harness.app.focus = yara::tui::app::Focus::Shell;
 
     // A second session appears on the strip, and closing it takes it away.
     harness.press(

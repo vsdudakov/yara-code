@@ -5,6 +5,7 @@ pub mod diff;
 pub mod editor;
 pub mod file_tree;
 pub mod fold_view;
+pub mod fonts;
 pub mod git;
 pub mod highlight;
 pub mod keys;

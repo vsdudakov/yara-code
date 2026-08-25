@@ -1,8 +1,10 @@
-//! Glyphs for the terminal navigator and tab bar, mirroring the shapes the GPU
-//! frontend draws.
+//! The one set of glyphs both frontends draw: the navigator, the tab bar and
+//! the sidebar footer say the same thing in the window as they do in the
+//! terminal.
 //!
 //! Unicode by default; set `YARA_ASCII=1` (or run under a non-UTF-8 locale)
-//! to get the ASCII set for terminals with sparse font coverage.
+//! to get the ASCII set for terminals with sparse font coverage. The window
+//! has its fonts under its own control and always draws the Unicode set.
 
 #[derive(Clone, Copy)]
 pub struct Icons {
@@ -18,6 +20,9 @@ pub struct Icons {
     pub nav_git: &'static str,
     /// Placeholder in an empty input.
     pub ellipsis: &'static str,
+    /// Tabs that are not files: a diff, and a rendered markdown preview.
+    pub diff: &'static str,
+    pub preview: &'static str,
 }
 
 const UNICODE: Icons = Icons {
@@ -31,6 +36,8 @@ const UNICODE: Icons = Icons {
     nav_search: "◎",
     nav_git: "⎇",
     ellipsis: "…",
+    diff: "≠",
+    preview: "◫",
 };
 
 const ASCII: Icons = Icons {
@@ -44,7 +51,15 @@ const ASCII: Icons = Icons {
     nav_search: "o",
     nav_git: "Y",
     ellipsis: "...",
+    diff: "=",
+    preview: "#",
 };
+
+/// The full set, for a frontend that carries its own fonts and so never has
+/// to fall back — the window.
+pub fn unicode() -> Icons {
+    UNICODE
+}
 
 pub fn detect() -> Icons {
     if std::env::var_os("YARA_ASCII").is_some() {
@@ -87,12 +102,20 @@ mod tests {
                 icons.nav_search,
                 icons.nav_git,
                 icons.ellipsis,
+                icons.diff,
+                icons.preview,
             ] {
                 assert!(!glyph.is_empty());
             }
         }
         assert!(ASCII.ellipsis.is_ascii(), "that is the point of the set");
         assert!(!UNICODE.ellipsis.is_ascii());
+    }
+
+    #[test]
+    fn the_window_always_gets_the_drawn_set() {
+        assert_eq!(unicode().dir_open, UNICODE.dir_open);
+        assert_eq!(unicode().preview, UNICODE.preview);
     }
 
     #[test]

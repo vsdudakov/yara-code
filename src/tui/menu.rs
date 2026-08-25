@@ -88,15 +88,20 @@ impl Menu {
                 MenuItem::Delete,
             ],
         };
-        // A project folder is not a plain directory: it can be renamed or
-        // deleted on disk, and it can also just leave the project.
+        // The project-level entry is about folders, and reads the other way
+        // round on one the project already holds: that folder can leave the
+        // project, and any other folder can join it. A file says nothing
+        // about the project at all.
         if is_root {
+            // A project folder is not a plain directory: renaming, moving or
+            // deleting it on disk is not what the navigator offers.
             items.retain(|item| {
                 !matches!(item, MenuItem::Rename | MenuItem::Move | MenuItem::Delete)
             });
             items.push(MenuItem::RemoveFolder);
+        } else if target.is_none() || is_dir {
+            items.push(MenuItem::Command(Command::AddFolder));
         }
-        items.push(MenuItem::Command(Command::AddFolder));
         let dir = dir.unwrap_or_default();
         let mut rows = Vec::new();
         for (i, item) in items.iter().enumerate() {
@@ -274,6 +279,10 @@ mod tests {
         for expected in ["New File", "New Folder", "Rename", "Move To...", "Delete"] {
             assert!(labels.contains(&expected), "{expected} is missing");
         }
+        assert!(
+            !labels.contains(&"Add Folder to Project..."),
+            "the project entry is for folders"
+        );
         assert_eq!(menu.x, 3);
         assert_eq!(menu.y, 4);
         assert_eq!(menu.dir, PathBuf::from("/p"));
@@ -285,11 +294,30 @@ mod tests {
         let menu = Menu::for_row(Some(root.clone()), true, true, Some(root), 0, 0);
         let labels = labels(&menu);
         assert!(labels.contains(&"Remove Folder from Project"));
+        assert!(
+            !labels.contains(&"Add Folder to Project..."),
+            "a folder already in the project leaves it; it does not join twice"
+        );
         // Renaming, moving or deleting the folder you are working in is not on
         // offer.
         for absent in ["Rename", "Move To...", "Delete"] {
             assert!(!labels.contains(&absent), "{absent} should not be offered");
         }
+    }
+
+    #[test]
+    fn a_folder_that_is_not_in_the_project_yet_can_join_it() {
+        let menu = Menu::for_row(
+            Some(PathBuf::from("/p/src")),
+            true,
+            false,
+            Some(PathBuf::from("/p/src")),
+            0,
+            0,
+        );
+        let labels = labels(&menu);
+        assert!(labels.contains(&"Add Folder to Project..."));
+        assert!(!labels.contains(&"Remove Folder from Project"));
     }
 
     #[test]

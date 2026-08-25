@@ -17,7 +17,9 @@ use ratatui::Terminal;
 
 use crate::core::buffer::{word_at, Buffers};
 use crate::core::clipboard::{self, shell_quoted, Clipboard};
-use crate::core::command::{Chord, Command, Key, Mods, ALL, FILE_MENU, HELP_MENU, VIEW_MENU};
+use crate::core::command::{
+    Chord, Command, Key, Mods, ALL, FILE_MENU, HELP_MENU, TAB_MENU, VIEW_MENU,
+};
 use crate::core::diff;
 // The rows a diff pane holds are called `diff` too, and a local name wins
 // over a module: this is how the module is still reachable inside that scope.
@@ -27,6 +29,7 @@ use crate::core::fold::{self, Region};
 use crate::core::fs_ops;
 use crate::core::git::{self as core_git, Change, GitState};
 use crate::core::history::EditKind;
+use crate::core::icons::{self, Icons};
 use crate::core::indent;
 use crate::core::project::Project;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
@@ -34,7 +37,6 @@ use crate::core::settings::{Modifier, Settings};
 use crate::core::syntax::Syntax;
 use crate::core::theme::{self as core_theme, Theme};
 use crate::core::update as core_update;
-use crate::tui::icons::{self, Icons};
 use crate::tui::menu::{Menu, MenuItem};
 use crate::tui::shell::Shell;
 use crate::tui::tree::Tree;
@@ -395,6 +397,10 @@ fn short(path: &std::path::Path) -> String {
 /// Columns one `‹`/`›` press moves the tab strip by.
 pub const TAB_SCROLL_STEP: u16 = 12;
 
+/// Rows one notch of the wheel moves a pane. Twice what a terminal usually
+/// reports, because a notch of three lines is barely a move in a long file.
+pub const SCROLL_STEP: isize = 6;
+
 #[derive(Default, Clone)]
 pub struct Layout {
     /// The start page's rows, each the command it names.
@@ -517,6 +523,9 @@ pub struct App {
     /// Set by Quit while a dirty buffer is being asked about: once that
     /// buffer is dealt with, the next dirty one is asked, and then we go.
     quit_after_close: bool,
+    /// Close All Tabs is working its way through the list, asking about each
+    /// tab that has unsaved work as it reaches it.
+    closing_all: bool,
     /// The update check, and the release it found.
     pub updates: core_update::Checker,
     pub update: Option<core_update::Release>,
@@ -636,6 +645,7 @@ impl App {
             diffs: Vec::new(),
             active_diff: None,
             quit_after_close: false,
+            closing_all: false,
             updates: core_update::Checker::default(),
             update: None,
             installs: core_update::Installer::default(),
@@ -731,7 +741,16 @@ impl App {
     }
 
     /// Text arriving as a bracketed paste, which goes wherever the keyboard is.
+    ///
+    /// An *empty* one is the host terminal saying it had nothing to send: on
+    /// macOS Cmd+V belongs to the terminal, not to the editor, and a clipboard
+    /// holding an image has no text for it to hand over. Asking the clipboard
+    /// here is what turns that Cmd+V back into the same paste Ctrl+V performs.
     fn paste_event(&mut self, text: &str) {
+        if text.is_empty() {
+            self.paste_clipboard();
+            return;
+        }
         match self.focus {
             Focus::Shell => self.shell.paste(text),
             Focus::Editor => self.paste_text(text),
@@ -859,7 +878,24 @@ impl App {
         }
         if self.quit_after_close {
             self.continue_quit();
+        } else if self.closing_all {
+            self.close_next_tab();
         }
+    }
+
+    /// Closes every tab. The clean ones go at once; the first with unsaved
+    /// work is asked about, and answering it comes back here for the rest.
+    fn close_all_tabs(&mut self) {
+        self.closing_all = true;
+        self.close_next_tab();
+    }
+
+    fn close_next_tab(&mut self) {
+        if self.buffers.is_empty() {
+            self.closing_all = false;
+            return;
+        }
+        self.close_tab_at(0);
     }
 
     /// Picks up an update check that has finished.
@@ -1555,8 +1591,8 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::ScrollDown => self.scroll_at(x, y, 3),
-            MouseEventKind::ScrollUp => self.scroll_at(x, y, -3),
+            MouseEventKind::ScrollDown => self.scroll_at(x, y, SCROLL_STEP),
+            MouseEventKind::ScrollUp => self.scroll_at(x, y, -SCROLL_STEP),
             MouseEventKind::Down(MouseButton::Right) => self.right_click(x, y),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.tab_drag = self.tab_at(x, y);
@@ -2118,6 +2154,20 @@ impl App {
             self.prompt = Some(Prompt::RenameTerminal(index));
             return;
         }
+        // An editor tab's right button offers what can be done to tabs. The
+        // tab is picked first, so both entries speak about the one under the
+        // pointer.
+        if let Some((TabStrip::Editor, index)) = self.tab_at(x, y) {
+            self.buffers.active = index;
+            self.active_diff = None;
+            self.active_preview = None;
+            self.focus = Focus::Editor;
+            let settings = self.settings.clone();
+            self.menu = Some(Menu::commands(TAB_MENU, None, x, y, |command| {
+                settings.tui_chord(command).map(|c| c.to_string())
+            }));
+            return;
+        }
         if let Some(index) = self.tree_row_at(x, y) {
             self.focus = Focus::Tree;
             self.tree.selected = index;
@@ -2504,7 +2554,8 @@ impl App {
                 }
                 Err(e) => self.status = format!("cannot open settings: {e}"),
             },
-            Command::CloseEditor => self.close_tab(),
+            Command::CloseTab => self.close_tab(),
+            Command::CloseAllTabs => self.close_all_tabs(),
             Command::Quit => {
                 // Unsaved work asks first; the prompt's answers are the same
                 // as closing a tab, applied to every dirty buffer.
@@ -3603,6 +3654,7 @@ impl App {
             self.prompt = None;
             self.prompt_input.clear();
             self.quit_after_close = false;
+            self.closing_all = false;
             return;
         }
 

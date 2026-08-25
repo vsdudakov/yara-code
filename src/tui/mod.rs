@@ -2,7 +2,6 @@
 //! including over SSH on a headless server.
 
 pub mod app;
-pub mod icons;
 pub mod menu;
 pub mod shell;
 pub mod theme;

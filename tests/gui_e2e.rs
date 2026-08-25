@@ -854,3 +854,20 @@ fn the_command_palette_opens_from_its_key_and_runs_a_command() {
     assert!(!harness.shows("Type a command"), "{}", harness.screen());
     assert!(!harness.shows("FILES"), "{}", harness.screen());
 }
+
+#[test]
+fn close_all_tabs_leaves_the_window_with_nothing_open() {
+    let project = Project::new("yara-gui-e2e-closeall");
+    project.file("one.txt", "first\n");
+    project.file("two.txt", "second\n");
+    let mut harness = Harness::open(Some(&project));
+    for name in ["one.txt", "two.txt"] {
+        let at = harness.position_of(name).expect("the navigator lists it");
+        harness.click(at);
+    }
+    assert!(harness.shows("second"), "{}", harness.screen());
+    harness.press(Key::W, Modifiers::COMMAND | Modifiers::SHIFT);
+    // Nothing is open, so the start page is what stands in the editor.
+    assert!(!harness.shows("second"), "{}", harness.screen());
+    assert!(harness.shows("Open Folder"), "{}", harness.screen());
+}

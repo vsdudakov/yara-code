@@ -20,7 +20,7 @@ use crate::gui::git::GitPanel;
 use crate::gui::highlight;
 use crate::gui::keys;
 use crate::gui::terminal::Terminal;
-use crate::gui::theme::{ansi_color, color};
+use crate::gui::theme::{ansi_color, color, glyph, icons};
 
 #[derive(PartialEq, Clone, Copy)]
 enum SidebarView {
@@ -61,6 +61,9 @@ pub struct App {
     /// Set by Quit (or the window's close button) while a dirty buffer is
     /// being asked about; cleared by Cancel.
     quit_after_close: bool,
+    /// Close All Tabs is working its way through the dirty buffers, asking
+    /// about each one as it reaches it; cleared by Cancel.
+    closing_all: bool,
     /// The update check, and the release it found.
     updates: crate::core::update::Checker,
     update: Option<crate::core::update::Release>,
@@ -116,6 +119,7 @@ impl App {
             .position(|t| t.name == settings.theme)
             .unwrap_or(0);
         let theme = themes.get(theme_index).cloned().unwrap_or_default();
+        crate::gui::fonts::install(ctx);
         crate::gui::theme::apply(ctx, &theme, settings.font_size);
         highlight::set_theme(&theme);
         Self {
@@ -138,6 +142,7 @@ impl App {
             show_theme_picker: false,
             status: settings_error,
             quit_after_close: false,
+            closing_all: false,
             updates: crate::core::update::Checker::default(),
             update: None,
             installs: crate::core::update::Installer::default(),
@@ -341,10 +346,11 @@ impl App {
                 }
                 Err(e) => self.status = Some(format!("cannot open settings: {e}")),
             },
-            Command::CloseEditor => {
+            Command::CloseTab => {
                 let active = self.editor.buffers.active;
                 self.editor.request_close(active);
             }
+            Command::CloseAllTabs => self.close_all_tabs(),
             Command::Quit => self.request_quit(ctx),
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Command::ToggleTerminal => self.show_terminal = !self.show_terminal,
@@ -798,6 +804,26 @@ impl App {
             buf.record(crate::core::history::EditKind::Bulk, cursor);
             buf.text = text.clone();
             buf.saved_text = text;
+        }
+    }
+
+    /// Closes every tab. The clean ones go at once; the first with unsaved
+    /// work is asked about, and answering it comes back here for the rest.
+    /// Diffs and previews are tabs too, and they have nothing to save.
+    fn close_all_tabs(&mut self) {
+        self.editor.diffs.clear();
+        self.editor.active_diff = None;
+        self.editor.previews.clear();
+        self.editor.active_preview = None;
+        while let Some(index) = self.editor.buffers.list.iter().position(|b| !b.modified()) {
+            self.editor.close(index);
+        }
+        match self.editor.buffers.list.iter().position(|b| b.modified()) {
+            Some(index) => {
+                self.closing_all = true;
+                self.editor.pending_close = Some(index);
+            }
+            None => self.closing_all = false,
         }
     }
 
@@ -1593,11 +1619,14 @@ impl App {
                     self.editor.pending_close = None;
                     if self.quit_after_close {
                         self.request_quit(ctx);
+                    } else if self.closing_all {
+                        self.close_all_tabs();
                     }
                 } else {
                     self.status = Some(format!("could not write \"{name}\""));
                     self.editor.pending_close = None;
                     self.quit_after_close = false;
+                    self.closing_all = false;
                 }
             }
             Some(Choice::Discard) => {
@@ -1605,11 +1634,14 @@ impl App {
                 self.editor.pending_close = None;
                 if self.quit_after_close {
                     self.request_quit(ctx);
+                } else if self.closing_all {
+                    self.close_all_tabs();
                 }
             }
             Some(Choice::Cancel) => {
                 self.editor.pending_close = None;
                 self.quit_after_close = false;
+                self.closing_all = false;
             }
             None => {}
         }
@@ -2000,7 +2032,10 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // The close mark sits in the corner, above everything
                         // the bar does.
-                        if ui.button(egui::RichText::new("×").size(11.0)).clicked() {
+                        if ui
+                            .button(egui::RichText::new(icons().close).size(11.0))
+                            .clicked()
+                        {
                             close = true;
                         }
                         let toggle = |ui: &mut egui::Ui, on: &mut bool, label: &str, hint: &str| {
@@ -2215,6 +2250,7 @@ impl App {
     /// One frame of the editor. `eframe` calls it through `update`; a test
     /// calls it through `egui::Context::run`.
     pub fn ui(&mut self, ctx: &egui::Context) {
+        speed_up_scrolling(ctx);
         self.poll_settings(ctx);
         // Every shortcut comes from settings.json, so a rebind takes effect
         // the moment the file is saved.
@@ -2522,6 +2558,9 @@ impl App {
                         .gui_chord(Command::TogglePreview)
                         .map(|c| c.to_string());
                     self.editor.tab_bar(ui, &theme, preview_chord.as_deref());
+                    if std::mem::take(&mut self.editor.close_all_requested) {
+                        self.close_all_tabs();
+                    }
                 });
         }
 
@@ -2600,8 +2639,23 @@ impl App {
     }
 }
 
-/// One footer switch — a painted icon plus its label, the same row the
-/// terminal frontend draws at the bottom of its sidebar.
+/// How much further the wheel and the trackpad carry than the desktop asks
+/// for. A file is a long document and a terminal transcript a longer one, and
+/// the platform's own notch is a line and a half of either.
+const SCROLL_SPEED: f32 = 2.0;
+
+/// Scales this frame's scrolling before any panel reads it, so every scrolling
+/// thing in the window — the editor, the navigator, the terminal panel — moves
+/// at the same multiple of what the desktop sent.
+fn speed_up_scrolling(ctx: &egui::Context) {
+    ctx.input_mut(|i| {
+        i.raw_scroll_delta *= SCROLL_SPEED;
+        i.smooth_scroll_delta *= SCROLL_SPEED;
+    });
+}
+
+/// One footer switch — a glyph plus its label, the same row the terminal
+/// frontend draws at the bottom of its sidebar, in the same three shapes.
 fn nav_tab(
     ui: &mut egui::Ui,
     theme: &Theme,
@@ -2636,38 +2690,14 @@ fn nav_tab(
             color(theme.ui.hover_bg),
         );
     }
-    let stroke = egui::Stroke::new(1.2_f32, stroke_color);
     let c = egui::pos2(rect.min.x + 6.0 + icon_w / 2.0, rect.center().y);
-    let p = ui.painter();
-    match view {
-        SidebarView::Files => {
-            // A file list: three lines.
-            for dy in [-3.5, 0.0, 3.5] {
-                p.line_segment([c + egui::vec2(-4.5, dy), c + egui::vec2(4.5, dy)], stroke);
-            }
-        }
-        SidebarView::Search => {
-            p.circle_stroke(c + egui::vec2(-1.2, -1.2), 3.6, stroke);
-            p.line_segment([c + egui::vec2(1.6, 1.6), c + egui::vec2(4.6, 4.6)], stroke);
-        }
-        SidebarView::Git => {
-            // A branch: the main line with a commit at each end and a short
-            // fork peeling off to the right.
-            let r = 1.7;
-            let top = c + egui::vec2(-2.5, -4.0);
-            let bottom = c + egui::vec2(-2.5, 4.0);
-            p.circle_stroke(top, r, stroke);
-            p.circle_stroke(bottom, r, stroke);
-            p.line_segment(
-                [top + egui::vec2(0.0, r), bottom - egui::vec2(0.0, r)],
-                stroke,
-            );
-            p.line_segment(
-                [c + egui::vec2(-2.5, -1.0), c + egui::vec2(3.5, -3.2)],
-                stroke,
-            );
-        }
-    }
+    let icons = icons();
+    let mark = match view {
+        SidebarView::Files => icons.nav_files,
+        SidebarView::Search => icons.nav_search,
+        SidebarView::Git => icons.nav_git,
+    };
+    glyph(ui.painter(), c, mark, 13.0, stroke_color);
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_string(), font, stroke_color);

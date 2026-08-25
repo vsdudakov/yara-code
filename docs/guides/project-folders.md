@@ -28,7 +28,8 @@ same files twice, so Yara Code says `already inside core` rather than doing it.
 
 ## Removing one
 
-Right-click a folder's row in the navigator → **Remove Folder from Project**. It
+Right-click the folder's row in the navigator → **Remove Folder from Project**,
+which stands where Add Folder to Project stands on any other folder. It
 leaves the folder on disk and only drops it from the window. Removing the last
 one puts the window back to its empty state — that is a valid place to be, not
 an error.

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::core::clipboard as core_clipboard;
 use crate::core::command::{Command, ALL, FILE_MENU, HELP_MENU, START_PAGE, VIEW_MENU};
 use crate::core::fs_ops;
 use crate::core::git::{Blame, Change, LineState};
@@ -408,7 +409,23 @@ impl App {
                     self.editor.goto_request = Some(word);
                 }
             }
-            Command::SelectAll | Command::Copy | Command::Cut | Command::Paste => {}
+            Command::SelectAll | Command::Copy | Command::Cut => {}
+            // Text pasting belongs to whichever widget is being typed in, and
+            // egui does it. An *image* has nowhere to go in a text widget, so
+            // it is written to a file and its path is what the terminal gets
+            // — the same trade the terminal frontend makes, because a program
+            // in the shell can open a path and cannot open a bitmap.
+            Command::Paste => {
+                if self.terminal.focused {
+                    if let Some(path) = core_clipboard::system_image() {
+                        let quoted = core_clipboard::shell_quoted(&path);
+                        if let Some(pty) = self.terminal.sessions.active_mut() {
+                            pty.paste(&quoted);
+                            self.status = Some(format!("pasted {}", path.display()));
+                        }
+                    }
+                }
+            }
             Command::Help => self.show_help = true,
             Command::CommandPalette => self.picker = Some(Picker::new(PickerKind::Commands)),
             Command::QuickOpen => {

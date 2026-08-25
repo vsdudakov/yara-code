@@ -1,6 +1,7 @@
 //! Frontend-independent editor logic, shared by the GPU window and the TUI.
 
 pub mod buffer;
+pub mod clipboard;
 pub mod command;
 pub mod diff;
 pub mod find;

@@ -458,12 +458,8 @@ impl Editor {
                             };
                             let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
                             let resp = ui
-                                .add(egui::Label::new(title).sense(egui::Sense::click_and_drag()))
+                                .add(egui::Label::new(title).sense(egui::Sense::click()))
                                 .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            resp.dnd_set_drag_payload(TabDrag(i));
-                            // Answered below, once the tab's full rect is known.
-                            let dropped = resp.dnd_release_payload::<TabDrag>().map(|src| src.0);
-                            let hovering = resp.dnd_hover_payload::<TabDrag>().is_some();
 
                             // Modified dot / close cross, drawn as shapes so they show
                             // up regardless of font coverage. Hovering the dot turns it
@@ -507,13 +503,21 @@ impl Editor {
                             } else if resp.clicked() {
                                 activate = Some(i);
                             }
-                            (dropped, hovering)
                         });
-                        // Dropping is answered by the tab's own label — adding a
-                        // second widget over the tab would swallow its clicks — but the
-                        // mark is painted over the whole tab, which is what reads as
-                        // "this tab moves here".
-                        let (dropped, hovering) = tab.inner;
+                        // The whole tab drags and the whole tab accepts a drop,
+                        // the way a row in the navigator does — grabbing one by
+                        // its name alone was a target the width of the text and
+                        // a drag that missed the padding did nothing. The close
+                        // cross keeps its clicks: it is a child widget, and a
+                        // child is asked before the area it sits in.
+                        let tab_id = ui.id().with(("tab", i));
+                        let handle =
+                            ui.interact(tab.response.rect, tab_id, egui::Sense::click_and_drag());
+                        if handle.dragged() || handle.drag_started() {
+                            handle.dnd_set_drag_payload(TabDrag(i));
+                        }
+                        let dropped = handle.dnd_release_payload::<TabDrag>().map(|src| src.0);
+                        let hovering = handle.dnd_hover_payload::<TabDrag>().is_some();
                         if selected && self.active_preview.is_none() && reveal {
                             tab.response.scroll_to_me(None);
                         }

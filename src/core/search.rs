@@ -49,10 +49,10 @@ impl Field {
         vec![Field::Query, Field::Replace, Field::Exclude]
     }
 
-    /// Placeholder for an empty field. The heading above already names it, so
-    /// this only marks the row as an input waiting for text.
+    /// Placeholder for an empty field: none. The heading above already names
+    /// it, and the caret in it says it is waiting for text.
     pub fn hint(&self) -> &'static str {
-        "…"
+        ""
     }
 
     /// A sample value shown under the field, for the one whose syntax isn't
@@ -721,7 +721,11 @@ mod more_search_tests {
             Field::visible(),
             [Field::Query, Field::Replace, Field::Exclude]
         );
-        assert_eq!(Field::Query.hint(), "…");
+        assert_eq!(
+            Field::Query.hint(),
+            "",
+            "nothing stands in for an empty field"
+        );
         assert!(Field::Exclude.example().is_some());
         assert!(Field::Query.example().is_none());
     }

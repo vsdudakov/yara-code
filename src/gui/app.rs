@@ -5,7 +5,9 @@ use crate::core::command::{Command, ALL, FILE_MENU, HELP_MENU, START_PAGE, VIEW_
 use crate::core::fs_ops;
 use crate::core::git::{Blame, Change, LineState};
 /// Placeholder for an empty input; the heading above already names the field.
-const FIELD_HINT: &str = "…";
+/// Nothing stands in for an empty field: the label beside it already
+/// names it, and the caret says it is waiting for text.
+const FIELD_HINT: &str = "";
 use crate::core::project::Project;
 use crate::core::search::{self, Candidate, Field as SearchField, Search};
 use crate::core::settings::Settings;

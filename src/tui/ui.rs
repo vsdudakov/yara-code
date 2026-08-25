@@ -1055,16 +1055,14 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
         width: area.width.saturating_sub(2),
         height: 1,
     };
-    let ellipsis = app.icons.ellipsis;
+    // An empty field is left empty: the heading above already names it, and a
+    // caret in it says it is waiting for text better than a mark standing in
+    // for one ever did.
     let draw_field = |frame: &mut Frame, which: SearchField, at: Rect| {
         let focused = field_focused(which);
         let text = app.search.input(which);
-        let empty = text.is_empty();
-        let shown = if empty { ellipsis } else { text };
         let inner = at.width.saturating_sub(1) as usize;
-        let text_style = if empty {
-            on(theme.ui.fg_faint, theme.ui.editor_bg)
-        } else if focused {
+        let text_style = if focused {
             on(theme.ui.fg_bright, theme.ui.editor_bg)
         } else {
             on(theme.ui.fg, theme.ui.editor_bg)
@@ -1074,10 +1072,16 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
                 // Just padding: the lit heading above is what marks the field
                 // the keyboard is in.
                 Span::styled(" ", on(theme.ui.fg_faint, theme.ui.editor_bg)),
-                Span::styled(pad(&clip(shown, inner), inner), text_style),
+                Span::styled(pad(&clip(text, inner), inner), text_style),
             ])),
             at,
         );
+        if focused {
+            // The caret sits where the next character lands, and stops at the
+            // edge of the field rather than running past it.
+            let col = 1 + text.chars().count().min(inner) as u16;
+            frame.set_cursor_position((at.x + col, at.y));
+        }
     };
 
     let query_area = inset(y);
@@ -1334,14 +1338,11 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         width: area.width.saturating_sub(2),
         height: 1,
     };
-    let ellipsis = app.icons.ellipsis;
+    // As in the search panel: nothing stands in for an empty field, the caret
+    // does.
     let draw_field = |frame: &mut Frame, text: &str, active: bool, at: Rect| {
-        let empty = text.is_empty();
-        let shown = if empty { ellipsis } else { text };
         let inner = at.width.saturating_sub(1) as usize;
-        let text_style = if empty {
-            on(theme.ui.fg_faint, theme.ui.editor_bg)
-        } else if focused && active {
+        let text_style = if focused && active {
             on(theme.ui.fg_bright, theme.ui.editor_bg)
         } else {
             on(theme.ui.fg, theme.ui.editor_bg)
@@ -1349,10 +1350,14 @@ fn draw_find(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(" ", on(theme.ui.fg_faint, theme.ui.editor_bg)),
-                Span::styled(pad(&clip(shown, inner), inner), text_style),
+                Span::styled(pad(&clip(text, inner), inner), text_style),
             ])),
             at,
         );
+        if focused && active {
+            let col = 1 + text.chars().count().min(inner) as u16;
+            frame.set_cursor_position((at.x + col, at.y));
+        }
     };
 
     let query_area = inset(y);

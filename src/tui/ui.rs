@@ -477,13 +477,7 @@ fn draw_git(frame: &mut Frame, app: &mut App, area: Rect) {
         .git
         .worktrees
         .get(app.git.worktree)
-        .map(|w| {
-            if w.branch.is_empty() {
-                w.name()
-            } else {
-                format!("{} · {}", w.name(), w.branch)
-            }
-        })
+        .map(|w| w.label())
         .unwrap_or_default();
     let tree_area = inset(y);
     app.layout.git_worktree = tree_area;
@@ -2620,18 +2614,7 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .map(|p| p.display().to_string())
             .collect(),
-        Prompt::GitWorktree => app
-            .git
-            .worktrees
-            .iter()
-            .map(|w| {
-                if w.branch.is_empty() {
-                    w.name()
-                } else {
-                    format!("{} · {}", w.name(), w.branch)
-                }
-            })
-            .collect(),
+        Prompt::GitWorktree => app.git.worktrees.iter().map(|w| w.label()).collect(),
         Prompt::Browse { dir, entries, .. } => {
             let mut list: Vec<String> = Vec::new();
             if dir.parent().is_some() {

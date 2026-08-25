@@ -2551,7 +2551,7 @@ impl App {
                 }
                 // A diff tab shows its two panes in place of the text.
                 if let Some(index) = self.editor.active_diff {
-                    let Some(diff) = self.editor.diffs.get(index) else {
+                    let Some(diff) = self.editor.diffs.get_mut(index) else {
                         self.editor.active_diff = None;
                         return;
                     };

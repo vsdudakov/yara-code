@@ -49,9 +49,12 @@ right, each side with its own line numbers.
 - Changed lines are washed in the theme's own red and green.
 - Untracked files show as wholly added; deleted ones as wholly removed.
 
-The header carries the path, `+N −M`, an **Open File** button and a close mark.
-In the terminal frontend, <kbd>Esc</kbd> closes the diff and <kbd>Enter</kbd>
-opens the file it is showing.
+The header carries the path, `+N −M`, a pair of arrows, an **Open File** button
+and a close mark. Reviewing a diff is going change to change: the arrows — and
+<kbd>↑</kbd> / <kbd>↓</kbd> in both frontends — jump to the top of the next run
+of changed lines rather than moving a line at a time. In the terminal frontend,
+<kbd>Shift</kbd> with an arrow moves by one line, <kbd>Esc</kbd> closes the diff
+and <kbd>Enter</kbd> opens the file it is showing.
 
 `git` itself does the diffing (`git diff -U1000000`), so what you see is what
 `git diff` says.

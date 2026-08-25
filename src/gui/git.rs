@@ -237,7 +237,9 @@ impl GitPanel {
                 ..Default::default()
             };
             // The same indent the headings above use, so the letters line up
-            // under CHANGES rather than starting somewhere of their own.
+            // under CHANGES rather than starting somewhere of their own. A
+            // frameless button has no padding of its own, so all of it is
+            // asked for here.
             job.append(
                 &format!("{letter}  "),
                 10.0,
@@ -247,14 +249,17 @@ impl GitPanel {
             job.wrap.max_rows = 1;
             job.wrap.break_anywhere = true;
             let width = ui.available_width() - 26.0;
-            // Laid out left to right rather than with `add_sized`, which
-            // centres what it is given: a centred row drifts away from the
-            // heading above it as the panel widens, and a list of paths reads
-            // down its left edge or not at all.
+            // A button puts its text where the layout's main axis says, and
+            // every horizontal layout egui hands out — `add_sized`, a plain
+            // `horizontal` — aligns that axis to the centre, so a row the
+            // width of the panel drifts away from the heading above it as the
+            // panel widens. Asking for `Min` is what makes the paths read down
+            // one left edge.
             let clicked = ui
                 .allocate_ui_with_layout(
                     egui::vec2(width, 18.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
+                    egui::Layout::left_to_right(egui::Align::Center)
+                        .with_main_align(egui::Align::Min),
                     |ui| {
                         ui.add(
                             egui::Button::new(job)

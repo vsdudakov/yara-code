@@ -30,3 +30,26 @@ In the terminal frontend, while the panel has focus every key goes to the shell
 — only Toggle Terminal, New Terminal, Close Terminal and Quit stay reserved, so
 leave the panel with its toggle or by clicking another pane. In the window, the
 grid takes the keyboard when it has focus and gives ⌘-shortcuts back to the app.
+
+<kbd>Shift+Enter</kbd> sends the escape a terminal set up for an agent sends —
+`ESC` then Return — which is the newline an agent's prompt asks for rather than
+the Return that submits it. In the terminal frontend this needs the kitty
+keyboard protocol, which is what tells <kbd>Shift+Enter</kbd> from
+<kbd>Enter</kbd>; see [Key bindings](keys.md).
+
+## Selecting, pasting and the wheel
+
+**Drag across the grid** to select what the shell printed — in both frontends —
+and <kbd>Cmd+C</kbd> / <kbd>Ctrl+C</kbd> copies it. Taking the copy clears the
+highlight, so the next <kbd>Ctrl+C</kbd> is the shell's interrupt again. The
+pointer stays the panel's own even while a full-screen program is reading the
+wheel.
+
+<kbd>Cmd+V</kbd> / <kbd>Ctrl+V</kbd> pastes into the shell. An **image** on the
+clipboard has nowhere to go in a grid of characters, so it is written to a file
+and the path is pasted instead — which is what a program running in the shell
+can actually open.
+
+The wheel walks the 5000 lines of scrollback, unless the program in front asked
+to hear about the mouse: a full-screen program keeps a transcript of its own, so
+it is handed the notch and scrolls that instead.

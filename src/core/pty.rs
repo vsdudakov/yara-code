@@ -240,6 +240,34 @@ impl Pty {
         self.parser.lock().unwrap().screen().scrollback()
     }
 
+    /// Whether the program in front asked to hear about the mouse. One that
+    /// did keeps its own transcript and scrolls it itself — an agent, a pager,
+    /// an editor — so the wheel belongs to it and not to the history above.
+    pub fn wants_mouse(&self) -> bool {
+        self.with_screen(|screen| screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None)
+    }
+
+    /// What one notch of the wheel over a cell of the grid sends to such a
+    /// program. Rows and columns are counted from one on the wire, whichever
+    /// encoding is in use.
+    pub fn wheel_bytes(&self, up: bool, row: u16, col: u16) -> Vec<u8> {
+        let button: u16 = if up { 64 } else { 65 };
+        let row = row.saturating_add(1);
+        let col = col.saturating_add(1);
+        match self.with_screen(|screen| screen.mouse_protocol_encoding()) {
+            vt100::MouseProtocolEncoding::Sgr => {
+                format!("\x1b[<{button};{col};{row}M").into_bytes()
+            }
+            // The older encodings carry each number as a single byte above the
+            // space, which is why they stop at 223 and why a wheel notch far
+            // to the right reports the last cell they can name.
+            _ => {
+                let byte = |n: u16| 32u8.saturating_add(n.min(223) as u8);
+                vec![0x1b, b'[', b'M', byte(button), byte(col), byte(row)]
+            }
+        }
+    }
+
     // ----- selection -----------------------------------------------------
 
     /// A point on the visible grid, as a point in the shell's own text — see
@@ -688,6 +716,44 @@ mod tests {
         // Typing drops it, the way it does anywhere else.
         pty.clear_selection();
         assert!(pty.selection().is_none());
+    }
+
+    #[test]
+    fn the_wheel_goes_to_the_program_that_asked_for_the_mouse() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-wheel");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        // A bare shell never asked, so the wheel stays with the panel.
+        assert!(!pty.wants_mouse());
+        // The original encoding: the button and each coordinate as one byte
+        // above the space, counted from one. 64 is the wheel up, 65 down.
+        assert_eq!(
+            pty.wheel_bytes(true, 0, 0),
+            vec![0x1b, b'[', b'M', 96, 33, 33]
+        );
+        assert_eq!(
+            pty.wheel_bytes(false, 4, 9),
+            vec![0x1b, b'[', b'M', 97, 42, 37]
+        );
+        if !cfg!(unix) {
+            return;
+        }
+
+        // The two requests a full-screen program makes: report the mouse, and
+        // report it the way that can name a cell past the 223rd.
+        pty.write(b"printf '\\033[?1000h\\033[?1006h'\r");
+        let mut asked = false;
+        for _ in 0..200 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            asked = pty.wants_mouse();
+            if asked {
+                break;
+            }
+        }
+        assert!(asked, "the shell never passed the request on");
+        assert_eq!(pty.wheel_bytes(true, 2, 5), b"\x1b[<64;6;3M".to_vec());
+        assert_eq!(pty.wheel_bytes(false, 2, 5), b"\x1b[<65;6;3M".to_vec());
     }
 
     #[test]

@@ -36,7 +36,8 @@ where the window has `Cmd+Shift`. Every command is rebindable in
 | Previous / next tab | `Ctrl+PageUp` / `Ctrl+PageDown` | `Ctrl+PageUp` / `Ctrl+PageDown` |
 | Fold / unfold | `Cmd+Alt+F` | `Ctrl+Alt+F` |
 | Fold all / unfold all | `Cmd+Alt+0` / `Cmd+Alt+9` | `Ctrl+Alt+0` / `Ctrl+Alt+9` |
-| Select all / copy / cut / paste | the text widget's own | `Ctrl+A` / `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
+| Select all / copy / cut | the text widget's own; `Cmd+C` also copies a selection in the terminal panel | `Ctrl+A` / `Ctrl+C` / `Ctrl+X` |
+| Paste | `Cmd+V` (the text widget's own, plus an image into the terminal) | `Ctrl+V` |
 | File / View / Help menu | click | `F10` / `Alt+F10` / `Shift+F1` |
 | Context menu | right click | `Shift+F10` |
 | Key bindings overlay | `F1` | `F1` |

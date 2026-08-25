@@ -18,6 +18,10 @@ pub struct Terminal {
     /// Grab keyboard focus on the next frame, set when a session opens or the
     /// active tab changes.
     focus_pending: bool,
+    /// Wheel movement not yet worth a row, in points. A trackpad sends a few
+    /// points per frame, and rounding each frame on its own throws all of them
+    /// away — kept here, they add up to the row they are.
+    wheel_carry: f32,
 }
 
 /// The tab being dragged along the strip.
@@ -202,15 +206,54 @@ impl Terminal {
         self.focus_pending = false;
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-            // The wheel walks the scrollback, a few rows per notch; typing
-            // brings the live screen back, as in any terminal.
-            let wheel = ui.input(|i| i.smooth_scroll_delta.y);
-            if wheel.abs() >= 1.0 {
-                let rows = (wheel / cell_h).round() as isize;
-                let current = pty.scrollback() as isize;
-                pty.set_scrollback((current + rows).max(0) as usize);
+            // A program that asked for the mouse — an agent, a pager — scrolls
+            // a transcript of its own, so the wheel goes to it a notch at a
+            // time. Anything else leaves the wheel to the panel, which walks
+            // the scrollback; typing brings the live screen back, as in any
+            // terminal.
+            let to_program = pty.wants_mouse();
+            let step = if to_program { cell_h * 3.0 } else { cell_h };
+            self.wheel_carry += ui.input(|i| i.smooth_scroll_delta.y);
+            let steps = (self.wheel_carry / step).trunc();
+            self.wheel_carry -= steps * step;
+            let steps = steps as isize;
+            if steps != 0 {
+                if to_program {
+                    let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.min);
+                    let (row, col) = cell_at(at, rect, cell_w, cell_h, rows, cols);
+                    let notch = pty.wheel_bytes(steps > 0, row, col);
+                    let bytes: Vec<u8> = notch.repeat(steps.unsigned_abs());
+                    pty.write(&bytes);
+                } else {
+                    let current = pty.scrollback() as isize;
+                    pty.set_scrollback((current + steps).max(0) as usize);
+                }
             }
         }
+        // The mouse selects text on the grid, the way it does in the terminal
+        // frontend: a press starts a selection, a drag extends it, and a copy
+        // takes what it covers. The pointer stays the panel's own even when a
+        // program is reading the wheel — a full-screen program has no way to
+        // hand text back, and selecting its output is the point.
+        if response.drag_started() || response.clicked() {
+            // Where the button went down, not where the pointer had reached by
+            // the time egui called it a drag: a selection starts under the
+            // press, as it does everywhere else.
+            let down = ui
+                .input(|i| i.pointer.press_origin())
+                .or_else(|| response.interact_pointer_pos());
+            if let Some(pos) = down {
+                let (row, col) = cell_at(pos, rect, cell_w, cell_h, rows, cols);
+                pty.begin_selection(row, col);
+            }
+        }
+        if response.dragged() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let (row, col) = cell_at(pos, rect, cell_w, cell_h, rows, cols);
+                pty.extend_selection(row, col);
+            }
+        }
+
         let focused = response.has_focus();
         self.focused = focused;
         if focused {
@@ -232,13 +275,22 @@ impl Terminal {
         painter.rect_filled(rect, egui::CornerRadius::ZERO, color(theme.ui.editor_bg));
 
         let origin = rect.min;
+        // The selection is held against the shell's own text, so it stays on
+        // that text while the panel scrolls; the highlight is worked out per
+        // row, as the terminal frontend does it.
+        let selection = pty.selection();
+        let scrollback = pty.scrollback() as isize;
+        let selected_bg = color(theme.ui.selection);
         pty.with_screen(|screen| {
             for row in 0..rows {
                 let mut job = egui::text::LayoutJob::default();
                 let mut run = String::new();
                 let mut run_fmt: Option<egui::text::TextFormat> = None;
+                let highlighted = selection
+                    .and_then(|s| s.span_on(row as isize - scrollback, cols))
+                    .unwrap_or((0, 0));
                 for col in 0..cols {
-                    let (mut text, fmt) = match screen.cell(row, col) {
+                    let (mut text, mut fmt) = match screen.cell(row, col) {
                         Some(cell) => {
                             let contents = cell.contents();
                             let text = if contents.is_empty() {
@@ -250,6 +302,9 @@ impl Terminal {
                         }
                         None => (" ".to_string(), default_format(&font_id, theme)),
                     };
+                    if (highlighted.0..highlighted.1).contains(&col) {
+                        fmt.background = selected_bg;
+                    }
                     match &run_fmt {
                         Some(f) if *f == fmt => run.push_str(&text),
                         _ => {
@@ -334,8 +389,35 @@ fn mark_button(ui: &mut egui::Ui, theme: &Theme, mark: Mark, size: f32) -> egui:
     resp
 }
 
+/// The cell of the grid under a point, clamped to the grid — where a selection
+/// starts, and where the program that reads the mouse is told the wheel turned.
+fn cell_at(
+    pos: egui::Pos2,
+    rect: egui::Rect,
+    cell_w: f32,
+    cell_h: f32,
+    rows: u16,
+    cols: u16,
+) -> (u16, u16) {
+    let row = ((pos.y - rect.min.y) / cell_h).max(0.0) as u16;
+    let col = ((pos.x - rect.min.x) / cell_w).max(0.0) as u16;
+    (
+        row.min(rows.saturating_sub(1)),
+        col.min(cols.saturating_sub(1)),
+    )
+}
+
 fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
     let mut bytes: Vec<u8> = Vec::new();
+    // A copy while the grid has the keyboard takes what the mouse dragged
+    // over. Taking it clears the highlight, so the next Ctrl+C is the shell's
+    // interrupt again — the same trade the terminal frontend makes.
+    if ui.input(|i| i.events.contains(&egui::Event::Copy)) {
+        if let Some(text) = pty.selected_text() {
+            ui.ctx().copy_text(text);
+            pty.clear_selection();
+        }
+    }
     ui.input(|i| {
         for event in &i.events {
             match event {
@@ -364,6 +446,10 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
                         }
                     }
                     match key {
+                        // Shift+Enter is the newline an agent's prompt asks
+                        // for, and ESC then Return is what a terminal set up
+                        // for one sends.
+                        egui::Key::Enter if modifiers.shift => bytes.extend_from_slice(b"\x1b\r"),
                         egui::Key::Enter => bytes.push(b'\r'),
                         egui::Key::Backspace => bytes.push(0x7f),
                         egui::Key::Tab => bytes.push(b'\t'),
@@ -385,7 +471,10 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
         }
     });
     if !bytes.is_empty() {
+        // Typing returns the view to the live screen and drops the selection,
+        // as it does in any terminal.
         pty.set_scrollback(0);
+        pty.clear_selection();
         pty.write(&bytes);
     }
 }

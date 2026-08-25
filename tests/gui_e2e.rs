@@ -84,6 +84,8 @@ struct Harness {
     events: Vec<Event>,
     /// Every string laid out last frame, and where it was drawn.
     text: Vec<(String, Pos2)>,
+    /// What the last frame put on the clipboard, if anything.
+    copied: Option<String>,
 }
 
 impl Harness {
@@ -95,6 +97,7 @@ impl Harness {
             ctx,
             events: Vec::new(),
             text: Vec::new(),
+            copied: None,
         };
         // Two frames: egui lays out on the first and settles on the second.
         harness.frame();
@@ -119,6 +122,14 @@ impl Harness {
                 _ => None,
             })
             .collect();
+        self.copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            });
     }
 
     fn press(&mut self, key: Key, modifiers: Modifiers) {
@@ -397,6 +408,19 @@ fn the_git_panel_opens_a_diff_tab_in_the_window() {
         .find(|(t, _)| t.contains("README.md") && !t.contains("×"))
         .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
         .unwrap();
+    // The changed file reads down the panel's left edge, under the heading
+    // that counts it, rather than drifting to the middle as the panel widens.
+    let heading = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.starts_with("CHANGES"))
+        .map(|(_, p)| p.x)
+        .unwrap();
+    let row = at.x - 20.0;
+    assert!(
+        row <= heading && heading - row <= 12.0,
+        "the row starts at {row}, the heading at {heading}"
+    );
     harness.click(at);
     assert!(harness.shows("Changed."), "{}", harness.screen());
     assert!(
@@ -405,6 +429,84 @@ fn the_git_panel_opens_a_diff_tab_in_the_window() {
         harness.screen()
     );
     assert!(harness.shows("Open File"), "{}", harness.screen());
+}
+
+#[test]
+fn the_diff_arrows_jump_from_change_to_change() {
+    let project = Project::new("yara-gui-e2e-diff-arrows");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@e.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    // A change far enough down the file that it starts out below the fold.
+    let body: String = (1..=300).map(|n| format!("line {n}\n")).collect();
+    project.file("long.txt", &body);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "First"]);
+    project.file("long.txt", &body.replace("line 250", "the-far-change"));
+
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::G, Modifiers::CTRL | Modifiers::SHIFT);
+    let row = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.contains("long.txt") && !t.contains("×"))
+        .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
+        .unwrap();
+    harness.click(row);
+    assert!(harness.shows("line 1"), "{}", harness.screen());
+    assert!(
+        !harness.shows("the-far-change"),
+        "the change starts out below the fold"
+    );
+
+    // The arrows sit left of Open File in the diff's own header: each is
+    // sixteen points wide, with the theme's spacing and button padding
+    // between them and the text beside them.
+    let (_, open_file) = harness
+        .text
+        .iter()
+        .find(|(t, _)| t == "Open File")
+        .cloned()
+        .unwrap();
+    let down = Pos2::new(open_file.x - 20.0, open_file.y + 7.0);
+    let up = Pos2::new(open_file.x - 42.0, open_file.y + 7.0);
+    harness.click(down);
+    assert!(
+        harness.shows("the-far-change"),
+        "the down arrow jumps to the change: {}",
+        harness.screen()
+    );
+    harness.click(up);
+    assert!(
+        !harness.shows("the-far-change"),
+        "the up arrow comes back: {}",
+        harness.screen()
+    );
+    assert!(harness.shows("line 1"), "{}", harness.screen());
+
+    // The arrow keys do the same, as they do in the terminal frontend.
+    harness.press(Key::ArrowDown, Modifiers::NONE);
+    assert!(
+        harness.shows("the-far-change"),
+        "the down key jumps to the change: {}",
+        harness.screen()
+    );
+    harness.press(Key::ArrowUp, Modifiers::NONE);
+    assert!(
+        !harness.shows("the-far-change") && harness.shows("line 1"),
+        "the up key comes back: {}",
+        harness.screen()
+    );
 }
 
 #[test]
@@ -580,8 +682,45 @@ fn the_terminal_opens_a_second_session_and_takes_typing() {
         .map(|p| Pos2::new(p.x + 40.0, p.y + 60.0))
         .unwrap();
     harness.click(at);
-    harness.type_text("echo hi");
+    harness.type_text("echo yara-copy-marker");
     harness.press(Key::Enter, Modifiers::NONE);
+
+    // The shell answers on its own schedule; frames keep coming until it has.
+    let mut echoed = false;
+    for _ in 0..200 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        harness.frame();
+        echoed = harness.shows("yara-copy-marker");
+        if echoed {
+            break;
+        }
+    }
+    assert!(
+        echoed,
+        "the shell never echoed the line: {}",
+        harness.screen()
+    );
+
+    // Drag over the echoed line and copy it: the grid answers the mouse and
+    // the clipboard the way the terminal frontend's does.
+    let line = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.contains("yara-copy-marker"))
+        .map(|(_, p)| *p)
+        .unwrap();
+    harness.drag(
+        Pos2::new(line.x + 1.0, line.y + 4.0),
+        Pos2::new(line.x + 300.0, line.y + 4.0),
+    );
+    harness.events.push(Event::Copy);
+    harness.frame();
+    let copied = harness.copied.clone().unwrap_or_default();
+    assert!(
+        copied.contains("yara-copy-marker"),
+        "the selection reached the clipboard: {copied:?}"
+    );
+
     harness.press(Key::W, Modifiers::COMMAND | Modifiers::ALT);
     harness.frame();
 }

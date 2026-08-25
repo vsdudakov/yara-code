@@ -43,6 +43,7 @@ impl Drop for RestoreTerminal {
             LeaveAlternateScreen,
             DisableMouseCapture,
             DisableBracketedPaste,
+            crossterm::cursor::SetCursorStyle::DefaultUserShape,
             crossterm::cursor::Show
         );
     }
@@ -59,6 +60,7 @@ pub fn run(root: Option<PathBuf>, file: Option<PathBuf>) -> io::Result<()> {
             LeaveAlternateScreen,
             DisableMouseCapture,
             DisableBracketedPaste,
+            crossterm::cursor::SetCursorStyle::DefaultUserShape,
             crossterm::cursor::Show
         );
         default_hook(info);
@@ -70,7 +72,11 @@ pub fn run(root: Option<PathBuf>, file: Option<PathBuf>) -> io::Result<()> {
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
-        EnableBracketedPaste
+        EnableBracketedPaste,
+        // A bar that blinks, the way an editor's caret does everywhere else —
+        // the window frontend draws one, and a block that sits still reads as
+        // a selection rather than a place to type.
+        crossterm::cursor::SetCursorStyle::BlinkingBar
     )?;
     // Without the kitty keyboard protocol a terminal cannot tell Ctrl+Shift+S
     // from Ctrl+S. Where it is available, ask for it: that is what makes the

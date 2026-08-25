@@ -2118,7 +2118,12 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
                 if *italic {
                     style = style.add_modifier(Modifier::ITALIC);
                 }
-                let piece: String = text.chars().take(limit - col).collect();
+                // Tabs take the columns they stand for before anything is
+                // measured: a Span carrying a raw tab advances the terminal
+                // further than the frame accounts for, and the cells past it
+                // keep what the last file left there.
+                let piece = crate::core::indent::expand_tabs(text, guide_width, col);
+                let piece: String = piece.chars().take(limit - col).collect();
                 let len = piece.chars().count();
                 let touched = selected.is_some_and(|(s, e)| col < e && col + len > s);
                 let underlined = link.is_some_and(|(_, s, e)| col < e && col + len > s);
@@ -2224,9 +2229,17 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.focus == Focus::Editor {
         if let Some(row) = cursor_screen_row {
+            // The caret sits where the text is drawn, so it counts the
+            // columns a tab takes rather than the one character it is.
+            let shown_col = app
+                .buffers
+                .active()
+                .and_then(|b| b.text.split('\n').nth(cursor_line))
+                .map(|line| crate::core::indent::display_column(line, cursor_col, guide_width))
+                .unwrap_or(cursor_col);
             let cx = text_area.x
                 + gutter as u16
-                + cursor_col.saturating_sub(col_scroll).min(text_width) as u16;
+                + shown_col.saturating_sub(col_scroll).min(text_width) as u16;
             let cy = text_area.y + row as u16;
             if cy < text_area.y + text_area.height {
                 frame.set_cursor_position((cx, cy));

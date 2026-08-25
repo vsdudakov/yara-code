@@ -146,6 +146,47 @@ pub fn newline_edit(text: &str, cursor: usize, extension: &str, config: &Indent)
 /// whitespace before the line's own text, a tab counting as `width` columns.
 /// A blank line takes the guides shared by its nearest non-blank neighbours,
 /// so a block's guides run unbroken through the empty lines inside it.
+/// A tab as many spaces as it stands for on screen, aligned to the next tab
+/// stop. A tab is one character in the buffer and several columns in a
+/// terminal, and every part of the display has to agree on how many: a frame
+/// drawn with fewer cells than the terminal advances leaves the row holding
+/// whatever was under it, which is how opening a tab-indented Makefile and then
+/// another file left the Makefile's characters behind.
+pub fn expand_tabs(text: &str, width: usize, from_column: usize) -> String {
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+    let width = width.max(1);
+    let mut out = String::with_capacity(text.len());
+    let mut column = from_column;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let stop = width - (column % width);
+            out.extend(std::iter::repeat_n(' ', stop));
+            column += stop;
+        } else {
+            out.push(ch);
+            column += 1;
+        }
+    }
+    out
+}
+
+/// The screen column a character index sits at, once the tabs before it have
+/// taken the columns they stand for.
+pub fn display_column(line: &str, char_index: usize, width: usize) -> usize {
+    let width = width.max(1);
+    let mut column = 0;
+    for ch in line.chars().take(char_index) {
+        column += if ch == '\t' {
+            width - (column % width)
+        } else {
+            1
+        };
+    }
+    column
+}
+
 pub fn guides(text: &str, width: usize) -> Vec<usize> {
     let width = width.max(1);
     let lines: Vec<&str> = text.split('\n').collect();
@@ -184,6 +225,28 @@ pub fn guides(text: &str, width: usize) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_takes_the_columns_it_stands_for() {
+        // Aligned to the next stop, not a fixed run of spaces.
+        assert_eq!(expand_tabs("\tx", 4, 0), "    x");
+        assert_eq!(expand_tabs("ab\tx", 4, 0), "ab  x");
+        assert_eq!(expand_tabs("abc\tx", 4, 0), "abc x");
+        assert_eq!(expand_tabs("abcd\tx", 4, 0), "abcd    x");
+        // A piece that starts partway along the row carries on from there.
+        assert_eq!(expand_tabs("\tx", 4, 2), "  x");
+        // Text with no tab is handed back as it is.
+        assert_eq!(expand_tabs("plain", 4, 0), "plain");
+    }
+
+    #[test]
+    fn the_caret_counts_the_columns_a_tab_took() {
+        // Two tabs and a letter: the caret after the letter is at column 9.
+        assert_eq!(display_column("\t\tx", 3, 4), 9);
+        assert_eq!(display_column("\t\tx", 0, 4), 0);
+        assert_eq!(display_column("\t\tx", 1, 4), 4);
+        assert_eq!(display_column("no tabs", 3, 4), 3);
+    }
 
     fn apply(text: &str, ext: &str) -> String {
         apply_with(text, ext, &Indent::default())

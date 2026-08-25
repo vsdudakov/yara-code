@@ -125,6 +125,14 @@ pub fn ansi256(theme: &Theme, idx: u8) -> Rgb {
 }
 
 pub fn dark_plus() -> Theme {
+    let mut theme = dark_plus_stock();
+    dim_comments(&mut theme, 0x5A6472);
+    color_imports(&mut theme, 0x4EC9B0);
+    theme
+}
+
+/// Dark+ exactly as VS Code ships it, before the two touches above.
+fn dark_plus_stock() -> Theme {
     Theme {
         name: "Dark+".into(),
         dark: true,
@@ -140,8 +148,11 @@ pub fn dark_plus() -> Theme {
             fg_faint: rgb(0x6E6E6E),
             fg_bright: rgb(0xFFFFFF),
             line_number: rgb(0x858585),
-            accent: rgb(0x007ACC),
-            accent_light: rgb(0x4FC1FF),
+            // Chrome, not syntax: a splitter under the pointer, a lit heading,
+            // a link. Muted on purpose — at full saturation these read as a
+            // warning every time a pane is resized.
+            accent: rgb(0x3B6E8F),
+            accent_light: rgb(0x7FAFCC),
             selection: rgb(0x264F78),
             cursor: rgb(0xAEAFAD),
             hover_bg: rgb(0x2A2D2E),
@@ -192,7 +203,7 @@ pub fn dark_plus() -> Theme {
 /// coloured rather than left plain white, and comments are dimmed so they sit
 /// back instead of glowing.
 pub fn dark_modern() -> Theme {
-    let mut theme = dark_plus();
+    let mut theme = dark_plus_stock();
     theme.name = "Dark Modern".into();
     theme.ui.editor_bg = rgb(0x1F1F1F);
     theme.ui.sidebar_bg = rgb(0x181818);
@@ -201,7 +212,7 @@ pub fn dark_modern() -> Theme {
     theme.ui.status_bg = rgb(0x181818);
     theme.ui.border = rgb(0x2B2B2B);
     theme.ui.line_number = rgb(0x6E7681);
-    theme.ui.accent = rgb(0x0078D4);
+    theme.ui.accent = rgb(0x3F7396);
     theme.ui.hover_bg = rgb(0x2A2D2E);
     theme.ui.selected_bg = rgb(0x04395E);
     dim_comments(&mut theme, 0x5C6370);
@@ -210,6 +221,14 @@ pub fn dark_modern() -> Theme {
 }
 
 pub fn light_plus() -> Theme {
+    let mut theme = light_plus_stock();
+    dim_comments(&mut theme, 0x6E8B6E);
+    color_imports(&mut theme, 0x267F99);
+    theme
+}
+
+/// Light+ exactly as VS Code ships it, before the two touches above.
+fn light_plus_stock() -> Theme {
     Theme {
         name: "Light+".into(),
         dark: false,
@@ -225,8 +244,8 @@ pub fn light_plus() -> Theme {
             fg_faint: rgb(0x8E8E8E),
             fg_bright: rgb(0x000000),
             line_number: rgb(0x237893),
-            accent: rgb(0x005FB8),
-            accent_light: rgb(0x0078D4),
+            accent: rgb(0x3A6D9A),
+            accent_light: rgb(0x33698F),
             selection: rgb(0xADD6FF),
             cursor: rgb(0x000000),
             hover_bg: rgb(0xE8E8E8),
@@ -285,8 +304,8 @@ pub fn monokai() -> Theme {
             fg_faint: rgb(0x75715E),
             fg_bright: rgb(0xFFFFFF),
             line_number: rgb(0x90908A),
-            accent: rgb(0xA6E22E),
-            accent_light: rgb(0xE6DB74),
+            accent: rgb(0x8A9A5B),
+            accent_light: rgb(0xC2B98A),
             selection: rgb(0x49483E),
             cursor: rgb(0xF8F8F0),
             hover_bg: rgb(0x3E3D32),
@@ -444,9 +463,9 @@ pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, ThemeE
 
     let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("dark");
     let mut theme = if kind == "light" {
-        light_plus()
+        light_plus_stock()
     } else {
-        dark_plus()
+        dark_plus_stock()
     };
     theme.dark = kind != "light";
     theme.name = value

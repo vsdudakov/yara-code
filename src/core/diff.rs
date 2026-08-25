@@ -180,6 +180,35 @@ fn hunk_start(header: &str) -> Option<(usize, usize)> {
 }
 
 /// A file with no old version — every line is an addition.
+/// The row a review jumps to next: the first row of the next run of changed
+/// rows after `from`. Reviewing a diff is going change to change, not line to
+/// line, so the arrows in the two-pane view move by this rather than by one.
+/// `None` once the last change is behind.
+pub fn next_change(rows: &[Row], from: usize) -> Option<usize> {
+    let mut seen_same = rows.get(from).is_none_or(|r| r.kind == Kind::Same);
+    for (i, row) in rows.iter().enumerate().skip(from + 1) {
+        if row.kind == Kind::Same {
+            seen_same = true;
+        } else if seen_same {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// The first row of the run of changes before `from`, so going back lands on
+/// the top of that change rather than its last line.
+pub fn previous_change(rows: &[Row], from: usize) -> Option<usize> {
+    let end = rows[..from.min(rows.len())]
+        .iter()
+        .rposition(|r| r.kind != Kind::Same)?;
+    let start = rows[..end]
+        .iter()
+        .rposition(|r| r.kind == Kind::Same)
+        .map_or(0, |same| same + 1);
+    Some(start)
+}
+
 pub fn all_added(text: &str) -> Vec<Row> {
     text.lines()
         .enumerate()
@@ -212,6 +241,38 @@ pub fn all_removed(text: &str) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_arrows_move_from_one_change_to_the_next() {
+        let row = |kind: Kind| Row {
+            kind,
+            left: None,
+            right: None,
+        };
+        // same, change, change, same, same, change, same
+        let rows = vec![
+            row(Kind::Same),
+            row(Kind::Added),
+            row(Kind::Added),
+            row(Kind::Same),
+            row(Kind::Same),
+            row(Kind::Removed),
+            row(Kind::Same),
+        ];
+        // From the top, the first change is the run starting at 1.
+        assert_eq!(next_change(&rows, 0), Some(1));
+        // Standing inside a change skips the rest of it and lands on the next.
+        assert_eq!(next_change(&rows, 1), Some(5));
+        assert_eq!(next_change(&rows, 2), Some(5));
+        // Past the last change there is nowhere to go.
+        assert_eq!(next_change(&rows, 5), None);
+        assert_eq!(next_change(&rows, 6), None);
+        // Going back lands on the top of the change, not its last line.
+        assert_eq!(previous_change(&rows, 6), Some(5));
+        assert_eq!(previous_change(&rows, 5), Some(1));
+        assert_eq!(previous_change(&rows, 1), None);
+        assert_eq!(previous_change(&rows, 0), None);
+    }
 
     const DIFF: &str = "\
 diff --git a/f.txt b/f.txt

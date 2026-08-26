@@ -15,6 +15,9 @@ pub enum TreeEvent {
     Open(PathBuf),
     /// "Add Folder to Project" from the navigator's menu.
     AddFolder,
+    /// A command the navigator asked for, for the app to run as if it had
+    /// come from a menu — the empty state's two ways to get a folder.
+    Run(Command),
     /// "Remove Folder from Project": drops a root, leaving it on disk.
     RemoveFolder(PathBuf),
     /// User picked "Delete"; the app confirms before touching the disk.
@@ -505,7 +508,10 @@ impl FileTree {
         }
     }
 
-    /// What the navigator shows with no folder open: how to get one.
+    /// What the navigator shows with no folder open: how to get one. The
+    /// recent list leads, because the folder wanted next is nearly always one
+    /// of the folders opened before; adding a folder to a project that has
+    /// none is the same thing as opening it, and is offered as that.
     fn empty_state(&mut self, ui: &mut egui::Ui, theme: &Theme, events: &mut Vec<TreeEvent>) {
         ui.add_space(10.0);
         ui.vertical_centered(|ui| {
@@ -515,16 +521,19 @@ impl FileTree {
                     .size(12.0),
             );
             ui.add_space(8.0);
-            if ui
-                .button(
-                    egui::RichText::new("Add Folder to Project...")
-                        .color(color(theme.ui.fg))
-                        .size(12.0),
-                )
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
-                events.push(TreeEvent::AddFolder);
+            for command in [Command::OpenRecent, Command::OpenFolder] {
+                if ui
+                    .button(
+                        egui::RichText::new(command.label())
+                            .color(color(theme.ui.fg))
+                            .size(12.0),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked()
+                {
+                    events.push(TreeEvent::Run(command));
+                }
+                ui.add_space(4.0);
             }
         });
         let remaining = ui.available_height().max(20.0);

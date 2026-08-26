@@ -690,7 +690,7 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             )),
             Line::from(Span::styled(
                 pad(
-                    &format!(" {}  add a folder", chord(Command::AddFolder)),
+                    &format!(" {}  open recent", chord(Command::OpenRecent)),
                     inner.width as usize,
                 ),
                 on(theme.ui.fg_faint, theme.ui.sidebar_bg),
@@ -2290,7 +2290,7 @@ fn draw_shell(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Spawn the first shell before the header is drawn, so the tab strip can
     // already list it.
-    let cwd = app.project.root_or_cwd();
+    let cwd = app.project.shell_cwd();
     app.shell.ensure(&cwd);
 
     // Panel header: the label, one numbered tab per session with a close

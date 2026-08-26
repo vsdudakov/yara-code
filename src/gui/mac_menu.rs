@@ -8,6 +8,11 @@
 //! same chords. Every other platform keeps the strip, because it is the only
 //! bar those platforms have.
 //!
+//! Edit is the one menu here that the strip has no counterpart for: a Mac
+//! application is expected to carry one, and a menu's key equivalent is
+//! answered before the window sees the key, which is what lets ⌘V reach the
+//! editor at all — see [`EDIT_MENU`].
+//!
 //! Clicks come back as commands rather than as calls: AppKit hands an action
 //! to an Objective-C object on the main thread, which pushes the item's tag —
 //! its index into [`ALL`] — onto a queue that the next frame drains. The
@@ -22,7 +27,7 @@ use objc2::{define_class, msg_send, sel, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString};
 
-use crate::core::command::{Chord, Command, ALL, FILE_MENU, HELP_MENU, VIEW_MENU};
+use crate::core::command::{Chord, Command, ALL, EDIT_MENU, FILE_MENU, HELP_MENU, VIEW_MENU};
 use crate::core::settings::Settings;
 
 /// Commands the bar has asked for and the window has not yet run. A queue
@@ -88,6 +93,7 @@ pub fn install(settings: &Settings, has_update: bool) {
     bar.addItem(&submenu(mtm, "Yara Code", app_menu(mtm, &target, settings)));
     for (title, entries) in [
         ("File", FILE_MENU),
+        ("Edit", EDIT_MENU),
         ("View", VIEW_MENU),
         ("Help", HELP_MENU),
     ] {
@@ -119,7 +125,7 @@ pub fn install(settings: &Settings, has_update: bool) {
     app.setMainMenu(Some(&bar));
 }
 
-/// Whether an entry of one of the three menus is left out of it on macOS.
+/// Whether an entry of one of the four menus is left out of it on macOS.
 /// Settings and Quit belong to the application menu here, and putting them in
 /// both would give two rows the same chord — with Quit that matters, because
 /// the row AppKit would reach first is its own `terminate:`, which does not

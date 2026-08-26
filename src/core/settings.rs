@@ -263,9 +263,13 @@ fn gui_default_chord(command: Command) -> Option<&'static str> {
         Command::Redo => "Cmd+Shift+Z",
         // Select all, copy and cut are the text widget's own; binding them
         // here would take them away from it. Paste is bound because the
-        // terminal panel needs it for an image — egui delivers pasted *text*
-        // as its own event, which this binding does not touch, so a text
-        // paste still lands in whichever field is being typed in.
+        // terminal panel needs it for an image, and a bound chord is what puts
+        // ⌘V in the macOS Edit menu — the only place the press can be caught.
+        // egui turns a paste chord into a paste of its own text and never
+        // passes the key on, and a clipboard holding an image has no text for
+        // it to pass, so on the platforms that draw their menus in the window
+        // an image reaches the terminal from the Edit menu rather than the
+        // keyboard.
         Command::SelectAll | Command::Copy | Command::Cut => return None,
         Command::Paste => "Cmd+V",
         // VS Code folds with two-key chords (⌘K ⌘0); these are the single-chord

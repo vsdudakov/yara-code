@@ -881,3 +881,152 @@ fn close_all_tabs_leaves_the_window_with_nothing_open() {
     assert!(!harness.shows("second"), "{}", harness.screen());
     assert!(harness.shows("Open Folder"), "{}", harness.screen());
 }
+
+impl Harness {
+    /// The width the navigator opens at. The same file name is drawn twice —
+    /// once in the navigator, once on its tab — and which side of this line it
+    /// falls on is what tells the two apart.
+    const SIDEBAR: f32 = 220.0;
+
+    /// How far down the tab strip reaches. The file in front is named in the
+    /// status bar as well, and that one is at the foot of the window.
+    const STRIP: f32 = 60.0;
+
+    /// The middle of a file's tab in the strip.
+    fn tab_of(&self, name: &str) -> Option<Pos2> {
+        self.text
+            .iter()
+            .find(|(drawn, at)| drawn == name && at.x > Self::SIDEBAR && at.y < Self::STRIP)
+            .map(|(_, at)| Pos2::new(at.x + 12.0, at.y + 6.0))
+    }
+
+    /// The close cross of a file's tab: the first one drawn to the right of
+    /// the name, since every tab carries its own.
+    fn tab_cross(&self, name: &str) -> Option<Pos2> {
+        let (_, name_at) = self
+            .text
+            .iter()
+            .find(|(drawn, at)| drawn == name && at.x > Self::SIDEBAR && at.y < Self::STRIP)?;
+        self.text
+            .iter()
+            .filter(|(drawn, at)| drawn == "\u{d7}" && at.x > name_at.x && at.y < Self::STRIP)
+            .min_by(|(_, a), (_, b)| a.x.total_cmp(&b.x))
+            .map(|(_, at)| Pos2::new(at.x + 3.0, at.y + 6.0))
+    }
+
+    /// Whether the navigator — not the start page behind it, which names the
+    /// same commands — draws a piece of text.
+    fn navigator_shows(&self, text: &str) -> bool {
+        self.text
+            .iter()
+            .any(|(drawn, at)| drawn.contains(text) && at.x < Self::SIDEBAR)
+    }
+}
+
+#[test]
+fn a_tab_answers_a_click_on_its_name_and_on_its_cross() {
+    let project = Project::new("yara-gui-e2e-tabclicks");
+    project.file("second.txt", "the second file\n");
+    let mut harness = Harness::open(Some(&project));
+    for name in ["README.md", "second.txt"] {
+        let at = harness.position_of(name).expect("the navigator lists it");
+        harness.click(at);
+    }
+    assert!(harness.shows("the second file"), "{}", harness.screen());
+
+    // Both files are in the strip; clicking the one behind brings it forward.
+    let tab = harness.tab_of("README.md").expect("a tab of its own");
+    harness.click(tab);
+    assert!(harness.shows("A line of prose."), "{}", harness.screen());
+
+    // The cross on that same tab closes it, and only it.
+    let cross = harness.tab_cross("README.md").expect("a cross on the tab");
+    harness.click(cross);
+    assert!(!harness.shows("A line of prose."), "{}", harness.screen());
+    assert!(harness.shows("the second file"), "{}", harness.screen());
+}
+
+#[test]
+fn with_no_folder_the_navigator_offers_the_recent_list_first() {
+    let harness = Harness::open(None);
+    assert!(
+        harness.navigator_shows("No folder in the project"),
+        "{}",
+        harness.screen()
+    );
+    assert!(
+        harness.navigator_shows("Open Recent..."),
+        "{}",
+        harness.screen()
+    );
+    assert!(
+        harness.navigator_shows("Open Folder..."),
+        "{}",
+        harness.screen()
+    );
+    // Adding a folder to a project that has none is just opening one, and the
+    // navigator no longer offers it as a separate thing.
+    assert!(
+        !harness.navigator_shows("Add Folder to Project..."),
+        "{}",
+        harness.screen()
+    );
+}
+
+impl Harness {
+    fn scroll(&mut self, at: Pos2, lines: f32) {
+        self.events.push(Event::PointerMoved(at));
+        self.events.push(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, lines),
+            modifiers: Modifiers::NONE,
+        });
+        self.frame();
+        self.frame();
+    }
+
+    /// Where a piece of text sits in the frame's paint order — what is drawn
+    /// later is drawn on top. Matched whole, because the editor lays a file
+    /// out as one galley and every line of it would match a part.
+    fn painted_at(&self, text: &str) -> Option<usize> {
+        self.text.iter().position(|(drawn, _)| drawn == text)
+    }
+}
+
+#[test]
+fn a_tabs_menu_is_drawn_over_the_sticky_header_and_not_under_it() {
+    let project = Project::new("yara-gui-e2e-sticky");
+    let mut body = String::from("fn the_enclosing_function() {\n");
+    for i in 0..80 {
+        body.push_str(&format!("    let line_{i} = {i};\n"));
+    }
+    body.push_str("}\n");
+    project.file("long.rs", &body);
+    let mut harness = Harness::open(Some(&project));
+    let at = harness
+        .position_of("long.rs")
+        .expect("the navigator lists it");
+    harness.click(at);
+    // Far enough down that the function's own line has scrolled off, which is
+    // what pins it in the band at the top of the view.
+    harness.scroll(Pos2::new(700.0, 400.0), -30.0);
+    const HEADER: &str = "fn the_enclosing_function() {";
+    assert!(
+        harness.painted_at(HEADER).is_some(),
+        "the header is pinned: {}",
+        harness.screen()
+    );
+
+    // The band is a layer of its own, laid over the text it scrolls past. A
+    // menu has to stand over it in turn, and once did not.
+    let tab = harness.tab_of("long.rs").expect("a tab of its own");
+    harness.right_click(tab);
+    let header = harness.painted_at(HEADER).expect("the pinned header");
+    let menu = harness
+        .painted_at("Close All Tabs")
+        .expect("the tab's menu");
+    assert!(
+        menu > header,
+        "the menu is painted last: menu {menu}, header {header}"
+    );
+}

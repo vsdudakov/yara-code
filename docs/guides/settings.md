@@ -48,6 +48,9 @@ The file explains itself: every key is written out with a comment over it, and
   // Modifier held while clicking an identifier to jump to its definition.
   "goto_modifiers": { "gui": ["cmd"], "tui": ["ctrl", "alt"] },
 
+  // Modifier held while the pointer rests on a line to blame it.
+  "blame_modifiers": { "gui": ["shift"], "tui": ["shift"] },
+
   // Key bindings per frontend; only what differs from the defaults is listed.
   "keys": { "gui": { "save": "Cmd+S" }, "tui": { "save": "Ctrl+S" } },
 
@@ -72,6 +75,7 @@ from the navigator and from project search.
 | `scroll_speed` | How much further the wheel and the trackpad carry than the platform asks for, in both frontends. `1.0` is the platform's own notch — three lines in a terminal — and the default `1.5` moves four rows where a terminal would move three. Held between `0.25` and `8`. |
 | `show_sidebar`, `show_terminal` | Which panels are open at startup. |
 | `goto_modifiers` | Which modifier turns a click into go-to-definition. A list, because terminals differ in which ones they deliver — and none deliver Cmd, which is why the terminal default is Ctrl or Alt. |
+| `blame_modifiers` | Which modifier held under the pointer blames the line it rests on, in the status bar. Shift in both frontends by default: the other three are spoken for by go-to-definition in one or the other. |
 | `keys` | Every binding, per frontend. See [Key bindings](keys.md). |
 | `recent_projects` | Most recent first, capped at 15 — what **Open Recent** lists. |
 

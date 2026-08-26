@@ -73,3 +73,7 @@ than the file behind it.
   ago, the pull request its message names (`(#412)` or
   `Merge pull request #7`), and the commit summary. A line you have not
   committed yet says so.
+- **Hold <kbd>Shift</kbd> and rest the pointer on a line** to blame that line
+  instead, without moving the caret to it — the same field, in both frontends.
+  Let go and it returns to the caret's line. `blame_modifiers` in
+  [settings.json](settings.md) picks the modifier.

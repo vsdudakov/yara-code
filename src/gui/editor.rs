@@ -64,6 +64,9 @@ pub struct Editor {
     pub find: Find,
     /// Character range to select on the next frame, from a find step.
     pending_select: Option<(usize, usize)>,
+    /// Line the pointer rests on while the blame modifier is held, blamed in
+    /// the caret's place. Counted from one, as `cursor` is.
+    pub blame_hover: Option<usize>,
 }
 
 /// The tab being dragged along the strip.
@@ -774,12 +777,14 @@ impl Editor {
         theme: &Theme,
         indent_config: &Indent,
         goto_modifiers: &[Modifier],
+        blame_modifiers: &[Modifier],
         git_lines: &BTreeMap<usize, LineState>,
     ) {
         self.refresh_regions();
         // Nothing open: the app draws its start page instead.
         let Some(buf) = self.buffers.active() else {
             self.cursor = None;
+            self.blame_hover = None;
             return;
         };
 
@@ -1057,15 +1062,33 @@ impl Editor {
                     }
 
                     // ⌘-hover underlines the identifier under the pointer;
-                    // ⌘-click asks the app to jump to its definition.
-                    let goto_held = ui.input(|i| {
-                        goto_modifiers.iter().any(|wanted| match wanted {
-                            Modifier::Cmd => i.modifiers.command,
-                            Modifier::Ctrl => i.modifiers.ctrl,
-                            Modifier::Alt => i.modifiers.alt,
-                            Modifier::Shift => i.modifiers.shift,
+                    let held = |wanted: &[Modifier]| {
+                        ui.input(|i| {
+                            wanted.iter().any(|wanted| match wanted {
+                                Modifier::Cmd => i.modifiers.command,
+                                Modifier::Ctrl => i.modifiers.ctrl,
+                                Modifier::Alt => i.modifiers.alt,
+                                Modifier::Shift => i.modifiers.shift,
+                            })
                         })
-                    });
+                    };
+                    // Holding the blame modifier reads the line under the
+                    // pointer into the status bar, where the caret's line
+                    // otherwise stands — the terminal frontend does the same.
+                    self.blame_hover = held(blame_modifiers)
+                        .then(|| output.response.hover_pos())
+                        .flatten()
+                        .map(|pos| {
+                            let cursor = output.galley.cursor_from_pos(pos - output.galley_pos);
+                            let row = shown
+                                .chars()
+                                .take(cursor.ccursor.index)
+                                .filter(|c| *c == '\n')
+                                .count();
+                            visible.get(row).copied().unwrap_or(row) + 1
+                        });
+                    // ⌘-click asks the app to jump to its definition.
+                    let goto_held = held(goto_modifiers);
                     if goto_held {
                         if let Some(pos) = output.response.hover_pos() {
                             let cursor = output.galley.cursor_from_pos(pos - output.galley_pos);

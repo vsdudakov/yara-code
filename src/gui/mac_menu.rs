@@ -18,13 +18,25 @@
 //! its index into [`ALL`] — onto a queue that the next frame drains. The
 //! alternative is handing AppKit a pointer to the app itself, which nothing
 //! about a menu click can promise is still there.
+//!
+//! The Dock icon's own menu is here too, and answers the same way. It is the
+//! menu Zed shows: the projects opened before, then the window that is up,
+//! then New Window, with the system's own rows under them. One window is one
+//! process here, so New Window starts another copy of the editor — through
+//! `open -n` where this one is a bundled application, since that is what gives
+//! the new copy a Dock tile and a menu bar of its own.
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Mutex;
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
+use objc2_app_kit::{
+    NSApplication, NSControlStateValueOn, NSEventModifierFlags, NSImage, NSImageNameFolder, NSMenu,
+    NSMenuItem,
+};
 use objc2_foundation::{MainThreadMarker, NSString};
 
 use crate::core::command::{Chord, Command, ALL, EDIT_MENU, FILE_MENU, HELP_MENU, VIEW_MENU};
@@ -33,6 +45,30 @@ use crate::core::settings::Settings;
 /// Commands the bar has asked for and the window has not yet run. A queue
 /// rather than a slot: a menu can be clicked twice before a frame is drawn.
 static PENDING: Mutex<Vec<Command>> = Mutex::new(Vec::new());
+
+/// Folders the Dock menu has asked for, drained the same way.
+static OPENING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// How many windows the Dock menu has asked for. Starting another copy is
+/// left to the frame, which has somewhere to say so when it fails.
+static WANTED_WINDOWS: Mutex<usize> = Mutex::new(0);
+
+/// What the Dock menu lists. It is built when the icon is clicked, which is
+/// long after the frame that last knew any of this.
+struct Dock {
+    recent: Vec<PathBuf>,
+    open: Option<PathBuf>,
+}
+
+static DOCK: Mutex<Dock> = Mutex::new(Dock {
+    recent: Vec::new(),
+    open: None,
+});
+
+/// The object every menu row points at. The Dock menu is built outside any
+/// frame and needs the same one, which is why it is kept rather than made
+/// again: a row whose target has been freed does nothing at all.
+static TARGET: AtomicPtr<MenuTarget> = AtomicPtr::new(std::ptr::null_mut());
 
 define_class!(
     // The object AppKit sends every one of our menu actions to. It holds
@@ -51,6 +87,26 @@ define_class!(
                 if let Ok(mut pending) = PENDING.lock() {
                     pending.push(command);
                 }
+            }
+        }
+
+        #[unsafe(method(newWindow:))]
+        fn new_window(&self, _sender: Option<&AnyObject>) {
+            if let Ok(mut wanted) = WANTED_WINDOWS.lock() {
+                *wanted += 1;
+            }
+        }
+
+        #[unsafe(method(openFolder:))]
+        fn open_folder(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            let path = DOCK
+                .lock()
+                .ok()
+                .and_then(|dock| usize::try_from(tag).ok().and_then(|i| dock.recent.get(i).cloned()));
+            if let (Some(path), Ok(mut opening)) = (path, OPENING.lock()) {
+                opening.push(path);
             }
         }
     }
@@ -73,6 +129,77 @@ pub fn drain() -> Vec<Command> {
         .lock()
         .map(|mut pending| std::mem::take(&mut *pending))
         .unwrap_or_default()
+}
+
+/// The folders the Dock menu has been asked to open since this was last
+/// called.
+pub fn drain_folders() -> Vec<PathBuf> {
+    OPENING
+        .lock()
+        .map(|mut opening| std::mem::take(&mut *opening))
+        .unwrap_or_default()
+}
+
+/// How many new windows the Dock menu has asked for since this was last
+/// called.
+pub fn drain_new_windows() -> usize {
+    WANTED_WINDOWS
+        .lock()
+        .map(|mut wanted| std::mem::replace(&mut *wanted, 0))
+        .unwrap_or(0)
+}
+
+/// Starts another copy of the editor, with no folder in it — the Dock menu's
+/// New Window. One window is one process, so a window is what a process is.
+pub fn open_new_window() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let (program, args) = relaunch(&exe);
+    // The child is left to itself: it is another editor, not a job of this
+    // one, and it outlives the window that asked for it.
+    std::process::Command::new(program).args(args).spawn()?;
+    Ok(())
+}
+
+/// How to start that copy: a bundled application goes through `open -n`, which
+/// is what makes macOS treat it as another running copy rather than as a
+/// stray binary; anything else is simply run again.
+fn relaunch(exe: &Path) -> (PathBuf, Vec<PathBuf>) {
+    match bundle_of(exe) {
+        Some(bundle) => (
+            PathBuf::from("/usr/bin/open"),
+            vec![PathBuf::from("-n"), bundle],
+        ),
+        None => (exe.to_path_buf(), Vec::new()),
+    }
+}
+
+/// The `.app` a binary is inside, if it is inside one at all:
+/// `…/Yara Code.app/Contents/MacOS/ycode-gui`.
+fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app")
+        .then(|| bundle.to_path_buf())
+}
+
+/// Tells the Dock menu what to list. Called on every frame that has a bar to
+/// keep, and does nothing on the frames where nothing has moved.
+pub fn set_dock(recent: &[PathBuf], open: Option<&Path>) {
+    let Ok(mut dock) = DOCK.lock() else {
+        return;
+    };
+    if dock.recent != recent || dock.open.as_deref() != open {
+        dock.recent = recent.to_vec();
+        dock.open = open.map(Path::to_path_buf);
+    }
+    // The delegate the hook needs may not have been up when the bar was
+    // built, and the bar is not built again unless a menu changes.
+    if let Some(mtm) = MainThreadMarker::new() {
+        dock_menu_hook(&NSApplication::sharedApplication(mtm));
+    }
 }
 
 /// Builds the bar. Call once, from the main thread, with the window already
@@ -121,8 +248,110 @@ pub fn install(settings: &Settings, has_update: bool) {
 
     // The target is AppKit's from here on: the bar outlives every frame, and
     // dropping it would leave the menu items pointing at freed memory.
+    TARGET.store(Retained::as_ptr(&target).cast_mut(), Ordering::Release);
     std::mem::forget(target);
     app.setMainMenu(Some(&bar));
+    dock_menu_hook(&app);
+}
+
+/// Teaches the running application's delegate to answer `applicationDockMenu:`
+/// — the one way AppKit asks for the menu behind the Dock icon. The delegate
+/// belongs to the window library rather than to this crate, so the method is
+/// added to its class at runtime instead of being written on it; nothing else
+/// implements it, so nothing is being taken over.
+fn dock_menu_hook(app: &NSApplication) {
+    use std::sync::atomic::AtomicBool;
+    static HOOKED: AtomicBool = AtomicBool::new(false);
+    if HOOKED.load(Ordering::Acquire) {
+        return;
+    }
+    // On the frames before the delegate is up there is nothing to teach, and
+    // the next rebuild of the bar tries again.
+    let Some(delegate) = app.delegate() else {
+        return;
+    };
+    let class: *const AnyClass = unsafe { msg_send![&*delegate, class] };
+    let types = c"@@:@";
+    let added = unsafe {
+        objc2::ffi::class_addMethod(
+            class.cast_mut(),
+            sel!(applicationDockMenu:),
+            std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> *mut NSMenu,
+                objc2::runtime::Imp,
+            >(dock_menu),
+            types.as_ptr(),
+        )
+    };
+    HOOKED.store(added.as_bool(), Ordering::Release);
+}
+
+/// What AppKit calls when the Dock icon is held. The menu is built here and
+/// not kept: what it lists — the recent projects, the folder in the window —
+/// is whatever the last frame left behind.
+unsafe extern "C-unwind" fn dock_menu(
+    _this: &AnyObject,
+    _cmd: Sel,
+    _sender: *mut AnyObject,
+) -> *mut NSMenu {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return std::ptr::null_mut();
+    };
+    Retained::autorelease_return(dock_menu_for(mtm))
+}
+
+fn dock_menu_for(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    let target = TARGET.load(Ordering::Acquire);
+    let Ok(dock) = DOCK.lock() else {
+        return menu;
+    };
+    if target.is_null() {
+        return menu;
+    }
+    // Safety: the target was leaked into AppKit's hands when the bar was
+    // built, and nothing takes it back.
+    let target: &MenuTarget = unsafe { &*target };
+    let folder = unsafe { NSImage::imageNamed(NSImageNameFolder) };
+    for (i, path) in dock.recent.iter().enumerate().take(8) {
+        let item = NSMenuItem::new(mtm);
+        item.setTitle(&NSString::from_str(&name_of(path)));
+        unsafe {
+            item.setAction(Some(sel!(openFolder:)));
+            item.setTarget(Some(target));
+            item.setTag(i as isize);
+        }
+        item.setImage(folder.as_deref());
+        menu.addItem(&item);
+    }
+    // The window itself, under the projects it could be showing instead — a
+    // tick on the one it is showing, and a click that brings it forward.
+    if let Some(open) = &dock.open {
+        if !dock.recent.is_empty() {
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+        }
+        let item = system_item(mtm, &name_of(open), sel!(arrangeInFront:), "");
+        item.setState(NSControlStateValueOn);
+        menu.addItem(&item);
+    }
+    if !dock.recent.is_empty() || dock.open.is_some() {
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+    }
+    let new_window = NSMenuItem::new(mtm);
+    new_window.setTitle(&NSString::from_str("New Window"));
+    unsafe {
+        new_window.setAction(Some(sel!(newWindow:)));
+        new_window.setTarget(Some(target));
+    }
+    menu.addItem(&new_window);
+    menu
+}
+
+/// A folder as a menu names it: the folder itself, not the road to it.
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Whether an entry of one of the four menus is left out of it on macOS.
@@ -270,6 +499,27 @@ fn key_equivalent(chord: &Chord) -> (String, NSEventModifierFlags) {
 mod tests {
     use super::*;
     use crate::core::command::{Key, Mods};
+
+    #[test]
+    fn a_bundled_editor_starts_its_next_window_through_open() {
+        let bundled = Path::new("/Applications/Yara Code.app/Contents/MacOS/ycode-gui");
+        assert_eq!(
+            bundle_of(bundled).as_deref(),
+            Some(Path::new("/Applications/Yara Code.app"))
+        );
+        let (program, args) = relaunch(bundled);
+        assert_eq!(program, Path::new("/usr/bin/open"));
+        assert_eq!(
+            args,
+            ["-n", "/Applications/Yara Code.app"].map(PathBuf::from)
+        );
+
+        // A binary that is not in a bundle — a Homebrew install, a build in
+        // the tree — is the thing to run again.
+        let plain = Path::new("/opt/homebrew/bin/ycode-gui");
+        assert_eq!(bundle_of(plain), None);
+        assert_eq!(relaunch(plain), (plain.to_path_buf(), Vec::new()));
+    }
 
     #[test]
     fn a_chord_reads_as_appkit_spells_it() {

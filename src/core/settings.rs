@@ -545,7 +545,7 @@ impl Settings {
         ((3.0 * self.scroll_factor()) as isize).max(1)
     }
 
-    /// `$XDG_CONFIG_HOME/yara/settings.json`, else `~/.config/...`.
+    /// `$XDG_CONFIG_HOME/ycode/settings.json`, else `~/.config/ycode/...`.
     pub fn path() -> Option<PathBuf> {
         Some(crate::core::config_dir()?.join("settings.json"))
     }
@@ -1206,7 +1206,7 @@ mod settings_tests {
             .unwrap_or_else(|e| e.into_inner());
         let path = Settings::path().expect("a config directory on every platform");
         assert!(
-            path.ends_with("yara-code/settings.json") || path.ends_with("yara-code\\settings.json"),
+            path.ends_with("ycode/settings.json") || path.ends_with("ycode\\settings.json"),
             "{}",
             path.display()
         );

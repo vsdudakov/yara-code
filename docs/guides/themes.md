@@ -12,7 +12,7 @@ Switch with `Cmd+Shift+T` / `Ctrl+Shift+T`, or from **View → Color Theme…**.
 Any VS Code color theme works: drop its `.json` into
 
 ```
-~/.config/yara-code/themes/
+~/.config/ycode/themes/
 ```
 
 and it appears in the picker. The loader reads the `colors` map (chrome and the
@@ -33,7 +33,7 @@ JavaScript, `.ex` → Ruby, `.zig` → C, `.ini` → TOML…).
 Drop any `.sublime-syntax` into
 
 ```
-~/.config/yara-code/syntaxes/
+~/.config/ycode/syntaxes/
 ```
 
 to add or replace a language; user grammars win. They load into their own set,

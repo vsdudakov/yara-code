@@ -85,15 +85,10 @@ const ALIASES: &[(&str, &str)] = &[
     ("gitconfig", "toml"),
 ];
 
-/// Where user grammars live: `$XDG_CONFIG_HOME/yara/syntaxes` or
-/// `~/.config/yara-code/syntaxes`. Any `.sublime-syntax` there is loaded at startup.
+/// Where user grammars live: `~/.config/ycode/syntaxes`, beside the settings.
+/// Any `.sublime-syntax` there is loaded at startup.
 pub fn user_syntax_dir() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
-        })?;
-    Some(base.join("yara-code").join("syntaxes"))
+    Some(crate::core::config_dir()?.join("syntaxes"))
 }
 
 /// The added grammars live in their own set: folding them into the default one

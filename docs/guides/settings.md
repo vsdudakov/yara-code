@@ -11,7 +11,7 @@ from either frontend, a script, or a hand edit — without a restart. It is
 written on first run to:
 
 ```
-~/.config/yara-code/settings.json
+~/.config/ycode/settings.json
 ```
 
 The file explains itself: every key is written out with a comment over it, and

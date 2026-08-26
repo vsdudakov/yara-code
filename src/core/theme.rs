@@ -109,6 +109,14 @@ pub fn indent_guide(theme: &Theme) -> Rgb {
     (mix(bg.0, fg.0), mix(bg.1, fg.1), mix(bg.2, fg.2))
 }
 
+/// The colours a chart's slices and bars are painted in, in order. They come
+/// out of the palette the terminal already draws with, so a chart belongs to
+/// the theme rather than to a palette of its own.
+pub fn chart_color(theme: &Theme, index: usize) -> Rgb {
+    const WHEEL: [usize; 6] = [12, 10, 11, 13, 14, 9];
+    theme.ansi[WHEEL[index % WHEEL.len()]]
+}
+
 pub fn ansi256(theme: &Theme, idx: u8) -> Rgb {
     match idx {
         0..=15 => theme.ansi[idx as usize],
@@ -375,8 +383,7 @@ pub fn builtin() -> Vec<Theme> {
     vec![dark_modern(), dark_plus(), light_plus(), monokai()]
 }
 
-/// Where user themes live: `$XDG_CONFIG_HOME/yara/themes` or
-/// `~/.config/yara-code/themes`.
+/// Where user themes live: `~/.config/ycode/themes`, beside the settings.
 pub fn user_theme_dir() -> Option<PathBuf> {
     Some(crate::core::config_dir()?.join("themes"))
 }

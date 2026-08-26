@@ -775,6 +775,36 @@ fn escape_closes_one_thing_at_a_time() {
 }
 
 #[test]
+fn a_preview_draws_its_lists_tables_and_charts_in_the_window() {
+    let project = Project::new("yara-gui-e2e-preview-rich");
+    project.file("README.md", "# Yara Code\n\n## Lists\n\n- one\n  - nested\n- [x] done\n- [ ] todo\n\n## Table\n\n| Name | Size |\n|:-----|-----:|\n| one | 1 |\n| two | 22 |\n\n## Charts\n\n```mermaid\npie title Languages\n  \"Rust\" : 70\n  \"Docs\" : 30\n```\n\n```mermaid\nflowchart LR\n  A[Edit] --> B[Ship]\n```\n");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
+    let screen = harness.screen();
+    // A nested item is set in under the one above it, and a ticked item wears
+    // its box rather than a bullet.
+    assert!(harness.shows("nested") && harness.shows("•"), "{screen}");
+    assert!(harness.shows("☑") && harness.shows("☐"), "{screen}");
+    assert!(harness.shows("Name") && harness.shows("22"), "{screen}");
+    assert!(
+        !harness.shows("| Name | Size |"),
+        "the pipes are markup: {screen}"
+    );
+    // The charts are down the page: they are drawn, not printed, so what shows
+    // is their labels and shares rather than the mermaid behind them.
+    harness.scroll(Pos2::new(640.0, 400.0), -20.0);
+    let screen = harness.screen();
+    assert!(
+        harness.shows("Languages") && harness.shows("70%"),
+        "{screen}"
+    );
+    assert!(harness.shows("Edit") && harness.shows("Ship"), "{screen}");
+    assert!(!harness.shows("flowchart LR"), "{screen}");
+}
+
+#[test]
 fn a_markdown_file_previews_in_the_window() {
     let project = Project::new("yara-gui-e2e-preview");
     project.file(

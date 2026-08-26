@@ -163,6 +163,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         draw_editor(frame, app, editor_area);
     }
+    if app.active_diff().is_none() {
+        app.layout.diff_prev = Rect::default();
+        app.layout.diff_next = Rect::default();
+    }
     if app.find_showing() {
         draw_find(frame, app, find_area);
     } else {
@@ -1460,26 +1464,52 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
         });
     let title = format!(" {} ", diff.path);
     let width = header.width as usize;
-    let tail = format!("+{}  -{}   esc close · ⏎ open file ", counts.0, counts.1);
-    let gap = width.saturating_sub(title.chars().count() + tail.chars().count());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                title,
-                if focused {
-                    Style::default()
-                        .fg(color(theme.ui.fg_bright))
-                        .bg(color(theme.ui.status_bg))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    on(theme.ui.fg_dim, theme.ui.status_bg)
-                },
-            ),
-            Span::styled(pad("", gap), on(theme.ui.fg_faint, theme.ui.status_bg)),
-            Span::styled(tail, on(theme.ui.fg_faint, theme.ui.status_bg)),
-        ])),
-        header,
-    );
+    let counted = format!("+{}  -{}   ", counts.0, counts.1);
+    // The pair of arrows the window frontend puts in the same corner: reviewing
+    // a diff is going change to change, and the button says so where the key
+    // cannot. The hint after them is text, since Esc and Enter are keys.
+    let (up, down) = (app.icons.up, app.icons.down);
+    let hint = "  esc close · ⏎ open file ";
+    let tail_width = counted.chars().count()
+        + up.chars().count()
+        + 2
+        + down.chars().count()
+        + hint.chars().count();
+    let gap = width.saturating_sub(title.chars().count() + tail_width);
+    let faint = on(theme.ui.fg_faint, theme.ui.status_bg);
+    let button = on(theme.ui.fg, theme.ui.status_bg);
+    let mut spans = vec![
+        Span::styled(
+            title.clone(),
+            if focused {
+                Style::default()
+                    .fg(color(theme.ui.fg_bright))
+                    .bg(color(theme.ui.status_bg))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                on(theme.ui.fg_dim, theme.ui.status_bg)
+            },
+        ),
+        Span::styled(pad("", gap), faint),
+        Span::styled(counted.clone(), faint),
+    ];
+    let mut x = header.x + (title.chars().count() + gap + counted.chars().count()) as u16;
+    let mut place = |spans: &mut Vec<Span<'static>>, text: &'static str, style: Style| -> Rect {
+        let rect = Rect {
+            x,
+            y: header.y,
+            width: text.chars().count() as u16,
+            height: 1,
+        };
+        x += rect.width;
+        spans.push(Span::styled(text, style));
+        rect
+    };
+    let prev_button = place(&mut spans, up, button);
+    place(&mut spans, "  ", faint);
+    let next_button = place(&mut spans, down, button);
+    place(&mut spans, hint, faint);
+    frame.render_widget(Paragraph::new(Line::from(spans)), header);
 
     frame.render_widget(
         Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
@@ -1530,6 +1560,8 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
+    app.layout.diff_prev = prev_button;
+    app.layout.diff_next = next_button;
 }
 
 /// A markdown file as a reader sees it: headings in the accent, code on the

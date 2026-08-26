@@ -56,6 +56,6 @@ owns that key and pastes the clipboard's text itself, which for an image is
 nothing — iTerm2 3.6 offers its own dialog instead. Where the host does send an
 empty paste, the editor takes it as a paste of its own and finds the image.
 
-The wheel walks the 5000 lines of scrollback, six rows a notch, unless the program in front asked
+The wheel walks the 5000 lines of scrollback, four rows a notch (`scroll_speed` in settings.json), unless the program in front asked
 to hear about the mouse: a full-screen program keeps a transcript of its own, so
 it is handed the notch and scrolls that instead.

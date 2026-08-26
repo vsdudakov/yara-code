@@ -360,6 +360,7 @@ struct ProjectOverrides {
     theme: Option<String>,
     indent: Option<Indent>,
     font_size: Option<f32>,
+    scroll_speed: Option<f32>,
     show_sidebar: Option<bool>,
     show_terminal: Option<bool>,
     goto_modifiers: Option<GotoModifiers>,
@@ -376,6 +377,9 @@ impl ProjectOverrides {
         }
         if let Some(v) = self.font_size {
             settings.font_size = v;
+        }
+        if let Some(v) = self.scroll_speed {
+            settings.scroll_speed = v;
         }
         if let Some(v) = self.show_sidebar {
             settings.show_sidebar = v;
@@ -414,6 +418,11 @@ pub struct Settings {
     pub indent: Indent,
     /// Editor font size, window frontend only.
     pub font_size: f32,
+    /// How much further the wheel and the trackpad carry than the platform
+    /// asks for. 1.0 is the platform's own notch — three lines in a terminal.
+    /// The default is half again: a notch of three is barely a move in a long
+    /// file, and twice is a page gone by under the hand.
+    pub scroll_speed: f32,
     pub show_sidebar: bool,
     pub show_terminal: bool,
     /// Modifier that turns a click into go-to-definition.
@@ -429,6 +438,7 @@ impl Default for Settings {
             theme: "Dark+".to_string(),
             indent: Indent::default(),
             font_size: 13.5,
+            scroll_speed: 1.5,
             show_sidebar: true,
             show_terminal: true,
             goto_modifiers: GotoModifiers::default(),
@@ -484,6 +494,25 @@ pub fn strip_comments(text: &str) -> String {
 }
 
 impl Settings {
+    /// The scroll speed as the frontends use it, held inside sane bounds so a
+    /// typo in the file cannot freeze the wheel or send it flying.
+    pub fn scroll_factor(&self) -> f32 {
+        let speed = self.scroll_speed;
+        if speed.is_finite() {
+            speed.clamp(0.25, 8.0)
+        } else {
+            Self::default().scroll_speed
+        }
+    }
+
+    /// Rows one notch of the wheel moves a pane in the terminal frontend,
+    /// which counts in whole rows: the three lines a terminal reports, taken
+    /// at that speed and cut to a whole row. The window scales the platform's
+    /// own delta instead, and needs no such cut.
+    pub fn scroll_rows(&self) -> isize {
+        ((3.0 * self.scroll_factor()) as isize).max(1)
+    }
+
     /// `$XDG_CONFIG_HOME/yara/settings.json`, else `~/.config/...`.
     pub fn path() -> Option<PathBuf> {
         Some(crate::core::config_dir()?.join("settings.json"))
@@ -605,6 +634,11 @@ impl Settings {
   // draws in whatever font the terminal itself uses.
   "font_size": {font_size},
 
+  // How much further the wheel and the trackpad carry than the platform asks
+  // for. 1.0 is the platform's own notch — three lines in a terminal — so 1.5
+  // moves four rows where a terminal would move three.
+  "scroll_speed": {scroll_speed},
+
   "indent": {{
     // "spaces" or "tabs". Also View → Indentation.
     "style": {indent_style},
@@ -638,6 +672,7 @@ impl Settings {
 "#,
             theme = json(&self.theme),
             font_size = json(&self.font_size),
+            scroll_speed = json(&self.scroll_speed),
             indent_style = json(&self.indent.style),
             indent_width = json(&self.indent.width),
             detect_from_file = json(&self.indent.detect_from_file),
@@ -892,10 +927,33 @@ mod settings_tests {
     use super::*;
 
     #[test]
+    fn the_scroll_speed_is_a_multiple_of_the_platforms_own_notch() {
+        let at = |speed: f32| {
+            Settings {
+                scroll_speed: speed,
+                ..Default::default()
+            }
+            .scroll_rows()
+        };
+        // One notch is what a terminal itself reports; the default is a row
+        // over that, and the setting moves it either way.
+        assert_eq!(at(1.0), 3);
+        assert_eq!(Settings::default().scroll_rows(), 4);
+        assert_eq!(at(2.0), 6);
+        // A wheel that cannot move is not a setting, and neither is one that
+        // clears the file in a notch.
+        assert_eq!(at(0.0), 1);
+        assert_eq!(at(-5.0), 1);
+        assert_eq!(at(1000.0), 24);
+        assert_eq!(at(f32::NAN), Settings::default().scroll_rows());
+    }
+
+    #[test]
     fn every_field_survives_a_round_trip() {
         let mut settings = Settings {
             theme: "Monokai".into(),
             font_size: 15.0,
+            scroll_speed: 2.5,
             show_terminal: false,
             indent: Indent {
                 width: 2,
@@ -908,6 +966,7 @@ mod settings_tests {
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.theme, "Monokai");
         assert_eq!(back.font_size, 15.0);
+        assert_eq!(back.scroll_speed, 2.5);
         assert!(!back.show_terminal);
         assert_eq!(back.indent.width, 2);
         assert_eq!(back.recent_projects, [PathBuf::from("/work/one")]);
@@ -1120,6 +1179,7 @@ mod settings_tests {
         for key in [
             "\"theme\"",
             "\"font_size\"",
+            "\"scroll_speed\"",
             "\"indent\"",
             "\"show_sidebar\"",
             "\"show_terminal\"",

@@ -347,8 +347,16 @@ impl App {
                 Err(e) => self.status = Some(format!("cannot open settings: {e}")),
             },
             Command::CloseTab => {
-                let active = self.editor.buffers.active;
-                self.editor.request_close(active);
+                // A diff and a preview are tabs like any other, so what closes
+                // is whatever is in front, not the file hidden behind it.
+                if let Some(index) = self.editor.active_preview {
+                    self.editor.close_preview(index);
+                } else if let Some(index) = self.editor.active_diff {
+                    self.editor.close_diff(index);
+                } else {
+                    let active = self.editor.buffers.active;
+                    self.editor.request_close(active);
+                }
             }
             Command::CloseAllTabs => self.close_all_tabs(),
             Command::Quit => self.request_quit(ctx),
@@ -2250,7 +2258,7 @@ impl App {
     /// One frame of the editor. `eframe` calls it through `update`; a test
     /// calls it through `egui::Context::run`.
     pub fn ui(&mut self, ctx: &egui::Context) {
-        speed_up_scrolling(ctx);
+        speed_up_scrolling(ctx, self.settings.scroll_factor());
         self.poll_settings(ctx);
         // Every shortcut comes from settings.json, so a rebind takes effect
         // the moment the file is saved.
@@ -2639,18 +2647,15 @@ impl App {
     }
 }
 
-/// How much further the wheel and the trackpad carry than the desktop asks
-/// for. A file is a long document and a terminal transcript a longer one, and
-/// the platform's own notch is a line and a half of either.
-const SCROLL_SPEED: f32 = 2.0;
-
 /// Scales this frame's scrolling before any panel reads it, so every scrolling
 /// thing in the window — the editor, the navigator, the terminal panel — moves
-/// at the same multiple of what the desktop sent.
-fn speed_up_scrolling(ctx: &egui::Context) {
+/// at the same multiple of what the desktop sent. The multiple is
+/// `scroll_speed` in settings.json, the same number the terminal frontend
+/// counts its rows with.
+fn speed_up_scrolling(ctx: &egui::Context, factor: f32) {
     ctx.input_mut(|i| {
-        i.raw_scroll_delta *= SCROLL_SPEED;
-        i.smooth_scroll_delta *= SCROLL_SPEED;
+        i.raw_scroll_delta *= factor;
+        i.smooth_scroll_delta *= factor;
     });
 }
 

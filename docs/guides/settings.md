@@ -28,6 +28,10 @@ The file explains itself: every key is written out with a comment over it, and
   // draws in whatever font the terminal itself uses.
   "font_size": 13.5,
 
+  // How much further the wheel carries than the platform asks for. 1.0 is the
+  // platform's own notch — three lines in a terminal.
+  "scroll_speed": 1.5,
+
   "indent": {
     // "spaces" or "tabs". Also View → Indentation.
     "style": "spaces",
@@ -65,6 +69,7 @@ from the navigator and from project search.
 | `indent.width` | Spaces per level; `style` picks `spaces` or `tabs`. |
 | `indent.detect_from_file` | When on, a file that already uses another width wins and these values are only the fallback. |
 | `font_size` | The window's code font size; it takes effect the moment the file is saved. The terminal frontend draws in your terminal's own font, so it does not apply there. |
+| `scroll_speed` | How much further the wheel and the trackpad carry than the platform asks for, in both frontends. `1.0` is the platform's own notch — three lines in a terminal — and the default `1.5` moves four rows where a terminal would move three. Held between `0.25` and `8`. |
 | `show_sidebar`, `show_terminal` | Which panels are open at startup. |
 | `goto_modifiers` | Which modifier turns a click into go-to-definition. A list, because terminals differ in which ones they deliver — and none deliver Cmd, which is why the terminal default is Ctrl or Alt. |
 | `keys` | Every binding, per frontend. See [Key bindings](keys.md). |

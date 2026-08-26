@@ -370,7 +370,7 @@ impl App {
             Command::ToggleTerminal => self.show_terminal = !self.show_terminal,
             Command::NewTerminal => {
                 self.show_terminal = true;
-                self.terminal.open(&self.project.root_or_cwd(), ctx);
+                self.terminal.open(&self.project.shell_cwd(), ctx);
             }
             Command::CloseTerminal => {
                 self.terminal.sessions.close_active();
@@ -420,28 +420,56 @@ impl App {
                     self.editor.buffers.active = (self.editor.buffers.active + n - 1) % n;
                 }
             }
-            // Selection and clipboard belong to the text widget itself, and
-            // these three are mouse- or menu-driven in this frontend.
-            // The clipboard belongs to the text widget, go-to-definition to
-            // the mouse, and the bindings overlay is the Help menu itself.
+            // Go-to-definition is the mouse's in this frontend; the command
+            // is the same thing reached from the keyboard.
             Command::GotoDefinition => {
                 if let Some(word) = self.editor.word_at_cursor() {
                     self.editor.goto_request = Some(word);
                 }
             }
-            Command::SelectAll | Command::Copy | Command::Cut => {}
-            // Text pasting belongs to whichever widget is being typed in, and
-            // egui does it. An *image* has nowhere to go in a text widget, so
-            // it is written to a file and its path is what the terminal gets
-            // — the same trade the terminal frontend makes, because a program
-            // in the shell can open a path and cannot open a bitmap.
+            // The clipboard belongs to whichever widget is being typed in,
+            // and egui does the work — but these four arrive only from a menu
+            // now, because the macOS bar answers their chords before the
+            // window sees them. So the press is handed back to egui as the
+            // event it would have come in as, and the widget in front does
+            // what it always did.
+            Command::Copy => ctx.input_mut(|i| i.events.push(egui::Event::Copy)),
+            Command::Cut => ctx.input_mut(|i| i.events.push(egui::Event::Cut)),
+            Command::SelectAll => ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                })
+            }),
+            // An *image* has nowhere to go in a text widget, so it is written
+            // to a file and its path is what the terminal gets — the same
+            // trade the terminal frontend makes, because a program in the
+            // shell can open a path and cannot open a bitmap. Anything else is
+            // text, and goes to the widget in front.
             Command::Paste => {
-                if self.terminal.focused {
-                    if let Some(path) = core_clipboard::system_image() {
+                let image = self
+                    .terminal
+                    .focused
+                    .then(core_clipboard::system_image)
+                    .flatten();
+                match image {
+                    Some(path) => {
                         let quoted = core_clipboard::shell_quoted(&path);
                         if let Some(pty) = self.terminal.sessions.active_mut() {
                             pty.paste(&quoted);
                             self.status = Some(format!("pasted {}", path.display()));
+                        }
+                    }
+                    None => {
+                        if let Some(text) = core_clipboard::system_text() {
+                            // Line endings as egui hands them over, so a paste
+                            // through the menu and a paste through the keyboard
+                            // put the same thing in the buffer.
+                            let text = text.replace("\r\n", "\n");
+                            ctx.input_mut(|i| i.events.push(egui::Event::Paste(text)));
                         }
                     }
                 }
@@ -1009,9 +1037,10 @@ impl App {
         self.editor.pending_jump = Some((path, line));
     }
 
-    fn handle_tree_events(&mut self, events: Vec<TreeEvent>) {
+    fn handle_tree_events(&mut self, ctx: &egui::Context, events: Vec<TreeEvent>) {
         for event in events {
             match event {
+                TreeEvent::Run(command) => self.execute(ctx, command),
                 TreeEvent::Open(path) => {
                     self.tree.reveal(&path);
                     self.open_file(path);
@@ -2411,7 +2440,8 @@ impl App {
                                         .show(ui, |ui| {
                                             self.tree.ui(ui, &theme, &self.git.state, &mut events);
                                         });
-                                    self.handle_tree_events(events);
+                                    let ctx = ui.ctx().clone();
+                                    self.handle_tree_events(&ctx, events);
                                 }
                                 SidebarView::Search => self.search_ui(ui, &theme),
                                 SidebarView::Git => {
@@ -2557,7 +2587,7 @@ impl App {
                 .show(ctx, |ui| {
                     // Panel header, matching the terminal frontend's: the
                     // label plus the session tab strip.
-                    let root = self.project.root_or_cwd();
+                    let root = self.project.shell_cwd();
                     let focused = self.terminal.focused;
                     egui::Frame::default()
                         .fill(color(theme.ui.status_bg))

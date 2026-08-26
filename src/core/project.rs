@@ -52,6 +52,19 @@ impl Project {
         }
     }
 
+    /// Where a shell opened from the editor starts. With a folder in the
+    /// project that is the project — a terminal is for working on what is
+    /// open. With none there is no project directory to be in, so it is the
+    /// home folder, which is where a terminal opens on its own; the process's
+    /// own working directory is the last resort, and a poor one — a window
+    /// launched from the Dock inherits `/`, which is nobody's workspace.
+    pub fn shell_cwd(&self) -> PathBuf {
+        match self.roots.first() {
+            Some(root) => root.clone(),
+            None => crate::core::home_dir().unwrap_or_else(|| self.root_or_cwd()),
+        }
+    }
+
     pub fn roots(&self) -> &[PathBuf] {
         &self.roots
     }
@@ -245,6 +258,20 @@ mod more_project_tests {
         assert_eq!(project.owner(Path::new("/anywhere")), None);
         assert!(!project.is_root(Path::new("/anywhere")));
         assert_eq!(project.display(Path::new("/a/b.rs")), "/a/b.rs");
+    }
+
+    #[test]
+    fn a_shell_starts_in_the_project_and_at_home_without_one() {
+        let dir = Dir::new("yara-project-shell");
+        let project = Project::new(dir.path().to_path_buf());
+        assert_eq!(project.shell_cwd(), dir.path());
+        // With no folder there is no project directory to be in, and the
+        // process's own is no answer — a window launched from the Dock
+        // inherits `/`.
+        let empty = Project::empty();
+        if let Some(home) = crate::core::home_dir() {
+            assert_eq!(empty.shell_cwd(), home);
+        }
     }
 
     #[test]

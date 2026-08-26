@@ -287,6 +287,27 @@ pub const FILE_MENU: &[Option<Command>] = &[
     Some(Command::Quit),
 ];
 
+/// What the Edit menu lists, in order; `None` is a separator.
+///
+/// Only the macOS bar draws it. Every Mac application carries an Edit menu,
+/// and here it earns its place twice over: a menu's key equivalent is answered
+/// by the system before the window sees the key, and that is the only way ⌘V
+/// ever reaches the editor at all. egui turns a paste chord into a paste of
+/// its own text and never passes the key on — and when the clipboard holds an
+/// image rather than text, it has no text to pass either, so the press
+/// vanishes entirely. The window's own strip, on the platforms that draw one,
+/// leaves these to egui as before.
+pub const EDIT_MENU: &[Option<Command>] = &[
+    Some(Command::Undo),
+    Some(Command::Redo),
+    None,
+    Some(Command::Cut),
+    Some(Command::Copy),
+    Some(Command::Paste),
+    None,
+    Some(Command::SelectAll),
+];
+
 /// What a tab's own menu lists. Right-clicking a tab picks it first, so both
 /// entries speak about the tab under the pointer.
 pub const TAB_MENU: &[Option<Command>] = &[Some(Command::CloseTab), Some(Command::CloseAllTabs)];

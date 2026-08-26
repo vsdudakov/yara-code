@@ -466,54 +466,65 @@ impl Editor {
                                 color(theme.ui.fg_dim)
                             };
                             let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
-                            let resp = ui
-                                .add(egui::Label::new(title).sense(egui::Sense::click()))
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-
-                            // The modified dot and the close cross, in the glyphs
-                            // the terminal frontend prints. Hovering the dot turns
-                            // it into a cross, like VS Code.
-                            let (icon_rect, close_resp) = ui
-                                .allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
-                            let close_resp =
-                                close_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if ui.is_rect_visible(icon_rect) {
-                                let hovered = close_resp.hovered();
-                                let mark = if hovered {
-                                    color(theme.ui.fg)
-                                } else {
-                                    color(theme.ui.fg_dim)
-                                };
-                                if hovered {
-                                    ui.painter().rect_filled(
-                                        icon_rect,
-                                        egui::CornerRadius::same(3),
-                                        color(theme.ui.hover_bg),
-                                    );
-                                }
-                                let icons = icons();
-                                let mark_glyph = if buf.modified() && !hovered {
-                                    icons.modified
-                                } else {
-                                    icons.close
-                                };
-                                glyph(ui.painter(), icon_rect.center(), mark_glyph, 13.0, mark);
-                            }
-                            if close_resp.clicked() {
-                                close = Some(i);
-                            } else if resp.clicked() {
-                                activate = Some(i);
-                            }
+                            ui.add(egui::Label::new(title).selectable(false));
+                            // Room for the modified dot and the close cross,
+                            // painted below once it is known whether the
+                            // pointer is on them.
+                            ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::hover())
+                                .0
                         });
                         // The whole tab drags and the whole tab accepts a drop,
                         // the way a row in the navigator does — grabbing one by
                         // its name alone was a target the width of the text and
-                        // a drag that missed the padding did nothing. The close
-                        // cross keeps its clicks: it is a child widget, and a
-                        // child is asked before the area it sits in.
+                        // a drag that missed the padding did nothing.
+                        //
+                        // That handle lies over the tab's own contents, and egui
+                        // gives a click to the last widget registered under the
+                        // pointer, so a cross of its own would never be clicked:
+                        // whatever is drawn first is buried. The cross is
+                        // therefore a corner of the tab rather than a widget,
+                        // and where the pointer is says which of the two things
+                        // a click on the tab means.
                         let tab_id = ui.id().with(("tab", i));
-                        let handle =
-                            ui.interact(tab.response.rect, tab_id, egui::Sense::click_and_drag());
+                        let handle = ui
+                            .interact(tab.response.rect, tab_id, egui::Sense::click_and_drag())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let icon_rect = tab.inner;
+                        let on_cross = |pos: Option<egui::Pos2>| {
+                            pos.is_some_and(|pos| icon_rect.contains(pos))
+                        };
+                        // The modified dot and the close cross, in the glyphs
+                        // the terminal frontend prints. Hovering the dot turns
+                        // it into a cross, like VS Code.
+                        if ui.is_rect_visible(icon_rect) {
+                            let hovered = on_cross(handle.hover_pos());
+                            let mark = if hovered {
+                                color(theme.ui.fg)
+                            } else {
+                                color(theme.ui.fg_dim)
+                            };
+                            if hovered {
+                                ui.painter().rect_filled(
+                                    icon_rect,
+                                    egui::CornerRadius::same(3),
+                                    color(theme.ui.hover_bg),
+                                );
+                            }
+                            let icons = icons();
+                            let mark_glyph = if buf.modified() && !hovered {
+                                icons.modified
+                            } else {
+                                icons.close
+                            };
+                            glyph(ui.painter(), icon_rect.center(), mark_glyph, 13.0, mark);
+                        }
+                        if handle.clicked() {
+                            if on_cross(handle.interact_pointer_pos()) {
+                                close = Some(i);
+                            } else {
+                                activate = Some(i);
+                            }
+                        }
                         if handle.dragged() || handle.drag_started() {
                             handle.dnd_set_drag_payload(TabDrag(i));
                         }
@@ -1185,8 +1196,12 @@ impl Editor {
             return;
         }
         let viewport = scroll.inner_rect;
+        // A layer of its own, because the band has to cover the text it is
+        // scrolling over — and the *middle* layer, because a menu has to cover
+        // the band in turn. In the foreground it outranked the menu a tab
+        // opens on a right-click, and painted straight through it.
         let painter = ui.ctx().layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
+            egui::Order::Middle,
             egui::Id::new("sticky_scroll"),
         ));
         let band = egui::Rect::from_min_size(

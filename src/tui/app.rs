@@ -2109,7 +2109,7 @@ impl App {
             return;
         }
         if hits(self.layout.shell_new, x, y) {
-            let root = self.project.root_or_cwd();
+            let root = self.project.shell_cwd();
             self.shell.open(&root);
             self.focus = Focus::Shell;
             return;
@@ -2682,7 +2682,7 @@ impl App {
             }
             Command::NewTerminal => {
                 self.show_shell = true;
-                let root = self.project.root_or_cwd();
+                let root = self.project.shell_cwd();
                 self.shell.open(&root);
                 self.focus = Focus::Shell;
             }

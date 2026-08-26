@@ -227,7 +227,7 @@ fn with_no_folder_the_start_page_offers_the_keys() {
     assert!(screen.contains("YARA CODE"), "{screen}");
     // The navigator says there is nothing open, and says how to change that.
     assert!(screen.contains("No folder in the project"), "{screen}");
-    assert!(screen.contains("add a folder") && screen.contains("open a folder"));
+    assert!(screen.contains("open recent") && screen.contains("open a folder"));
     // The start page groups the keys that are actually bound.
     assert!(
         screen.contains("PROJECT") && screen.contains("PANELS"),

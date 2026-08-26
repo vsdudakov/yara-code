@@ -49,6 +49,14 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(base.join("yara-code"))
 }
 
+/// The user's home folder, as the platform spells it.
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .filter(|home| home.is_dir())
+}
+
 /// The documentation site, opened from Help → Documentation.
 pub const DOCUMENTATION: &str = "https://vsdudakov.github.io/yara-code/";
 

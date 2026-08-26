@@ -5,6 +5,8 @@ use std::path::Path;
 
 use crate::core::pty::{Pty, Terminals};
 use crate::core::theme::Theme;
+use crate::gui::file_tree::menu_item;
+use crate::gui::tabs;
 use crate::gui::theme::{ansi_color, code_font, color};
 
 #[derive(Default)]
@@ -24,16 +26,6 @@ pub struct Terminal {
     wheel_carry: f32,
 }
 
-/// The tab being dragged along the strip.
-#[derive(Clone, Copy)]
-struct TabDrag(usize);
-
-/// The small painted marks on the tab strip.
-enum Mark {
-    Cross,
-    Plus,
-}
-
 impl Terminal {
     fn notifier(ctx: egui::Context) -> impl Fn() + Send + 'static {
         move || ctx.request_repaint()
@@ -46,73 +38,52 @@ impl Terminal {
     }
 
     /// The tab strip in the panel header: one tab per shell — its number or
-    /// the name it was given — a cross to close it, and `+` to open another.
-    /// Tabs can be dragged to reorder and renamed from their context menu.
+    /// the name it was given — and `+` to open another. It is the strip the
+    /// editor's own tabs go through, so a shell tab is the size of a file tab
+    /// and is clicked, closed and dragged the same way.
     pub fn tab_bar(&mut self, ui: &mut egui::Ui, theme: &Theme, cwd: &Path, ctx: &egui::Context) {
+        let strip: Vec<tabs::Tab> = (0..self.sessions.len())
+            .map(|i| tabs::Tab::new(self.sessions.id(i), self.sessions.name(i)))
+            .collect();
         let mut close: Option<usize> = None;
-        let mut activate: Option<usize> = None;
-        let mut moved: Option<(usize, usize)> = None;
         let mut rename: Option<usize> = None;
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for i in 0..self.sessions.len() {
-            if self.rename_field(ui, theme, i) {
-                continue;
-            }
-            let selected = i == self.sessions.active_index();
-            let mut text =
-                egui::RichText::new(self.sessions.name(i))
-                    .size(11.0)
-                    .color(if selected {
-                        color(theme.ui.fg)
-                    } else {
-                        color(theme.ui.fg_faint)
-                    });
-            if selected {
-                text = text.strong();
-            }
-            let resp = ui
-                .add(egui::Label::new(text).sense(egui::Sense::click_and_drag()))
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            // Drag a tab onto another to reorder the strip.
-            resp.dnd_set_drag_payload(TabDrag(i));
-            if let Some(src) = resp.dnd_release_payload::<TabDrag>() {
-                moved = Some((src.0, i));
-            }
-            if resp.dnd_hover_payload::<TabDrag>().is_some() {
-                let rect = resp.rect.expand2(egui::vec2(2.0, 1.0));
-                ui.painter().rect_stroke(
-                    rect,
-                    egui::CornerRadius::same(2),
-                    egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            if resp.clicked() {
-                activate = Some(i);
-            }
-            resp.context_menu(|ui| {
-                if ui.button("Rename Terminal").clicked() {
+        let mut reset: Option<usize> = None;
+        let named = |i: usize| self.sessions.is_named(i);
+        let row = tabs::row(
+            ui,
+            theme,
+            &strip,
+            Some(self.sessions.active_index()),
+            true,
+            false,
+            |ui, i| {
+                if menu_item(ui, theme, "Rename Terminal").clicked() {
                     rename = Some(i);
                     ui.close_menu();
                 }
-                if self.sessions.is_named(i) && ui.button("Reset Name").clicked() {
-                    self.sessions.rename(i, "");
+                if named(i) && menu_item(ui, theme, "Reset Name").clicked() {
+                    reset = Some(i);
                     ui.close_menu();
                 }
-                if ui.button("Close Terminal").clicked() {
+                if menu_item(ui, theme, "Close Terminal").clicked() {
                     close = Some(i);
                     ui.close_menu();
                 }
-            });
-            if mark_button(ui, theme, Mark::Cross, 13.0)
-                .on_hover_text("Close Terminal")
-                .clicked()
-            {
-                close = Some(i);
+            },
+        );
+        let mut activate = None;
+        for action in row.actions {
+            match action {
+                tabs::Action::Show(i) => activate = Some(i),
+                tabs::Action::Close(i) => close = Some(i),
+                tabs::Action::Move { from, to } => self.sessions.reorder(from, to),
             }
-            ui.add_space(4.0);
         }
-        if mark_button(ui, theme, Mark::Plus, 16.0)
+        // The name box takes the place of the tab being renamed, drawn over it
+        // rather than in the row, so the strip keeps its own layout.
+        self.rename_field(ui, theme, &row.rects);
+        ui.add_space(4.0);
+        if plus_button(ui, theme, 16.0)
             .on_hover_text("New Terminal")
             .clicked()
         {
@@ -121,8 +92,8 @@ impl Terminal {
         if let Some(i) = rename {
             self.renaming = Some((i, self.sessions.name(i), true));
         }
-        if let Some((from, to)) = moved {
-            self.sessions.reorder(from, to);
+        if let Some(i) = reset {
+            self.sessions.rename(i, "");
         }
         if let Some(i) = activate {
             self.sessions.set_active(i);
@@ -134,24 +105,32 @@ impl Terminal {
         }
     }
 
-    /// The inline name box shown in place of the tab being renamed. Returns
-    /// true when it took this tab's place.
-    fn rename_field(&mut self, ui: &mut egui::Ui, theme: &Theme, index: usize) -> bool {
-        let Some((editing, _, _)) = &self.renaming else {
-            return false;
+    /// The inline name box, over the tab being renamed. Enter keeps the name,
+    /// Escape or a click elsewhere drops it.
+    fn rename_field(&mut self, ui: &mut egui::Ui, theme: &Theme, rects: &[egui::Rect]) {
+        let Some((index, _, _)) = &self.renaming else {
+            return;
         };
-        if *editing != index {
-            return false;
-        }
+        let Some(rect) = rects.get(*index).copied() else {
+            return;
+        };
         let mut done = false;
         let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if let Some((_, name, focus)) = &mut self.renaming {
-            let resp = ui.add(
-                egui::TextEdit::singleline(name)
-                    .desired_width(90.0)
-                    .font(egui::TextStyle::Small)
-                    .text_color(color(theme.ui.fg_bright)),
-            );
+            // Floated over the tab rather than put in the row, so the strip
+            // keeps its layout while a name is being typed.
+            let resp = egui::Area::new(ui.id().with("rename"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(rect.min)
+                .show(ui.ctx(), |ui| {
+                    ui.add_sized(
+                        rect.size(),
+                        egui::TextEdit::singleline(name)
+                            .font(egui::TextStyle::Small)
+                            .text_color(color(theme.ui.fg_bright)),
+                    )
+                })
+                .inner;
             if *focus {
                 resp.request_focus();
                 *focus = false;
@@ -170,7 +149,6 @@ impl Terminal {
         } else if cancel {
             self.renaming = None;
         }
-        true
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, theme: &Theme, cwd: &Path, ctx: &egui::Context) {
@@ -407,14 +385,15 @@ impl Terminal {
     }
 }
 
-/// A small ×/+ button drawn as shapes rather than glyphs, so it shows up
-/// regardless of font coverage — the same trick the editor's tabs use.
-fn mark_button(ui: &mut egui::Ui, theme: &Theme, mark: Mark, size: f32) -> egui::Response {
+/// The `+` at the end of the tab strip, drawn as two strokes rather than a
+/// glyph so it shows up regardless of font coverage — the same shapes the
+/// tabs' own marks are made of.
+fn plus_button(ui: &mut egui::Ui, theme: &Theme, size: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered();
-        let stroke_color = if hovered {
+        let tint = if hovered {
             color(theme.ui.fg)
         } else {
             color(theme.ui.fg_dim)
@@ -425,21 +404,11 @@ fn mark_button(ui: &mut egui::Ui, theme: &Theme, mark: Mark, size: f32) -> egui:
         }
         let r = size * 0.28;
         let c = rect.center();
-        let stroke = egui::Stroke::new(1.3_f32, stroke_color);
-        match mark {
-            Mark::Cross => {
-                ui.painter()
-                    .line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
-                ui.painter()
-                    .line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
-            }
-            Mark::Plus => {
-                ui.painter()
-                    .line_segment([c + egui::vec2(-r, 0.0), c + egui::vec2(r, 0.0)], stroke);
-                ui.painter()
-                    .line_segment([c + egui::vec2(0.0, -r), c + egui::vec2(0.0, r)], stroke);
-            }
-        }
+        let stroke = egui::Stroke::new(1.3_f32, tint);
+        ui.painter()
+            .line_segment([c + egui::vec2(-r, 0.0), c + egui::vec2(r, 0.0)], stroke);
+        ui.painter()
+            .line_segment([c + egui::vec2(0.0, -r), c + egui::vec2(0.0, r)], stroke);
     }
     resp
 }

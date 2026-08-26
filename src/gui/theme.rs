@@ -27,6 +27,36 @@ pub fn glyph(painter: &egui::Painter, center: egui::Pos2, mark: &str, size: f32,
     );
 }
 
+/// The sidebar reads at one size across its three views — the navigator's
+/// rows, the search hits and the git changes — so switching between them is
+/// not a change of scale. Monospace runs wider than the proportional face at
+/// the same size, so the code a hit or a changed path shows is set a notch
+/// down; the small all-caps labels over the fields are smaller again.
+pub const SIDEBAR_TEXT: f32 = 14.0;
+pub const SIDEBAR_CODE: f32 = 13.0;
+pub const SIDEBAR_LABEL: f32 = 11.5;
+
+/// The close cross a tab wears, drawn as two strokes rather than the `×`
+/// glyph: at the size a pointer needs to hit it, a glyph goes soft while
+/// strokes keep their weight. `size` is the box it sits in.
+pub fn cross(painter: &egui::Painter, center: egui::Pos2, size: f32, tint: Color32) {
+    let r = size * 0.28;
+    let stroke = egui::Stroke::new((size * 0.1).max(1.3), tint);
+    painter.line_segment(
+        [center + egui::vec2(-r, -r), center + egui::vec2(r, r)],
+        stroke,
+    );
+    painter.line_segment(
+        [center + egui::vec2(r, -r), center + egui::vec2(-r, r)],
+        stroke,
+    );
+}
+
+/// The dot an unsaved tab wears in place of that cross, in the same box.
+pub fn dot(painter: &egui::Painter, center: egui::Pos2, size: f32, tint: Color32) {
+    painter.circle_filled(center, size * 0.26, tint);
+}
+
 /// The code font actually in effect, so measurements follow the zoom.
 pub fn code_font(ui: &egui::Ui) -> FontId {
     ui.style()

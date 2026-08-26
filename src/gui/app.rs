@@ -20,7 +20,9 @@ use crate::gui::git::GitPanel;
 use crate::gui::highlight;
 use crate::gui::keys;
 use crate::gui::terminal::Terminal;
-use crate::gui::theme::{ansi_color, color, glyph, icons};
+use crate::gui::theme::{
+    ansi_color, color, glyph, icons, SIDEBAR_CODE, SIDEBAR_LABEL, SIDEBAR_TEXT,
+};
 
 #[derive(PartialEq, Clone, Copy)]
 enum SidebarView {
@@ -1880,11 +1882,15 @@ impl App {
                     })
                 };
                 let heading = |ui: &mut egui::Ui, text: &str, focused: bool| {
-                    ui.label(egui::RichText::new(text).size(10.0).color(if focused {
-                        color(theme.ui.accent_light)
-                    } else {
-                        color(theme.ui.fg_faint)
-                    }));
+                    ui.label(
+                        egui::RichText::new(text)
+                            .size(SIDEBAR_LABEL)
+                            .color(if focused {
+                                color(theme.ui.accent_light)
+                            } else {
+                                color(theme.ui.fg_faint)
+                            }),
+                    );
                 };
 
                 ui.horizontal(|ui| {
@@ -1899,7 +1905,7 @@ impl App {
                                     } else {
                                         color(theme.ui.fg_faint)
                                     })
-                                    .size(11.0);
+                                    .size(SIDEBAR_LABEL);
                                 let button = egui::Button::new(text).frame(true).fill(if *on {
                                     color(theme.ui.selected_bg)
                                 } else {
@@ -1960,7 +1966,7 @@ impl App {
                 if let Some(example) = SearchField::Exclude.example() {
                     ui.label(
                         egui::RichText::new(example)
-                            .size(10.0)
+                            .size(SIDEBAR_LABEL)
                             .color(color(theme.ui.fg_faint)),
                     );
                 }
@@ -1973,14 +1979,18 @@ impl App {
                     } else {
                         theme.ui.fg_faint
                     };
-                    ui.label(egui::RichText::new(summary).color(color(tone)).size(11.0));
+                    ui.label(
+                        egui::RichText::new(summary)
+                            .color(color(tone))
+                            .size(SIDEBAR_LABEL),
+                    );
                     if !self.search.results.is_empty() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .button(
                                     egui::RichText::new("Replace All")
                                         .color(color(theme.ui.fg))
-                                        .size(11.0),
+                                        .size(SIDEBAR_LABEL),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .clicked()
@@ -2008,14 +2018,14 @@ impl App {
                     egui::CollapsingHeader::new(
                         egui::RichText::new(rel)
                             .color(color(theme.ui.fg))
-                            .size(12.5),
+                            .size(SIDEBAR_TEXT),
                     )
                     .id_salt(&file.path)
                     .default_open(true)
                     .show(ui, |ui| {
                         for m in &file.matches {
                             let mut job = egui::text::LayoutJob::default();
-                            let font = egui::FontId::monospace(11.5);
+                            let font = egui::FontId::monospace(SIDEBAR_CODE);
                             let fmt = |fg, bg| egui::text::TextFormat {
                                 font_id: font.clone(),
                                 color: fg,
@@ -2635,7 +2645,7 @@ impl App {
             || !self.editor.previews.is_empty()
         {
             egui::TopBottomPanel::top("tabs")
-                .exact_height(34.0)
+                .exact_height(30.0)
                 .frame(egui::Frame::default().fill(color(theme.ui.status_bg)))
                 .show(ctx, |ui| {
                     let preview_chord = self

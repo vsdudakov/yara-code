@@ -392,6 +392,12 @@ pub struct Terminals {
     list: Vec<Pty>,
     /// Per-session tab name; empty means "unnamed", drawn as its position.
     names: Vec<String>,
+    /// A number that stays with a session for as long as it lives. A frontend
+    /// names a tab's widget by it rather than by the slot, because a strip
+    /// that reorders under a drag would otherwise leave the drag holding
+    /// whichever shell slid into that slot.
+    ids: Vec<u64>,
+    minted: u64,
     active: usize,
     /// Why the last attempt to open a shell failed.
     pub error: Option<String>,
@@ -408,6 +414,11 @@ impl Terminals {
                 None => (index + 1).to_string(),
             },
         }
+    }
+
+    /// The number this session keeps for its life; see [`Terminals::ids`].
+    pub fn id(&self, index: usize) -> u64 {
+        self.ids.get(index).copied().unwrap_or(u64::MAX)
     }
 
     /// True when this session carries a name of its own.
@@ -430,8 +441,10 @@ impl Terminals {
         }
         let pty = self.list.remove(from);
         let name = self.names.remove(from);
+        let id = self.ids.remove(from);
         self.list.insert(to, pty);
         self.names.insert(to, name);
+        self.ids.insert(to, id);
         self.active = crate::core::buffer::shift_index(self.active, from, to);
     }
 
@@ -470,6 +483,8 @@ impl Terminals {
             Ok(pty) => {
                 self.list.push(pty);
                 self.names.push(String::new());
+                self.ids.push(self.minted);
+                self.minted += 1;
                 self.active = self.list.len() - 1;
                 self.error = None;
             }
@@ -496,6 +511,7 @@ impl Terminals {
         }
         self.list.remove(index);
         self.names.remove(index);
+        self.ids.remove(index);
         // Keep pointing at the same session when an earlier tab goes away.
         if index < self.active {
             self.active -= 1;
@@ -513,6 +529,7 @@ impl Terminals {
     pub fn clear(&mut self) {
         self.list.clear();
         self.names.clear();
+        self.ids.clear();
         self.active = 0;
         self.error = None;
     }

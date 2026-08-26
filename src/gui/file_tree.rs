@@ -9,7 +9,7 @@ use crate::core::command::Command;
 use crate::core::fs_ops;
 use crate::core::git::GitState;
 use crate::core::theme::Theme;
-use crate::gui::theme::{color, glyph, icons};
+use crate::gui::theme::{color, glyph, icons, SIDEBAR_LABEL, SIDEBAR_TEXT};
 
 pub enum TreeEvent {
     Open(PathBuf),
@@ -269,7 +269,7 @@ impl FileTree {
                     pos + egui::vec2(14.0, 14.0),
                     egui::Align2::LEFT_TOP,
                     name,
-                    egui::FontId::proportional(12.0),
+                    egui::FontId::proportional(SIDEBAR_TEXT),
                     color(theme.ui.fg),
                 );
             }
@@ -450,7 +450,7 @@ impl FileTree {
             .unwrap_or_else(|| root.display().to_string());
         let is_expanded = self.expanded.contains(root);
         let (row_rect, resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::click());
         let drop_hover = resp.dnd_hover_payload::<PathBuf>().is_some();
         if drop_hover {
             self.valid_drop_target = true;
@@ -485,7 +485,7 @@ impl FileTree {
                 egui::pos2(row_rect.min.x + 24.0, cy),
                 egui::Align2::LEFT_CENTER,
                 name.to_uppercase(),
-                egui::FontId::proportional(11.5),
+                egui::FontId::proportional(SIDEBAR_LABEL),
                 fg,
             );
         }
@@ -518,7 +518,7 @@ impl FileTree {
             ui.label(
                 egui::RichText::new("No folder in the project")
                     .color(color(theme.ui.fg_dim))
-                    .size(12.0),
+                    .size(SIDEBAR_TEXT),
             );
             ui.add_space(8.0);
             for command in [Command::OpenRecent, Command::OpenFolder] {
@@ -526,7 +526,7 @@ impl FileTree {
                     .button(
                         egui::RichText::new(command.label())
                             .color(color(theme.ui.fg))
-                            .size(12.0),
+                            .size(SIDEBAR_TEXT),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
@@ -584,7 +584,7 @@ impl FileTree {
 
             let full_width = ui.available_width();
             let (row_rect, resp) =
-                ui.allocate_exact_size(egui::vec2(full_width, 22.0), egui::Sense::click_and_drag());
+                ui.allocate_exact_size(egui::vec2(full_width, 24.0), egui::Sense::click_and_drag());
 
             // Drag source: any row can be picked up and dropped onto a folder.
             resp.dnd_set_drag_payload(path.clone());
@@ -642,12 +642,12 @@ impl FileTree {
                 } else {
                     icons.file
                 };
-                glyph(ui.painter(), egui::pos2(icon_x, cy), mark, 12.0, icon_fg);
+                glyph(ui.painter(), egui::pos2(icon_x, cy), mark, 13.0, icon_fg);
                 ui.painter().text(
-                    egui::pos2(row_rect.min.x + indent + 16.0, cy),
+                    egui::pos2(row_rect.min.x + indent + 17.0, cy),
                     egui::Align2::LEFT_CENTER,
                     &name,
-                    egui::FontId::proportional(13.0),
+                    egui::FontId::proportional(SIDEBAR_TEXT),
                     fg,
                 );
             }

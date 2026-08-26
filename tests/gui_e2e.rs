@@ -84,6 +84,9 @@ struct Harness {
     events: Vec<Event>,
     /// Every string laid out last frame, and where it was drawn.
     text: Vec<(String, Pos2)>,
+    /// Every line the frame drew. The marks on a tab are strokes rather than
+    /// glyphs, so this is how a test finds one.
+    strokes: Vec<[Pos2; 2]>,
     /// What the last frame put on the clipboard, if anything.
     copied: Option<String>,
 }
@@ -97,6 +100,7 @@ impl Harness {
             ctx,
             events: Vec::new(),
             text: Vec::new(),
+            strokes: Vec::new(),
             copied: None,
         };
         // Two frames: egui lays out on the first and settles on the second.
@@ -119,6 +123,14 @@ impl Harness {
             .iter()
             .filter_map(|shape| match &shape.shape {
                 egui::Shape::Text(text) => Some((text.galley.text().to_string(), text.pos)),
+                _ => None,
+            })
+            .collect();
+        self.strokes = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, .. } => Some(*points),
                 _ => None,
             })
             .collect();
@@ -900,18 +912,18 @@ impl Harness {
             .map(|(_, at)| Pos2::new(at.x + 12.0, at.y + 6.0))
     }
 
-    /// The close cross of a file's tab: the first one drawn to the right of
-    /// the name, since every tab carries its own.
+    /// The close cross of a file's tab: two crossing strokes, the leftmost pair
+    /// drawn to the right of the name, since every tab carries its own.
     fn tab_cross(&self, name: &str) -> Option<Pos2> {
         let (_, name_at) = self
             .text
             .iter()
             .find(|(drawn, at)| drawn == name && at.x > Self::SIDEBAR && at.y < Self::STRIP)?;
-        self.text
+        self.strokes
             .iter()
-            .filter(|(drawn, at)| drawn == "\u{d7}" && at.x > name_at.x && at.y < Self::STRIP)
-            .min_by(|(_, a), (_, b)| a.x.total_cmp(&b.x))
-            .map(|(_, at)| Pos2::new(at.x + 3.0, at.y + 6.0))
+            .map(|[a, b]| Pos2::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0))
+            .filter(|at| at.x > name_at.x && at.y < Self::STRIP)
+            .min_by(|a, b| a.x.total_cmp(&b.x))
     }
 
     /// Whether the navigator — not the start page behind it, which names the
@@ -944,6 +956,28 @@ fn a_tab_answers_a_click_on_its_name_and_on_its_cross() {
     harness.click(cross);
     assert!(!harness.shows("A line of prose."), "{}", harness.screen());
     assert!(harness.shows("the second file"), "{}", harness.screen());
+}
+
+#[test]
+fn a_tab_carried_past_its_neighbour_changes_places_with_it() {
+    let project = Project::new("yara-gui-e2e-tabdrag");
+    project.file("second.txt", "the second file\n");
+    let mut harness = Harness::open(Some(&project));
+    for name in ["README.md", "second.txt"] {
+        let at = harness.position_of(name).expect("the navigator lists it");
+        harness.click(at);
+    }
+    let first = harness.tab_of("README.md").expect("a tab of its own");
+    let second = harness.tab_of("second.txt").expect("a tab of its own");
+    assert!(first.x < second.x, "{}", harness.screen());
+
+    // Carried past the middle of its neighbour, the tab takes its place — the
+    // strip has already reordered by the time the pointer lets go.
+    harness.drag(first, Pos2::new(second.x + 40.0, second.y));
+    let moved = harness.tab_of("README.md").expect("still open");
+    let stayed = harness.tab_of("second.txt").expect("still open");
+    assert!(stayed.x < moved.x, "{}", harness.screen());
+    assert!(harness.shows("A line of prose."), "{}", harness.screen());
 }
 
 #[test]

@@ -88,7 +88,11 @@ const PAD: egui::Margin = egui::Margin {
     top: 5,
     bottom: 5,
 };
-const TEXT: f32 = 12.5;
+/// A tab's label is set at the size the navigator's rows are: the strip and
+/// the tree stand side by side, and one scale across the window's chrome reads
+/// as one window rather than two. The terminal has a single font for
+/// everything and needs nothing said about it.
+const TEXT: f32 = crate::gui::theme::SIDEBAR_TEXT;
 const MARK: f32 = 12.0;
 /// Between the label and the mark. One tab meets the next with no gap at all:
 /// they are told apart by their fill, and a seam between them only let the

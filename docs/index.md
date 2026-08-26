@@ -26,7 +26,7 @@ ycode-gui ~/code/project    # the same editor, in a window
   all, so it compiles and runs on a headless server.
 - **Syntax highlighting** from 75 syntect grammars, plus bundled TypeScript,
   TOML, Kotlin, Swift, Dart, Dockerfile, Protobuf and GraphQL — and any VS Code
-  color theme you drop into `~/.config/yara-code/themes/`.
+  color theme you drop into `~/.config/ycode/themes/`.
 - **Project folders**: one window can hold several, and search,
   go-to-definition and the navigator treat them as one project.
 - **Search** across the project with an exclude box in VS Code's glob spelling,
@@ -36,7 +36,8 @@ ycode-gui ~/code/project    # the same editor, in a window
   the cursor.
 - **A real shell** on a pseudo-terminal in both frontends; its tabs say what
   is running in them.
-- **Markdown preview** and indent guides in both frontends.
+- **Markdown preview** — lists, tables, tasks and mermaid charts — and indent
+  guides in both frontends.
 - **VS Code key bindings**, all rebindable in a commented `settings.json` that
   applies on save, with per-project overrides in `.ycode/settings.json`.
 

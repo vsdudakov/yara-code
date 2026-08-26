@@ -54,6 +54,24 @@ Folds are dropped when an edit moves their header.
 top of the editor while you scroll, syntax highlighted, with their real line
 numbers, up to three deep.
 
+## Markdown preview
+
+`Cmd+Shift+V` / `Ctrl+Shift+V`, or **◫ Preview** on the tab strip, renders the
+markdown file in front in a tab of its own, and follows it keystroke by
+keystroke. Both frontends draw the same document:
+
+- **Headings**, ruled under the first two levels, with emphasis, inline code
+  and links inside them.
+- **Lists** of every kind — bulleted, numbered from the number written, and
+  ticked (`- [x]` / `- [ ]`), nested as deep as the indentation goes, with a
+  bullet per level.
+- **Tables**, with the alignment their `:---:` row asks for.
+- **Quotes**, fenced code with its language, and rules.
+- **Charts**: a ```` ```mermaid ```` block is drawn as a picture where it is a
+  `pie` or a `flowchart`/`graph` — boxes, arrows and the labels on them, laid
+  out the same way in both frontends. Every other mermaid diagram is left as
+  the code it was written as, which is easier to read than a wrong picture.
+
 ## Go to definition
 
 `F12` at the cursor, `Cmd+click` in the window, `Ctrl+click` or `Alt+click` in

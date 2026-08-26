@@ -1,6 +1,7 @@
 //! Frontend-independent editor logic, shared by the GPU window and the TUI.
 
 pub mod buffer;
+pub mod chart;
 pub mod clipboard;
 pub mod command;
 pub mod diff;
@@ -29,7 +30,8 @@ pub mod update;
 use std::path::PathBuf;
 
 /// Where the editor keeps its own files: `%APPDATA%` on Windows, and the XDG
-/// config directory — or `~/.config` — everywhere else.
+/// config directory — or `~/.config` — everywhere else. The folder is named
+/// after the commands, `ycode`, rather than after the repository.
 pub fn config_dir() -> Option<PathBuf> {
     // An explicit directory wins over every convention: it is how tests keep
     // their settings out of the user's, and how a portable install carries
@@ -39,14 +41,26 @@ pub fn config_dir() -> Option<PathBuf> {
     }
     if cfg!(windows) {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            return Some(PathBuf::from(appdata).join("yara-code"));
+            return Some(carried_over(PathBuf::from(appdata)));
         }
     }
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("yara-code"))
+    Some(carried_over(base))
+}
+
+/// The settings folder under `base`, moving one left behind by the older name
+/// into place first: an installation that has been through the rename keeps
+/// the settings, keymaps and themes it already had.
+fn carried_over(base: PathBuf) -> PathBuf {
+    let dir = base.join("ycode");
+    let before = base.join("yara-code");
+    if !dir.exists() && before.is_dir() && std::fs::rename(&before, &dir).is_err() {
+        return before;
+    }
+    dir
 }
 
 /// The user's home folder, as the platform spells it.

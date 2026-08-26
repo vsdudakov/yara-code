@@ -23,10 +23,16 @@ pub struct Icons {
     /// Tabs that are not files: a diff, and a rendered markdown preview.
     pub diff: &'static str,
     pub preview: &'static str,
+    /// The box a markdown task list draws, ticked or not.
+    pub check_on: &'static str,
+    pub check_off: &'static str,
     /// Step to the previous or next change in a diff. The window draws its own
     /// arrows for the same pair, since it has the shapes to draw them with.
     pub up: &'static str,
     pub down: &'static str,
+    /// Whether this is the ASCII set — what a chart drawn out of characters
+    /// has to know, since it draws lines rather than any one glyph.
+    pub ascii: bool,
 }
 
 const UNICODE: Icons = Icons {
@@ -42,8 +48,11 @@ const UNICODE: Icons = Icons {
     ellipsis: "…",
     diff: "≠",
     preview: "◫",
+    check_on: "☑",
+    check_off: "☐",
     up: "▴",
     down: "▾",
+    ascii: false,
 };
 
 const ASCII: Icons = Icons {
@@ -59,8 +68,11 @@ const ASCII: Icons = Icons {
     ellipsis: "...",
     diff: "=",
     preview: "#",
+    check_on: "[x]",
+    check_off: "[ ]",
     up: "^",
     down: "v",
+    ascii: true,
 };
 
 /// The full set, for a frontend that carries its own fonts and so never has
@@ -112,6 +124,8 @@ mod tests {
                 icons.ellipsis,
                 icons.diff,
                 icons.preview,
+                icons.check_on,
+                icons.check_off,
                 icons.up,
                 icons.down,
             ] {

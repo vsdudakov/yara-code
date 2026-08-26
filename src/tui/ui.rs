@@ -1565,11 +1565,14 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
 }
 
 /// A markdown file as a reader sees it: headings in the accent, code on the
-/// sidebar's background, lists with their bullets — one line of text per
-/// drawn row, wrapped to the pane.
+/// sidebar's background, lists with their bullets and boxes, tables ruled, and
+/// the charts drawn in characters — one line of text per drawn row, wrapped to
+/// the pane.
 fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
-    use crate::core::markdown::{plain, Block, Span as Md};
+    use crate::core::chart::{self, Chart};
+    use crate::core::markdown::{plain, Block, Marker, Span as Md};
     let theme = app.theme().clone();
+    let icons = app.icons;
     app.layout.viewer = whole;
     let Some(preview) = app.active_preview() else {
         return;
@@ -1587,6 +1590,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
             })
     };
     let body = on(theme.ui.fg, theme.ui.editor_bg);
+    let bright = on(theme.ui.fg_bright, theme.ui.editor_bg);
     let faint = on(theme.ui.fg_faint, theme.ui.editor_bg);
     let code = on(theme.ui.fg, theme.ui.sidebar_bg);
 
@@ -1607,13 +1611,12 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
             })
             .collect()
     };
-    let wrap = |text: &str, indent: &str| -> Vec<String> {
+    let wrap = |text: &str, indent: usize| -> Vec<String> {
         let mut rows = Vec::new();
         let mut line = String::new();
         for word in text.split_whitespace() {
             if !line.is_empty()
-                && line.chars().count() + 1 + word.chars().count()
-                    > width.saturating_sub(indent.len())
+                && line.chars().count() + 1 + word.chars().count() > width.saturating_sub(indent)
             {
                 rows.push(std::mem::take(&mut line));
             }
@@ -1627,6 +1630,27 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
         }
         rows
     };
+    // A run of text under a lead — a bullet, a quote bar — with the styling
+    // kept where the run fits on one row and dropped where it wraps, which is
+    // where it would go wrong anyway.
+    let run = |spans: &[Md], lead: &str, hang: &str, base: Style, lead_style: Style| {
+        let rows = wrap(&plain(spans), lead.chars().count());
+        let mut lines = Vec::new();
+        if rows.len() == 1 {
+            let mut styled = vec![Span::styled(lead.to_string(), lead_style)];
+            styled.extend(inline(spans, base));
+            lines.push(Line::from(styled));
+            return lines;
+        }
+        for (r, row) in rows.into_iter().enumerate() {
+            let lead = if r == 0 { lead } else { hang };
+            lines.push(Line::from(vec![
+                Span::styled(lead.to_string(), lead_style),
+                Span::styled(row, base),
+            ]));
+        }
+        lines
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     for block in preview.blocks.iter().skip(preview.scroll) {
@@ -1638,28 +1662,19 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                     format!("{marker}{text}"),
                     heading(*level),
                 )));
-                if *level == 1 {
+                // The window rules under its first two levels; so does this,
+                // with the two weights a terminal has to tell them apart.
+                if *level <= 2 {
+                    let rule = if *level == 1 { "═" } else { "─" };
                     lines.push(Line::from(Span::styled(
-                        "═".repeat(text.chars().count().min(width)),
-                        heading(1),
+                        format!("{marker}{}", rule.repeat(text.chars().count().min(width))),
+                        heading(*level),
                     )));
                 }
                 lines.push(Line::from(""));
             }
             Block::Paragraph(spans) => {
-                // Styled spans survive on the first row; wrapped rows carry the
-                // text only, which keeps the styling honest where it matters.
-                let text = plain(spans);
-                let rows = wrap(&text, "  ");
-                if rows.len() == 1 {
-                    let mut styled = vec![Span::styled("  ", body)];
-                    styled.extend(inline(spans, body));
-                    lines.push(Line::from(styled));
-                } else {
-                    for row in rows {
-                        lines.push(Line::from(Span::styled(format!("  {row}"), body)));
-                    }
-                }
+                lines.extend(run(spans, "  ", "  ", body, body));
                 lines.push(Line::from(""));
             }
             Block::Code(language, text) => {
@@ -1674,38 +1689,74 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                 }
                 lines.push(Line::from(""));
             }
-            Block::List(ordered, items) => {
-                for (n, item) in items.iter().enumerate() {
-                    let bullet = if *ordered {
-                        format!("{}.", n + 1)
-                    } else {
-                        "•".to_string()
-                    };
-                    let rows = wrap(&plain(item), "     ");
-                    for (r, row) in rows.into_iter().enumerate() {
-                        let lead = if r == 0 {
-                            format!("  {bullet} ")
-                        } else {
-                            "     ".to_string()
-                        };
-                        let mut styled = vec![Span::styled(lead, faint)];
-                        if r == 0 && item.iter().any(|s| !matches!(s, Md::Text(_))) {
-                            styled.extend(inline(item, body));
-                        } else {
-                            styled.push(Span::styled(row, body));
+            Block::List(items) => {
+                for item in items {
+                    let indent = " ".repeat(2 + item.depth * 2);
+                    let marker = match item.marker {
+                        Marker::Bullet if icons.ascii => {
+                            ["-", "*", "+"][item.depth % 3].to_string()
                         }
-                        lines.push(Line::from(styled));
-                    }
+                        Marker::Bullet => ["•", "◦", "▪"][item.depth % 3].to_string(),
+                        Marker::Number(n) => format!("{n}."),
+                        Marker::Task(true) => icons.check_on.to_string(),
+                        Marker::Task(false) => icons.check_off.to_string(),
+                    };
+                    let lead = format!("{indent}{marker} ");
+                    let hang = " ".repeat(lead.chars().count());
+                    let mark = match item.marker {
+                        // A ticked box is the one part of a list that says
+                        // something on its own, so it is the one part painted.
+                        Marker::Task(true) => on(theme.ui.accent_light, theme.ui.editor_bg),
+                        _ => faint,
+                    };
+                    lines.extend(run(&item.spans, &lead, &hang, body, mark));
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Table(table) => {
+                lines.extend(ruled(table, width, icons.ascii, body, bright, faint));
+                lines.push(Line::from(""));
+            }
+            Block::Chart(Chart::Pie { title, slices }) => {
+                if let Some(title) = title {
+                    lines.push(Line::from(Span::styled(format!("  {title}"), bright)));
+                    lines.push(Line::from(""));
+                }
+                let shares = chart::shares(slices);
+                let label_width = slices
+                    .iter()
+                    .map(|slice| slice.label.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                let room = width.saturating_sub(label_width + 10).max(4);
+                for (i, slice) in slices.iter().enumerate() {
+                    let filled = (shares[i] * room as f64).round() as usize;
+                    let bar = if icons.ascii { "#" } else { "█" };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("  {:label_width$}  ", slice.label), body),
+                        Span::styled(
+                            bar.repeat(filled.max(1)),
+                            on(
+                                crate::core::theme::chart_color(&theme, i),
+                                theme.ui.editor_bg,
+                            ),
+                        ),
+                        Span::styled(format!(" {:.0}%", shares[i] * 100.0), faint),
+                    ]));
+                }
+                lines.push(Line::from(""));
+            }
+            Block::Chart(Chart::Flow(flow)) => {
+                for row in chart::draw(flow, !icons.ascii) {
+                    lines.push(Line::from(Span::styled(format!("  {row}"), body)));
                 }
                 lines.push(Line::from(""));
             }
             Block::Quote(spans) => {
-                for row in wrap(&plain(spans), "  │ ") {
-                    lines.push(Line::from(vec![
-                        Span::styled("  │ ", on(theme.ui.accent_light, theme.ui.editor_bg)),
-                        Span::styled(row, faint.add_modifier(Modifier::ITALIC)),
-                    ]));
-                }
+                let bar = on(theme.ui.accent_light, theme.ui.editor_bg);
+                let quoted = faint.add_modifier(Modifier::ITALIC);
+                let mark = if icons.ascii { "  | " } else { "  │ " };
+                lines.extend(run(spans, mark, mark, quoted, bar));
                 lines.push(Line::from(""));
             }
             Block::Rule => {
@@ -1724,6 +1775,93 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
         Paragraph::new(lines).style(on(theme.ui.fg, theme.ui.editor_bg)),
         whole,
     );
+}
+
+/// A table drawn with its rules: every column as wide as its widest cell, and
+/// the lot squeezed to fit the pane rather than run off it.
+fn ruled(
+    table: &crate::core::markdown::Table,
+    width: usize,
+    ascii: bool,
+    body: Style,
+    head: Style,
+    rule: Style,
+) -> Vec<Line<'static>> {
+    use crate::core::markdown::{plain, Align};
+    let columns = table.columns();
+    if columns == 0 {
+        return Vec::new();
+    }
+    let mut widths: Vec<usize> = table
+        .head
+        .iter()
+        .map(|cell| plain(cell).chars().count())
+        .collect();
+    for row in &table.rows {
+        for (c, cell) in row.iter().enumerate() {
+            widths[c] = widths[c].max(plain(cell).chars().count());
+        }
+    }
+    // Every column gives up the same share of what does not fit.
+    let frame = columns * 3 + 1;
+    let mut over = (widths.iter().sum::<usize>() + frame).saturating_sub(width);
+    while over > 0 {
+        let Some(widest) = (0..columns).max_by_key(|c| widths[*c]) else {
+            break;
+        };
+        if widths[widest] <= 3 {
+            break;
+        }
+        widths[widest] -= 1;
+        over -= 1;
+    }
+
+    let (across, down, joins) = if ascii {
+        ('-', '|', ['+'; 6])
+    } else {
+        ('─', '│', ['┌', '┐', '└', '┘', '├', '┤'])
+    };
+    let rule_row = |left: char, mid: char, right: char| {
+        let mut text = String::from(left);
+        for (c, w) in widths.iter().enumerate() {
+            text.extend(std::iter::repeat_n(across, w + 2));
+            text.push(if c + 1 == columns { right } else { mid });
+        }
+        Line::from(Span::styled(format!("  {text}"), rule))
+    };
+    let cells = |row: &[Vec<crate::core::markdown::Span>], style: Style| {
+        let mut spans = vec![Span::styled(format!("  {down}"), rule)];
+        for (c, cell) in row.iter().enumerate() {
+            let text = plain(cell);
+            let text: String = text.chars().take(widths[c]).collect();
+            let room = widths[c] - text.chars().count();
+            let (before, after) = match table.align[c] {
+                Align::Left => (0, room),
+                Align::Right => (room, 0),
+                Align::Center => (room / 2, room - room / 2),
+            };
+            spans.push(Span::styled(
+                format!(" {}{}{} ", " ".repeat(before), text, " ".repeat(after)),
+                style,
+            ));
+            spans.push(Span::styled(down.to_string(), rule));
+        }
+        Line::from(spans)
+    };
+
+    let (top, middle, bottom) = if ascii {
+        ('+', '+', '+')
+    } else {
+        ('┬', '┼', '┴')
+    };
+    let mut lines = vec![rule_row(joins[0], top, joins[1])];
+    lines.push(cells(&table.head, head));
+    lines.push(rule_row(joins[4], middle, joins[5]));
+    for row in &table.rows {
+        lines.push(cells(row, body));
+    }
+    lines.push(rule_row(joins[2], bottom, joins[3]));
+    lines
 }
 
 /// A changed line's background: the tint laid thinly over the editor's own.

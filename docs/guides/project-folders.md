@@ -38,6 +38,13 @@ A project folder's row does not offer Rename, Move To… or Delete: renaming the
 folder you are working in from inside the editor is a foot-gun, and the
 navigator says so by not offering it.
 
+## The Dock icon (macOS)
+
+Hold the Dock icon and the menu lists the projects opened before, then the
+folder the window is on with a tick beside it, then **New Window**. A recent
+project opens in the window; New Window starts another copy of the editor with
+nothing in it, since one window here is one process.
+
 ## What stays with the first folder
 
 Git and the terminal's working directory are anchored to the **first** folder —

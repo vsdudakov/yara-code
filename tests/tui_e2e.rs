@@ -1240,6 +1240,44 @@ fn a_folder_row_offers_to_leave_the_project() {
 }
 
 #[test]
+fn a_preview_draws_its_lists_tables_and_charts() {
+    let project = Project::new("yara-e2e-preview-rich");
+    project.file("README.md", "# Yara Code\n\n## Lists\n\n- one\n  - nested\n- [x] done\n- [ ] todo\n\n## Table\n\n| Name | Size |\n|:-----|-----:|\n| one | 1 |\n| two | 22 |\n\n## Charts\n\n```mermaid\npie title Languages\n  \"Rust\" : 70\n  \"Docs\" : 30\n```\n\n```mermaid\nflowchart LR\n  A[Edit] --> B[Ship]\n```\n");
+    let mut harness = Harness::with_size(Some(project.path().to_path_buf()), 120, 60);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    harness.press(
+        KeyCode::Char('v'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    let screen = harness.screen();
+    // A nested item is set in under the one above it, and a ticked item wears
+    // its box rather than a bullet.
+    assert!(
+        screen.contains("• one") && screen.contains("◦ nested"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("☑ done") && screen.contains("☐ todo"),
+        "{screen}"
+    );
+    // The table is ruled, and the right-aligned column ends where it should.
+    assert!(screen.contains("│ Name │"), "{screen}");
+    assert!(screen.contains("│   22 │"), "right aligned: {screen}");
+    // The pie is bars with their shares, and the flowchart is boxes and an
+    // arrow — neither is left as the mermaid it was written in.
+    assert!(
+        screen.contains("Languages") && screen.contains("70%"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("│ Edit │") && screen.contains("▶"),
+        "{screen}"
+    );
+    assert!(!screen.contains("flowchart LR"), "{screen}");
+}
+
+#[test]
 fn a_markdown_file_previews_as_a_reader_sees_it() {
     let project = Project::new("yara-e2e-preview");
     project.file(

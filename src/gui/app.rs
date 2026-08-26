@@ -1392,6 +1392,9 @@ impl App {
     /// menu, which is the only entry that comes and goes.
     #[cfg(target_os = "macos")]
     fn system_menu_bar(&mut self, ctx: &egui::Context) {
+        // What the Dock icon offers is the recent list and the folder in the
+        // window, both of which move under the bar rather than with it.
+        crate::gui::mac_menu::set_dock(&self.settings.recent_projects, self.project.root());
         let has_update = self.update.is_some();
         if self.system_menu == Some(has_update) {
             self.drain_system_menu(ctx);
@@ -1406,6 +1409,18 @@ impl App {
     fn drain_system_menu(&mut self, ctx: &egui::Context) {
         for command in crate::gui::mac_menu::drain() {
             self.execute(ctx, command);
+        }
+        for _ in 0..crate::gui::mac_menu::drain_new_windows() {
+            if let Err(error) = crate::gui::mac_menu::open_new_window() {
+                self.status = Some(format!("no new window: {error}"));
+            }
+        }
+        for path in crate::gui::mac_menu::drain_folders() {
+            if path.is_dir() {
+                self.set_root(path);
+            } else {
+                self.status = Some(format!("gone: {}", path.display()));
+            }
         }
     }
 

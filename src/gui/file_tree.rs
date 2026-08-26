@@ -514,28 +514,36 @@ impl FileTree {
     /// none is the same thing as opening it, and is offered as that.
     fn empty_state(&mut self, ui: &mut egui::Ui, theme: &Theme, events: &mut Vec<TreeEvent>) {
         ui.add_space(10.0);
-        ui.vertical_centered(|ui| {
+        // The two ways in start where the navigator's own rows start, at its
+        // left edge: an empty panel is still the same column of entries.
+        const INDENT: f32 = 8.0;
+        ui.horizontal(|ui| {
+            ui.add_space(INDENT);
             ui.label(
                 egui::RichText::new("No folder in the project")
                     .color(color(theme.ui.fg_dim))
                     .size(SIDEBAR_TEXT),
             );
-            ui.add_space(8.0);
-            for command in [Command::OpenRecent, Command::OpenFolder] {
-                if ui
-                    .button(
+        });
+        ui.add_space(8.0);
+        for command in [Command::OpenRecent, Command::OpenFolder] {
+            let clicked = ui
+                .horizontal(|ui| {
+                    ui.add_space(INDENT);
+                    ui.button(
                         egui::RichText::new(command.label())
                             .color(color(theme.ui.fg))
                             .size(SIDEBAR_TEXT),
                     )
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .clicked()
-                {
-                    events.push(TreeEvent::Run(command));
-                }
-                ui.add_space(4.0);
+                })
+                .inner;
+            if clicked {
+                events.push(TreeEvent::Run(command));
             }
-        });
+            ui.add_space(4.0);
+        }
         let remaining = ui.available_height().max(20.0);
         let (_, resp) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), remaining),

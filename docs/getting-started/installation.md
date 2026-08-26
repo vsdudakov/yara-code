@@ -15,8 +15,23 @@ two frontends is that you can move between them without thinking about it.
 brew install vsdudakov/tap/ycode
 ```
 
+On **macOS** that is the whole install: **Yara Code.app** is linked into
+`/Applications` with its own icon and opens from the Dock and from Spotlight.
+Both commands live inside the bundle and are linked onto your `PATH` at the
+same time, so `ycode` still works in a terminal.
+
+On **Linux** the same command installs the two bare commands, which is all a
+box without a Dock has use for.
+
 The tap is updated by the release workflow, so `brew upgrade` follows new
 versions as they are tagged.
+
+!!! warning "The first open on macOS"
+
+    The app is signed ad-hoc rather than with an Apple Developer ID, so macOS
+    reports an unidentified developer the first time it is opened from Finder.
+    Allow it once in **System Settings → Privacy & Security**; every open after
+    that is ordinary. Running `ycode-gui` from a terminal never asks.
 
 !!! note "Why `yara-code` and not `ycode`"
 
@@ -36,15 +51,25 @@ Download the archive for your platform from the
 | macOS, Apple Silicon | `ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
 | macOS, Intel | `ycode-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
 | Linux, x86_64 | `ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, arm64 | `ycode-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows, x64 | `ycode-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
 
-Each archive carries both binaries, the README and the licence, and each has a
-`.sha256` beside it:
+Each archive carries the README, the licence and a `.sha256` beside it. On
+Linux and Windows it carries the two binaries; on **macOS** it carries
+`Yara Code.app`, which holds them both:
 
 ```bash
+# Linux
+shasum -a 256 -c ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+sudo mv ycode-vX.Y.Z-x86_64-unknown-linux-gnu/ycode* /usr/local/bin/
+
+# macOS: drag the app to /Applications, and link the commands out of it
 shasum -a 256 -c ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz.sha256
 tar xzf ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz
-sudo mv ycode-vX.Y.Z-aarch64-apple-darwin/ycode* /usr/local/bin/
+mv "ycode-vX.Y.Z-aarch64-apple-darwin/Yara Code.app" /Applications/
+sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode" /usr/local/bin/ycode
+sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode-gui" /usr/local/bin/ycode-gui
 ```
 
 ## Linux packages

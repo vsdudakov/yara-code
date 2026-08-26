@@ -120,11 +120,39 @@ pub fn how_to_update() -> String {
     }
 }
 
+/// The application bundle the running binary sits in, if it sits in one.
+/// macOS only: everywhere else a binary is a binary, and there is nothing
+/// around it to replace.
+pub fn bundle_root() -> Option<PathBuf> {
+    bundle_root_of(&std::env::current_exe().ok()?)
+}
+
+/// The same question asked of a path, so it can be asked without being inside
+/// a bundle to ask from.
+fn bundle_root_of(exe: &Path) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension().is_some_and(|e| e == "app"))
+    .then(|| app.to_path_buf())
+}
+
+/// Where an update has to be able to write: the folder holding the bundle when
+/// there is one — the whole application is what gets replaced — and the folder
+/// holding the binary when there is not.
 fn installed_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()?
-        .parent()
-        .map(Path::to_path_buf)
+    match bundle_root() {
+        Some(app) => app.parent().map(Path::to_path_buf),
+        None => std::env::current_exe()
+            .ok()?
+            .parent()
+            .map(Path::to_path_buf),
+    }
 }
 
 fn is_writable(dir: &Path) -> bool {
@@ -256,6 +284,9 @@ pub fn install(release: &Release, report: &mut dyn FnMut(Progress)) -> Result<Pa
 
     // The new binaries are one directory deep, named after the archive.
     let unpacked = staging.join(asset.trim_end_matches(".tar.gz").trim_end_matches(".zip"));
+    if let Some(app) = bundle_root() {
+        return replace_bundle(&app, &unpacked, &staging).map(|()| dir);
+    }
     for name in binaries() {
         let from = unpacked.join(&name);
         if !from.exists() {
@@ -336,6 +367,65 @@ fn content_length(url: &str) -> Option<u64> {
                 .then(|| value.trim().parse::<u64>().ok())?
         })
         .next_back()
+}
+
+/// Swaps a whole application bundle for the one just unpacked. Replacing the
+/// binaries inside the old bundle would leave its Info.plist claiming the old
+/// version and break the seal its signature puts on the files around them, so
+/// the bundle is what moves.
+///
+/// A running application can be moved: the process holds the files it already
+/// opened, not the path they were at. The old one is set aside rather than
+/// deleted, and put back if the new one cannot be landed.
+fn replace_bundle(app: &Path, unpacked: &Path, staging: &Path) -> Result<(), String> {
+    let name = app
+        .file_name()
+        .ok_or("cannot tell what this application is called")?;
+    let new = unpacked.join(name);
+    if !new.is_dir() {
+        return Err(format!("the release carries no {}", name.to_string_lossy()));
+    }
+    let parent = app
+        .parent()
+        .ok_or("cannot tell where this application lives")?;
+
+    // Across a filesystem a rename is not a rename, and /tmp is usually its
+    // own; the new bundle is copied next to the old one first, so the swap
+    // itself is two renames in one directory.
+    let landing = parent.join(format!(".{}-new", name.to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&landing);
+    copy_tree(&new, &landing)?;
+
+    let aside = parent.join(format!(".{}-old", name.to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&aside);
+    let moved_aside = std::fs::rename(app, &aside).is_ok();
+    if let Err(e) = std::fs::rename(&landing, app) {
+        // A failed update must not leave the user with nothing to launch.
+        if moved_aside {
+            let _ = std::fs::rename(&aside, app);
+        }
+        let _ = std::fs::remove_dir_all(&landing);
+        return Err(format!("cannot replace {}: {e}", app.display()));
+    }
+    let _ = std::fs::remove_dir_all(&aside);
+    let _ = std::fs::remove_dir_all(staging);
+    Ok(())
+}
+
+/// A directory copied whole. `ditto` rather than a walk of our own: it is what
+/// macOS ships for exactly this, and it carries the permissions and the
+/// symlinks a bundle is made of.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    let out = std::process::Command::new("/usr/bin/ditto")
+        .arg(from)
+        .arg(to)
+        .output()
+        .map_err(|e| format!("cannot copy the new application: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// Both binaries, named as this platform names them.
@@ -530,6 +620,88 @@ mod tests {
             tag: "v999.0.0".into(),
         };
         assert!(ahead.is_newer());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn replacing_an_application_swaps_the_bundle_whole_and_keeps_the_old_one_on_failure() {
+        use crate::core::test_support::Dir;
+
+        let dir = Dir::new("yara-update-bundle");
+        let applications = dir.path().join("Applications");
+        let app = applications.join("Yara Code.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(app.join("Contents/MacOS/ycode"), "old").unwrap();
+        std::fs::write(app.join("Contents/Info.plist"), "old plist").unwrap();
+
+        // What a release unpacks to: the whole application, not its parts.
+        let staging = dir.path().join("staging");
+        let unpacked = staging.join("ycode-v9.9.9-aarch64-apple-darwin");
+        let fresh = unpacked.join("Yara Code.app");
+        std::fs::create_dir_all(fresh.join("Contents/MacOS")).unwrap();
+        std::fs::write(fresh.join("Contents/MacOS/ycode"), "new").unwrap();
+        std::fs::write(fresh.join("Contents/Info.plist"), "new plist").unwrap();
+
+        replace_bundle(&app, &unpacked, &staging).expect("the swap");
+        assert_eq!(
+            std::fs::read_to_string(app.join("Contents/MacOS/ycode")).unwrap(),
+            "new"
+        );
+        // The plist moves with it, or the application would go on claiming the
+        // version it no longer is.
+        assert_eq!(
+            std::fs::read_to_string(app.join("Contents/Info.plist")).unwrap(),
+            "new plist"
+        );
+        // Nothing is left lying beside it.
+        let leftovers: Vec<_> = std::fs::read_dir(&applications)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers, ["Yara Code.app"]);
+
+        // A release that carries no application is refused, and the one that
+        // is installed stays installed.
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(replace_bundle(&app, &empty, &staging).is_err());
+        assert_eq!(
+            std::fs::read_to_string(app.join("Contents/MacOS/ycode")).unwrap(),
+            "new"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_binary_knows_whether_it_is_inside_an_application() {
+        use std::path::PathBuf;
+
+        let inside = PathBuf::from("/Applications/Yara Code.app/Contents/MacOS/ycode-gui");
+        assert_eq!(
+            bundle_root_of(&inside),
+            Some(PathBuf::from("/Applications/Yara Code.app"))
+        );
+        // What gets written is the folder the application sits in, because the
+        // application itself is what an update replaces.
+        assert_eq!(
+            bundle_root_of(&inside).and_then(|a| a.parent().map(PathBuf::from)),
+            Some(PathBuf::from("/Applications"))
+        );
+
+        // A bare binary is not in a bundle, and neither is one that only looks
+        // as though it might be.
+        for outside in [
+            "/usr/local/bin/ycode",
+            "/opt/homebrew/Cellar/ycode/0.5.9/bin/ycode",
+            "/Applications/Yara Code.app/Contents/Resources/ycode",
+            "/Applications/Yara Code/Contents/MacOS/ycode",
+        ] {
+            assert_eq!(
+                bundle_root_of(Path::new(outside)),
+                None,
+                "{outside} is not inside an application"
+            );
+        }
     }
 
     #[test]

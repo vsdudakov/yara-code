@@ -67,6 +67,10 @@ pub struct App {
     /// The update check, and the release it found.
     updates: crate::core::update::Checker,
     update: Option<crate::core::update::Release>,
+    /// Whether the system menu bar has been built, and with what answer to
+    /// "is there an update to install". macOS only; nothing else has one.
+    #[cfg(target_os = "macos")]
+    system_menu: Option<bool>,
     /// The install of that release, and how far it has got.
     installs: crate::core::update::Installer,
     installing: Option<crate::core::update::Progress>,
@@ -145,6 +149,8 @@ impl App {
             closing_all: false,
             updates: crate::core::update::Checker::default(),
             update: None,
+            #[cfg(target_os = "macos")]
+            system_menu: None,
             installs: crate::core::update::Installer::default(),
             installing: None,
             blame: None,
@@ -1348,7 +1354,40 @@ impl App {
 
     /// The top bar: a File menu whose entries and chords come from settings,
     /// laid out like the terminal frontend's dropdown.
+    /// macOS keeps its menus in the system bar, so the window draws none and
+    /// [`crate::gui::mac_menu`] puts the same three there instead. The bar is
+    /// built on the first frame — before then there is no application to hang
+    /// it on — and again whenever Install Update joins or leaves the Help
+    /// menu, which is the only entry that comes and goes.
+    #[cfg(target_os = "macos")]
+    fn system_menu_bar(&mut self, ctx: &egui::Context) {
+        let has_update = self.update.is_some();
+        if self.system_menu == Some(has_update) {
+            self.drain_system_menu(ctx);
+            return;
+        }
+        self.system_menu = Some(has_update);
+        crate::gui::mac_menu::install(&self.settings, has_update);
+        self.drain_system_menu(ctx);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn drain_system_menu(&mut self, ctx: &egui::Context) {
+        for command in crate::gui::mac_menu::drain() {
+            self.execute(ctx, command);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn system_menu_bar(&mut self, _ctx: &egui::Context) {}
+
     fn menu_bar(&mut self, ctx: &egui::Context) {
+        // On macOS the menus are in the system bar and the window has a title
+        // bar of its own, so the strip is not drawn at all — its 26 rows go
+        // back to the editor.
+        if cfg!(target_os = "macos") {
+            return;
+        }
         let theme = self.theme().clone();
         let mut chosen: Option<Command> = None;
         egui::TopBottomPanel::top("menubar")
@@ -2324,6 +2363,7 @@ impl App {
             self.request_quit(ctx);
         }
         self.menu_bar(ctx);
+        self.system_menu_bar(ctx);
 
         // Navigator / search / git sidebar. Declared before the status bar so
         // it runs the full window height; the view switcher lives in the

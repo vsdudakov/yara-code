@@ -9,6 +9,9 @@ pub mod fonts;
 pub mod git;
 pub mod highlight;
 pub mod keys;
+/// The system menu bar, which only macOS has.
+#[cfg(target_os = "macos")]
+pub mod mac_menu;
 pub mod preview;
 pub mod terminal;
 pub mod theme;

@@ -36,7 +36,10 @@ typing the path instead.
 
 Both frontends draw the same thing:
 
-- A **top bar** with the Yara Code label and the File, View and Help menus.
+- A **top bar** with the Yara Code label and the File, View and Help menus. On
+  macOS those menus are in the system menu bar instead, where a Mac keeps them,
+  and the window has no strip of its own — Settings and Quit move to the
+  **Yara Code** menu beside them, as they do in every Mac application.
 - A **sidebar** on the left with three views — `FILES`, `SEARCH`, `GIT` —
   switched in its footer or with `Cmd+Shift+E` / `Cmd+Shift+F` /
   `Ctrl+Shift+G`.

@@ -38,7 +38,7 @@ where the window has `Cmd+Shift`. Every command is rebindable in
 | Fold all / unfold all | `Cmd+Alt+0` / `Cmd+Alt+9` | `Ctrl+Alt+0` / `Ctrl+Alt+9` |
 | Select all / copy / cut | the text widget's own; `Cmd+C` also copies a selection in the terminal panel | `Ctrl+A` / `Ctrl+C` / `Ctrl+X` |
 | Paste | `Cmd+V` (the text widget's own, plus an image into the terminal) | `Ctrl+V` |
-| File / View / Help menu | click | `F10` / `Alt+F10` / `Shift+F1` |
+| File / View / Help menu | click — in the macOS menu bar, in the window elsewhere | `F10` / `Alt+F10` / `Shift+F1` |
 | Context menu | right click | `Shift+F10` |
 | Key bindings overlay | `F1` | `F1` |
 | Switch query / exclude box | click the field | `Ctrl+Shift+F` again |

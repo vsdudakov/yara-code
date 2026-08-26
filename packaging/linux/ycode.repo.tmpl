@@ -1,0 +1,9 @@
+# Drop this in /etc/yum.repos.d/ and `dnf install ycode` works. $basearch is
+# dnf's own: it fills in x86_64 or aarch64 for the machine reading it.
+[ycode]
+name=Yara Code
+baseurl=https://vsdudakov.github.io/packages/yum/$basearch
+enabled=1
+repo_gpgcheck=@SIGNED@
+gpgcheck=0
+gpgkey=https://vsdudakov.github.io/packages/yum/ycode.asc

@@ -141,6 +141,51 @@ jobs:
           generate_release_notes: true
           draft: false
 
+  package-repos:
+    name: Publish the APT and DNF repositories
+    needs: release
+    runs-on: ubuntu-latest
+    # The repositories live in a repository of their own, served by GitHub
+    # Pages; a token with write access to it is what this job needs. Skipped
+    # when the secret is absent, so a fork's release still works.
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Install the repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils createrepo-c
+      - name: Clone the package repository
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        if: env.PACKAGES_TOKEN != ''
+        run: |
+          git clone "https://x-access-token:${PACKAGES_TOKEN}@github.com/vsdudakov/packages.git" site
+          # Pages would otherwise hand the tree to Jekyll, which drops what it
+          # does not recognise.
+          touch site/.nojekyll
+      - name: Build the trees
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+          REPO_GPG_KEY: ${{ secrets.REPO_GPG_KEY }}
+        if: env.PACKAGES_TOKEN != ''
+        run: packaging/linux/publish-repos.sh dist site "$GITHUB_REF_NAME"
+      - name: Push them
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        if: env.PACKAGES_TOKEN != ''
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "ycode ${GITHUB_REF_NAME#v}"
+          git push
+
   homebrew:
     name: Update the Homebrew tap and the AUR PKGBUILD
     needs: release

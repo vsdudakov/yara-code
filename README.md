@@ -67,12 +67,23 @@ puts **both** `ycode` and `ycode-gui` on your `PATH`. The editor is called
 Yara Code; the commands are `ycode`, because `yara` already belongs to VirusTotal's
 malware scanner in every package manager.
 
-On Linux, every release also carries a `.deb`, an `.rpm` and a `PKGBUILD`:
+On Linux there are repositories, so the package manager keeps it up to date
+like anything else on the machine — `amd64`/`x86_64` and `arm64`/`aarch64` both:
 
 ```bash
-sudo apt install ./ycode_X.Y.Z-1_amd64.deb   # Debian, Ubuntu, Mint (arm64 too)
-sudo dnf install ./ycode-X.Y.Z-1.x86_64.rpm  # Fedora, RHEL, openSUSE (aarch64 too)
-makepkg -si                                  # Arch, from the release PKGBUILD
+# Debian, Ubuntu, Mint — the key and the source, once
+curl -fsSL https://vsdudakov.github.io/packages/apt/ycode.gpg \
+  | sudo tee /usr/share/keyrings/ycode.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/ycode.gpg] https://vsdudakov.github.io/packages/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/ycode.list > /dev/null
+sudo apt update && sudo apt install ycode
+
+# Fedora, RHEL, openSUSE
+sudo curl -fsSL -o /etc/yum.repos.d/ycode.repo https://vsdudakov.github.io/packages/yum/ycode.repo
+sudo dnf install ycode
+
+# Arch, from the release PKGBUILD
+makepkg -si
 ```
 
 Plain binaries for macOS (Apple Silicon and Intel), Linux x86_64 and arm64, and

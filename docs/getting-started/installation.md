@@ -16,11 +16,9 @@ brew install vsdudakov/tap/ycode
 ```
 
 On **macOS** that is the whole install: **Yara Code.app** is linked into
-`/Applications` with its own icon, opens from the Dock and from Spotlight,
-takes folders and files dropped on it, and puts its menus in the system menu
-bar where a Mac application's menus belong. Both commands live inside the
-bundle and are linked onto your `PATH` at the same time, so `ycode` still works
-in a terminal.
+`/Applications` with its own icon and opens from the Dock and from Spotlight.
+Both commands live inside the bundle and are linked onto your `PATH` at the
+same time, so `ycode` still works in a terminal.
 
 On **Linux** the same command installs the two bare commands, which is all a
 box without a Dock has use for.

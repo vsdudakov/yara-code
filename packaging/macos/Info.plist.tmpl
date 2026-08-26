@@ -36,35 +36,12 @@
   <true/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>
   <true/>
-  <!-- Drop a folder or a text file on the icon and it opens as the project. -->
-  <key>CFBundleDocumentTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleTypeName</key>
-      <string>Folder</string>
-      <key>CFBundleTypeRole</key>
-      <string>Editor</string>
-      <key>LSHandlerRank</key>
-      <string>Alternate</string>
-      <key>LSItemContentTypes</key>
-      <array>
-        <string>public.folder</string>
-      </array>
-    </dict>
-    <dict>
-      <key>CFBundleTypeName</key>
-      <string>Text</string>
-      <key>CFBundleTypeRole</key>
-      <string>Editor</string>
-      <key>LSHandlerRank</key>
-      <string>Alternate</string>
-      <key>LSItemContentTypes</key>
-      <array>
-        <string>public.text</string>
-        <string>public.source-code</string>
-        <string>public.plain-text</string>
-      </array>
-    </dict>
-  </array>
+  <!--
+    No CFBundleDocumentTypes: the window reads the folder it is given on the
+    command line, and a bundle is not handed one that way — Finder sends an
+    open event instead, which nothing here listens for yet. Claiming the types
+    without answering them would put Yara Code in "Open With" and then do
+    nothing when it was chosen.
+  -->
 </dict>
 </plist>

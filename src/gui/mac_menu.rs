@@ -138,11 +138,7 @@ fn skip(command: Command, has_update: bool) -> bool {
 /// application carries it. Hiding and the About panel are AppKit's own, so
 /// they are wired to AppKit's own selectors; Settings and Quit are ours, and
 /// Quit especially has to be — it is the one that asks about unsaved work.
-fn app_menu(
-    mtm: MainThreadMarker,
-    target: &MenuTarget,
-    settings: &Settings,
-) -> Retained<NSMenu> {
+fn app_menu(mtm: MainThreadMarker, target: &MenuTarget, settings: &Settings) -> Retained<NSMenu> {
     let menu = NSMenu::new(mtm);
     menu.addItem(&system_item(
         mtm,
@@ -186,7 +182,7 @@ fn command_item(
         item.setTarget(Some(target));
         item.setTag(tag_of(command));
         if let Some(chord) = settings.gui_chord(command) {
-            let (key, mask) = key_equivalent(&chord);
+            let (key, mask) = key_equivalent(chord);
             item.setKeyEquivalent(&NSString::from_str(&key));
             item.setKeyEquivalentModifierMask(mask);
         }
@@ -197,12 +193,7 @@ fn command_item(
 /// A row that runs one of AppKit's, which needs no target: an action with none
 /// walks the responder chain until something answers to it, and for these the
 /// application itself does.
-fn system_item(
-    mtm: MainThreadMarker,
-    title: &str,
-    action: Sel,
-    key: &str,
-) -> Retained<NSMenuItem> {
+fn system_item(mtm: MainThreadMarker, title: &str, action: Sel, key: &str) -> Retained<NSMenuItem> {
     let item = NSMenuItem::new(mtm);
     item.setTitle(&NSString::from_str(title));
     unsafe { item.setAction(Some(action)) };
@@ -250,9 +241,9 @@ fn key_equivalent(chord: &Chord) -> (String, NSEventModifierFlags) {
             "pagedown" => "\u{f72d}".to_string(),
             // Function keys start at F1, which is 0xF704.
             other if other.starts_with('f') => match other[1..].parse::<u32>() {
-                Ok(n) if (1..=24).contains(&n) => {
-                    char::from_u32(0xf704 + n - 1).map(String::from).unwrap_or_default()
-                }
+                Ok(n) if (1..=24).contains(&n) => char::from_u32(0xf704 + n - 1)
+                    .map(String::from)
+                    .unwrap_or_default(),
                 _ => String::new(),
             },
             _ => String::new(),

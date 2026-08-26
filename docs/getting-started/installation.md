@@ -15,7 +15,7 @@ two frontends is that you can move between them without thinking about it.
 brew install vsdudakov/tap/ycode
 ```
 
-On **macOS** that is the whole install: **Yara Code.app** is linked into
+On **macOS** that is the whole install: **Yara Code.app** is copied into
 `/Applications` with its own icon and opens from the Dock and from Spotlight.
 Both commands live inside the bundle and are linked onto your `PATH` at the
 same time, so `ycode` still works in a terminal.

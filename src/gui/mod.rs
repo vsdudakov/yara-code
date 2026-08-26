@@ -13,5 +13,6 @@ pub mod keys;
 #[cfg(target_os = "macos")]
 pub mod mac_menu;
 pub mod preview;
+pub mod tabs;
 pub mod terminal;
 pub mod theme;

@@ -19,10 +19,11 @@ use crate::gui::diff::DiffView;
 use crate::gui::file_tree::menu_item;
 use crate::gui::fold_view::Mapping;
 use crate::gui::highlight;
-use crate::gui::theme::{ansi_color, code_font, color, glyph, icons};
+use crate::gui::tabs;
+use crate::gui::theme::{ansi_color, code_font, color, icons};
 
 /// Space between the tab strip and the first line of text.
-const EDITOR_TOP_PAD: f32 = 8.0;
+const EDITOR_TOP_PAD: f32 = 4.0;
 
 #[derive(Default)]
 pub struct Editor {
@@ -68,10 +69,6 @@ pub struct Editor {
     /// the caret's place. Counted from one, as `cursor` is.
     pub blame_hover: Option<usize>,
 }
-
-/// The tab being dragged along the strip.
-#[derive(Clone, Copy)]
-struct TabDrag(usize);
 
 impl Editor {
     /// Opens `path` in a tab. False when it cannot be read as text, so the
@@ -446,189 +443,108 @@ impl Editor {
                 area = area.horizontal_scroll_offset(x);
             }
             let strip = area.show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 1.0;
                 ui.horizontal(|ui| {
-                    for (i, buf) in self.buffers.list.iter().enumerate() {
-                        let selected = i == self.buffers.active && self.active_diff.is_none();
-                        let fill = if selected {
-                            color(theme.ui.tab_active_bg)
-                        } else {
-                            color(theme.ui.tab_inactive_bg)
-                        };
-                        let frame = egui::Frame::default()
-                            .fill(fill)
-                            .inner_margin(egui::Margin::symmetric(10, 7));
-                        let tab = frame.show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            let fg = if selected {
-                                color(theme.ui.fg)
-                            } else {
-                                color(theme.ui.fg_dim)
-                            };
-                            let title = egui::RichText::new(buf.name()).color(fg).size(13.0);
-                            ui.add(egui::Label::new(title).selectable(false));
-                            // Room for the modified dot and the close cross,
-                            // painted below once it is known whether the
-                            // pointer is on them.
-                            ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::hover())
-                                .0
-                        });
-                        // The whole tab drags and the whole tab accepts a drop,
-                        // the way a row in the navigator does — grabbing one by
-                        // its name alone was a target the width of the text and
-                        // a drag that missed the padding did nothing.
-                        //
-                        // That handle lies over the tab's own contents, and egui
-                        // gives a click to the last widget registered under the
-                        // pointer, so a cross of its own would never be clicked:
-                        // whatever is drawn first is buried. The cross is
-                        // therefore a corner of the tab rather than a widget,
-                        // and where the pointer is says which of the two things
-                        // a click on the tab means.
-                        let tab_id = ui.id().with(("tab", i));
-                        let handle = ui
-                            .interact(tab.response.rect, tab_id, egui::Sense::click_and_drag())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        let icon_rect = tab.inner;
-                        let on_cross = |pos: Option<egui::Pos2>| {
-                            pos.is_some_and(|pos| icon_rect.contains(pos))
-                        };
-                        // The modified dot and the close cross, in the glyphs
-                        // the terminal frontend prints. Hovering the dot turns
-                        // it into a cross, like VS Code.
-                        if ui.is_rect_visible(icon_rect) {
-                            let hovered = on_cross(handle.hover_pos());
-                            let mark = if hovered {
-                                color(theme.ui.fg)
-                            } else {
-                                color(theme.ui.fg_dim)
-                            };
-                            if hovered {
-                                ui.painter().rect_filled(
-                                    icon_rect,
-                                    egui::CornerRadius::same(3),
-                                    color(theme.ui.hover_bg),
-                                );
-                            }
-                            let icons = icons();
-                            let mark_glyph = if buf.modified() && !hovered {
-                                icons.modified
-                            } else {
-                                icons.close
-                            };
-                            glyph(ui.painter(), icon_rect.center(), mark_glyph, 13.0, mark);
-                        }
-                        if handle.clicked() {
-                            if on_cross(handle.interact_pointer_pos()) {
-                                close = Some(i);
-                            } else {
-                                activate = Some(i);
-                            }
-                        }
-                        if handle.dragged() || handle.drag_started() {
-                            handle.dnd_set_drag_payload(TabDrag(i));
-                        }
-                        // A tab's own menu, the same two entries the terminal
-                        // frontend opens on a right-click. Picking the tab
-                        // first is what makes "this tab" unambiguous.
-                        let mut close_all = false;
-                        handle.context_menu(|ui| {
-                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
-                                close = Some(i);
-                                ui.close_menu();
-                            }
-                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
-                                close_all = true;
-                                ui.close_menu();
-                            }
-                        });
-                        if close_all {
-                            self_close_all = true;
-                        }
-                        let dropped = handle.dnd_release_payload::<TabDrag>().map(|src| src.0);
-                        let hovering = handle.dnd_hover_payload::<TabDrag>().is_some();
-                        if selected && self.active_preview.is_none() && reveal {
-                            tab.response.scroll_to_me(None);
-                        }
-                        if hovering {
-                            ui.painter().rect_stroke(
-                                tab.response.rect,
-                                egui::CornerRadius::ZERO,
-                                egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
-                        if let Some(src) = dropped {
-                            moved = Some((src, i));
+                    // Every kind of tab goes through the same strip, so a file,
+                    // a diff and a preview are the same size and answer a drag,
+                    // a click and a right-click alike. Only the files reorder:
+                    // a diff and a preview sit beside them in the order they
+                    // were opened.
+                    let files: Vec<tabs::Tab> = self
+                        .buffers
+                        .list
+                        .iter()
+                        .map(|buf| {
+                            tabs::Tab::new(buf.path.display(), buf.name()).modified(buf.modified())
+                        })
+                        .collect();
+                    let in_file = self.active_diff.is_none() && self.active_preview.is_none();
+                    let row = tabs::row(
+                        ui,
+                        theme,
+                        &files,
+                        in_file.then_some(self.buffers.active),
+                        true,
+                        reveal,
+                        |ui, i| tab_menu(ui, theme, &mut close, &mut self_close_all, i),
+                    );
+                    for action in row.actions {
+                        match action {
+                            tabs::Action::Show(i) => activate = Some(i),
+                            tabs::Action::Close(i) => close = Some(i),
+                            tabs::Action::Move { from, to } => moved = Some((from, to)),
                         }
                     }
-                    for (i, diff) in self.diffs.iter().enumerate() {
-                        let name = diff
-                            .path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(&diff.path)
-                            .to_string();
-                        let (tab, cross) = Self::side_tab(
-                            ui,
-                            theme,
-                            icons().diff,
-                            &name,
-                            self.active_diff == Some(i),
-                        );
-                        if self.active_diff == Some(i) && reveal {
-                            tab.scroll_to_me(None);
+
+                    let diffs: Vec<tabs::Tab> = self
+                        .diffs
+                        .iter()
+                        .map(|diff| {
+                            let name = diff.path.rsplit('/').next().unwrap_or(&diff.path);
+                            tabs::Tab::new(&diff.path, format!("{} {name}", icons().diff))
+                        })
+                        .collect();
+                    let row = tabs::row(
+                        ui,
+                        theme,
+                        &diffs,
+                        self.active_diff,
+                        false,
+                        reveal,
+                        |ui, i| tab_menu(ui, theme, &mut close_diff, &mut self_close_all, i),
+                    );
+                    for action in row.actions {
+                        match action {
+                            tabs::Action::Show(i) => show_diff = Some(i),
+                            tabs::Action::Close(i) => close_diff = Some(i),
+                            tabs::Action::Move { .. } => {}
                         }
-                        if cross.clicked() {
-                            close_diff = Some(i);
-                        } else if tab.clicked() {
-                            show_diff = Some(i);
-                        }
-                        // A diff is a tab like any other, and its menu says the
-                        // same two things a file tab's does.
-                        tab.context_menu(|ui| {
-                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
-                                close_diff = Some(i);
-                                ui.close_menu();
-                            }
-                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
-                                self_close_all = true;
-                                ui.close_menu();
-                            }
-                        });
                     }
-                    for (i, preview) in self.previews.iter().enumerate() {
-                        let (tab, cross) = Self::side_tab(
-                            ui,
-                            theme,
-                            icons().preview,
-                            &format!("{} preview", preview.name()),
-                            self.active_preview == Some(i),
-                        );
-                        if self.active_preview == Some(i) && reveal {
-                            tab.scroll_to_me(None);
+
+                    let previews: Vec<tabs::Tab> = self
+                        .previews
+                        .iter()
+                        .map(|preview| {
+                            tabs::Tab::new(
+                                preview.path.display(),
+                                format!("{} {} preview", icons().preview, preview.name()),
+                            )
+                        })
+                        .collect();
+                    let row = tabs::row(
+                        ui,
+                        theme,
+                        &previews,
+                        self.active_preview,
+                        false,
+                        reveal,
+                        |ui, i| tab_menu(ui, theme, &mut close_preview, &mut self_close_all, i),
+                    );
+                    for action in row.actions {
+                        match action {
+                            tabs::Action::Show(i) => show_preview = Some(i),
+                            tabs::Action::Close(i) => close_preview = Some(i),
+                            tabs::Action::Move { .. } => {}
                         }
-                        if cross.clicked() {
-                            close_preview = Some(i);
-                        } else if tab.clicked() {
-                            show_preview = Some(i);
-                        }
-                        tab.context_menu(|ui| {
-                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
-                                close_preview = Some(i);
-                                ui.close_menu();
-                            }
-                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
-                                self_close_all = true;
-                                ui.close_menu();
-                            }
-                        });
                     }
                 });
             });
             self.tab_offset = strip.state.offset.x;
             let overflow = strip.content_size.x > strip.inner_rect.width() + 0.5;
             self.tabs_overflow = overflow;
+            // A tab carried against either end of a full strip pulls the strip
+            // along, so it can be taken past what fits on the screen.
+            if overflow && tabs::carrying(ui.ctx()) {
+                if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                    let farthest = (strip.content_size.x - strip.inner_rect.width()).max(0.0);
+                    let edge = 24.0;
+                    if pos.x < strip.inner_rect.left() + edge {
+                        self.tab_scroll_to = Some((self.tab_offset - 8.0).max(0.0));
+                    } else if pos.x > strip.inner_rect.right() - edge {
+                        self.tab_scroll_to = Some((self.tab_offset + 8.0).min(farthest));
+                    }
+                }
+                ui.ctx().request_repaint();
+            }
             if overflow {
                 let step = (strip.inner_rect.width() * 0.6).max(120.0);
                 let farthest = (strip.content_size.x - strip.inner_rect.width()).max(0.0);
@@ -675,13 +591,16 @@ impl Editor {
             // Cannot fail: the button is only there when markdown is in front.
             let _ = self.toggle_preview();
         }
-        if let Some((from, to)) = moved {
-            self.buffers.reorder(from, to);
-        }
+        // The tab is brought to the front before the strip is reordered, so
+        // that a tab picked up and moved in the same frame is the one the
+        // reorder then carries along.
         if let Some(i) = activate {
             self.buffers.active = i;
             self.active_diff = None;
             self.active_preview = None;
+        }
+        if let Some((from, to)) = moved {
+            self.buffers.reorder(from, to);
         }
         if let Some(i) = close {
             self.request_close(i);
@@ -703,54 +622,6 @@ impl Editor {
         if let Some(i) = close_diff {
             self.close_diff(i);
         }
-    }
-
-    /// A diff's own tab, drawn after the files it sits beside.
-    /// A tab that is not a file: a diff or a preview, told apart by its
-    /// glyph — `≠` and `◫`, the same two the terminal frontend draws.
-    fn side_tab(
-        ui: &mut egui::Ui,
-        theme: &Theme,
-        mark: &str,
-        label: &str,
-        selected: bool,
-    ) -> (egui::Response, egui::Response) {
-        let fill = if selected {
-            color(theme.ui.tab_active_bg)
-        } else {
-            color(theme.ui.tab_inactive_bg)
-        };
-        let mut clicks = None;
-        egui::Frame::default()
-            .fill(fill)
-            .inner_margin(egui::Margin::symmetric(10, 7))
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let fg = if selected {
-                    color(theme.ui.fg)
-                } else {
-                    color(theme.ui.fg_dim)
-                };
-                let title = egui::RichText::new(format!("{mark} {label}"))
-                    .color(fg)
-                    .size(13.0);
-                let tab = ui
-                    .add(egui::Label::new(title).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                let (icon_rect, cross) =
-                    ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::click());
-                let cross = cross.on_hover_cursor(egui::CursorIcon::PointingHand);
-                if ui.is_rect_visible(icon_rect) {
-                    let mark = if cross.hovered() {
-                        color(theme.ui.fg)
-                    } else {
-                        color(theme.ui.fg_dim)
-                    };
-                    glyph(ui.painter(), icon_rect.center(), icons().close, 13.0, mark);
-                }
-                clicks = Some((tab, cross));
-            });
-        clicks.unwrap()
     }
 
     /// Closes a buffer outright when it is clean; otherwise asks first.
@@ -1328,4 +1199,23 @@ fn chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: e
         ]
     };
     painter.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}
+
+/// The two entries a right-click on a tab opens, whatever the tab holds. The
+/// strip picks that tab first, which is what makes "this tab" unambiguous.
+fn tab_menu(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    close: &mut Option<usize>,
+    close_all: &mut bool,
+    index: usize,
+) {
+    if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
+        *close = Some(index);
+        ui.close_menu();
+    }
+    if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
+        *close_all = true;
+        ui.close_menu();
+    }
 }

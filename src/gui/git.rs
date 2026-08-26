@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::git::{Change, GitState, Worktree, REFRESH_EVERY};
 use crate::core::theme::Theme;
-use crate::gui::theme::{ansi_color, color};
+use crate::gui::theme::{ansi_color, color, SIDEBAR_CODE, SIDEBAR_LABEL, SIDEBAR_TEXT};
 
 #[derive(Default)]
 pub struct GitPanel {
@@ -37,7 +37,7 @@ impl GitPanel {
                 ui.label(
                     egui::RichText::new("not a git repository")
                         .color(color(theme.ui.fg_faint))
-                        .size(12.0),
+                        .size(SIDEBAR_TEXT),
                 );
             });
             return None;
@@ -60,7 +60,7 @@ impl GitPanel {
                     ui.label(
                         egui::RichText::new(text)
                             .color(color(theme.ui.fg_faint))
-                            .size(10.0),
+                            .size(SIDEBAR_LABEL),
                     );
                 };
 
@@ -74,7 +74,7 @@ impl GitPanel {
                     .unwrap_or_default();
                 egui::ComboBox::from_id_salt("git_repo")
                     .width(ui.available_width())
-                    .selected_text(egui::RichText::new(current).size(12.0))
+                    .selected_text(egui::RichText::new(current).size(SIDEBAR_TEXT))
                     .show_ui(ui, |ui| {
                         for (i, repo) in self.state.repos.iter().enumerate() {
                             ui.selectable_value(&mut repo_choice, i, name_of(repo))
@@ -99,7 +99,7 @@ impl GitPanel {
                     .unwrap_or_default();
                 egui::ComboBox::from_id_salt("git_worktree")
                     .width(ui.available_width())
-                    .selected_text(egui::RichText::new(current).size(12.0))
+                    .selected_text(egui::RichText::new(current).size(SIDEBAR_TEXT))
                     .show_ui(ui, |ui| {
                         for (i, w) in self.state.worktrees.iter().enumerate() {
                             ui.selectable_value(&mut worktree_choice, i, label(w))
@@ -124,7 +124,11 @@ impl GitPanel {
                 } else {
                     theme.ui.fg_faint
                 };
-                ui.label(egui::RichText::new(summary).color(color(tone)).size(11.0));
+                ui.label(
+                    egui::RichText::new(summary)
+                        .color(color(tone))
+                        .size(SIDEBAR_LABEL),
+                );
             });
 
         ui.add_space(4.0);
@@ -141,7 +145,7 @@ impl GitPanel {
                         ui.label(
                             egui::RichText::new(text)
                                 .color(color(theme.ui.fg_faint))
-                                .size(10.0),
+                                .size(SIDEBAR_LABEL),
                         );
                     });
                 };
@@ -161,7 +165,7 @@ impl GitPanel {
                         let entered =
                             field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         let clicked = ui
-                            .button(egui::RichText::new("Commit").size(11.0))
+                            .button(egui::RichText::new("Commit").size(SIDEBAR_LABEL))
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked();
                         if entered || clicked {
@@ -194,14 +198,16 @@ impl GitPanel {
                         ui.label(
                             egui::RichText::new(format!("CHANGES  {}", unstaged.len()))
                                 .color(color(theme.ui.fg_faint))
-                                .size(10.0),
+                                .size(SIDEBAR_LABEL),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(10.0);
                             if ui
                                 .add(
-                                    egui::Button::new(egui::RichText::new("Stage All").size(10.0))
-                                        .frame(false),
+                                    egui::Button::new(
+                                        egui::RichText::new("Stage All").size(SIDEBAR_LABEL),
+                                    )
+                                    .frame(false),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .clicked()
@@ -232,7 +238,7 @@ impl GitPanel {
         ui.horizontal(|ui| {
             let mut job = egui::text::LayoutJob::default();
             let fmt = |c| egui::text::TextFormat {
-                font_id: egui::FontId::monospace(11.5),
+                font_id: egui::FontId::monospace(SIDEBAR_CODE),
                 color: c,
                 ..Default::default()
             };
@@ -280,7 +286,7 @@ impl GitPanel {
                 Mark::Unstage => ("−", "Unstage"),
             };
             if ui
-                .add(egui::Button::new(egui::RichText::new(glyph).size(12.0)).frame(false))
+                .add(egui::Button::new(egui::RichText::new(glyph).size(SIDEBAR_TEXT)).frame(false))
                 .on_hover_text(hint)
                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .clicked()

@@ -56,7 +56,8 @@ an AI agent wrote — and nothing more — that is exactly what this is.
 ## Install
 
 ```bash
-brew install vsdudakov/tap/ycode   # both commands; on macOS, the app as well
+brew install vsdudakov/tap/yara-code   # macOS: the app, icon and all
+brew install vsdudakov/tap/ycode       # the two commands alone
 
 ycode ~/code/project               # the terminal editor
 ycode-gui ~/code/project           # the same editor, in a window

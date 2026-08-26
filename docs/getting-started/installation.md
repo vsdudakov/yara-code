@@ -9,29 +9,38 @@ Yara Code ships two binaries from one crate: **`ycode`** (the terminal frontend)
 once** — one `brew install`, one `.deb`, one archive — because the point of the
 two frontends is that you can move between them without thinking about it.
 
-## Homebrew
+## macOS
+
+```bash
+brew install vsdudakov/tap/yara-code
+```
+
+That is the whole install: **Yara Code.app** lands in `/Applications` with its
+own icon and opens from the Dock and from Spotlight. Both commands live inside
+the bundle and are linked onto your `PATH` at the same time, so `ycode` still
+works in a terminal.
+
+It is a cask, because only a cask may put an application where Finder can see
+it — a formula's install runs in a sandbox that stops at Homebrew's own prefix.
+`brew upgrade --cask` follows new versions as they are tagged.
+
+## Linux, and macOS without the application
 
 ```bash
 brew install vsdudakov/tap/ycode
 ```
 
-On **macOS** that is the whole install: **Yara Code.app** is copied into
-`/Applications` with its own icon and opens from the Dock and from Spotlight.
-Both commands live inside the bundle and are linked onto your `PATH` at the
-same time, so `ycode` still works in a terminal.
+The formula installs the two bare commands and no application — all a box
+without a Dock has use for, and all a Mac you only ever reach over SSH needs.
+The two cannot both be installed on one machine: they own the same commands.
 
-On **Linux** the same command installs the two bare commands, which is all a
-box without a Dock has use for.
+!!! note "Signing"
 
-The tap is updated by the release workflow, so `brew upgrade` follows new
-versions as they are tagged.
-
-!!! warning "The first open on macOS"
-
-    The app is signed ad-hoc rather than with an Apple Developer ID, so macOS
-    reports an unidentified developer the first time it is opened from Finder.
-    Allow it once in **System Settings → Privacy & Security**; every open after
-    that is ordinary. Running `ycode-gui` from a terminal never asks.
+    Yara Code is signed ad-hoc rather than with an Apple Developer ID, and is
+    not notarised, so macOS would refuse to open it — the dialog it shows for
+    such an app offers *Move to Trash* and nothing else. The cask clears the
+    quarantine flag on the copy it installs, which is the same step you would
+    otherwise take by hand, and nothing else on the machine is affected.
 
 !!! note "Why `yara-code` and not `ycode`"
 

@@ -570,6 +570,18 @@ impl Editor {
                         } else if tab.clicked() {
                             show_diff = Some(i);
                         }
+                        // A diff is a tab like any other, and its menu says the
+                        // same two things a file tab's does.
+                        tab.context_menu(|ui| {
+                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
+                                close_diff = Some(i);
+                                ui.close_menu();
+                            }
+                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
+                                self_close_all = true;
+                                ui.close_menu();
+                            }
+                        });
                     }
                     for (i, preview) in self.previews.iter().enumerate() {
                         let (tab, cross) = Self::side_tab(
@@ -587,6 +599,16 @@ impl Editor {
                         } else if tab.clicked() {
                             show_preview = Some(i);
                         }
+                        tab.context_menu(|ui| {
+                            if menu_item(ui, theme, Command::CloseTab.label()).clicked() {
+                                close_preview = Some(i);
+                                ui.close_menu();
+                            }
+                            if menu_item(ui, theme, Command::CloseAllTabs.label()).clicked() {
+                                self_close_all = true;
+                                ui.close_menu();
+                            }
+                        });
                     }
                 });
             });

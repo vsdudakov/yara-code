@@ -397,10 +397,6 @@ fn short(path: &std::path::Path) -> String {
 /// Columns one `‹`/`›` press moves the tab strip by.
 pub const TAB_SCROLL_STEP: u16 = 12;
 
-/// Rows one notch of the wheel moves a pane. Twice what a terminal usually
-/// reports, because a notch of three lines is barely a move in a long file.
-pub const SCROLL_STEP: isize = 6;
-
 #[derive(Default, Clone)]
 pub struct Layout {
     /// The start page's rows, each the command it names.
@@ -463,6 +459,9 @@ pub struct Layout {
     pub shell_tabs: Vec<(u16, u16, usize, bool)>,
     /// Diff tabs in the editor strip: (start, end, index, is_close).
     pub diff_tabs: Vec<(u16, u16, usize, bool)>,
+    /// The two arrows in a diff's header, which step change to change.
+    pub diff_prev: Rect,
+    pub diff_next: Rect,
     /// Preview tabs, laid out the same way.
     pub preview_tabs: Vec<(u16, u16, usize, bool)>,
     /// The `+` button in the shell header that opens another session.
@@ -838,7 +837,15 @@ impl App {
 
     /// Closes the active tab outright when it is clean; otherwise asks first.
     fn close_tab(&mut self) {
-        self.close_tab_at(self.buffers.active);
+        // A diff and a preview are tabs like any other, so what closes is
+        // whatever is in front — not the file hidden behind it.
+        if let Some(index) = self.active_preview {
+            self.close_preview(index);
+        } else if let Some(index) = self.active_diff {
+            self.close_diff(index);
+        } else {
+            self.close_tab_at(self.buffers.active);
+        }
     }
 
     /// Closes tab `i` without bringing it to the front first, so the tab the
@@ -886,6 +893,12 @@ impl App {
     /// Closes every tab. The clean ones go at once; the first with unsaved
     /// work is asked about, and answering it comes back here for the rest.
     fn close_all_tabs(&mut self) {
+        // Diffs and previews hold nothing unsaved, so they go without asking;
+        // the files that follow are asked about one at a time.
+        self.diffs.clear();
+        self.active_diff = None;
+        self.previews.clear();
+        self.active_preview = None;
         self.closing_all = true;
         self.close_next_tab();
     }
@@ -1591,8 +1604,14 @@ impl App {
                     }
                 }
             }
-            MouseEventKind::ScrollDown => self.scroll_at(x, y, SCROLL_STEP),
-            MouseEventKind::ScrollUp => self.scroll_at(x, y, -SCROLL_STEP),
+            MouseEventKind::ScrollDown => {
+                let step = self.settings.scroll_rows();
+                self.scroll_at(x, y, step);
+            }
+            MouseEventKind::ScrollUp => {
+                let step = self.settings.scroll_rows();
+                self.scroll_at(x, y, -step);
+            }
             MouseEventKind::Down(MouseButton::Right) => self.right_click(x, y),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.tab_drag = self.tab_at(x, y);
@@ -1743,7 +1762,7 @@ impl App {
             // told where the notch happened; a notch on the tab strip above it
             // belongs to no cell and does nothing.
             if let Some((row, col)) = self.shell_cell_at(x, y) {
-                self.shell.wheel(row, col, delta < 0);
+                self.shell.wheel(row, col, delta < 0, delta.unsigned_abs());
             }
         } else if hits(self.layout.tree, x, y) {
             self.tree.move_selection(delta);
@@ -2090,6 +2109,14 @@ impl App {
             }
             return;
         }
+        // The diff header's own arrows, which step change to change the way
+        // the arrow keys do — the window frontend puts the same pair in the
+        // same corner.
+        if hits(self.layout.diff_prev, x, y) || hits(self.layout.diff_next, x, y) {
+            self.focus = Focus::Diff;
+            self.step_change(hits(self.layout.diff_next, x, y));
+            return;
+        }
         // A diff or a preview is drawn where the editor would be; a click
         // there belongs to whichever is actually in front.
         if hits(self.layout.viewer, x, y) {
@@ -2144,14 +2171,8 @@ impl App {
         }
         // A terminal tab's right button renames the session.
         if let Some((TabStrip::Terminal, index)) = self.tab_at(x, y) {
-            self.focus = Focus::Shell;
             self.shell.sessions.set_active(index);
-            self.prompt_input = if self.shell.sessions.is_named(index) {
-                self.shell.sessions.name(index)
-            } else {
-                String::new()
-            };
-            self.prompt = Some(Prompt::RenameTerminal(index));
+            self.rename_terminal(index);
             return;
         }
         // An editor tab's right button offers what can be done to tabs. The
@@ -2162,11 +2183,34 @@ impl App {
             self.active_diff = None;
             self.active_preview = None;
             self.focus = Focus::Editor;
-            let settings = self.settings.clone();
-            self.menu = Some(Menu::commands(TAB_MENU, None, x, y, |command| {
-                settings.tui_chord(command).map(|c| c.to_string())
-            }));
+            self.open_tab_menu(x, y);
             return;
+        }
+        // A diff and a preview answer the right button the same way. Fronting
+        // the tab first is again what makes "this tab" the one under the
+        // pointer, since closing a tab closes whichever is in front.
+        if hits(self.layout.tabs, x, y) {
+            let strips = [
+                (self.layout.diff_tabs.clone(), true),
+                (self.layout.preview_tabs.clone(), false),
+            ];
+            for (spans, is_diff) in strips {
+                for (start, end, index, is_close) in spans {
+                    if is_close || x < start || x >= end {
+                        continue;
+                    }
+                    if is_diff {
+                        self.active_preview = None;
+                        self.active_diff = Some(index);
+                    } else {
+                        self.active_diff = None;
+                        self.active_preview = Some(index);
+                    }
+                    self.focus = Focus::Diff;
+                    self.open_tab_menu(x, y);
+                    return;
+                }
+            }
         }
         if let Some(index) = self.tree_row_at(x, y) {
             self.focus = Focus::Tree;
@@ -2186,6 +2230,41 @@ impl App {
             let root = self.project.root().map(Path::to_path_buf);
             self.menu = Some(Menu::for_row(None, true, false, root, x, y));
         }
+    }
+
+    /// Puts the session's name up for editing, from its tab or from the
+    /// keyboard.
+    fn rename_terminal(&mut self, index: usize) {
+        self.focus = Focus::Shell;
+        self.prompt_input = if self.shell.sessions.is_named(index) {
+            self.shell.sessions.name(index)
+        } else {
+            String::new()
+        };
+        self.prompt = Some(Prompt::RenameTerminal(index));
+    }
+
+    /// Where the tab in front starts on the strip, so a menu opened from the
+    /// keyboard drops under it rather than at the strip's edge.
+    fn fronted_tab_x(&self) -> u16 {
+        let (spans, index) = match (self.active_preview, self.active_diff) {
+            (Some(i), _) => (&self.layout.preview_tabs, i),
+            (None, Some(i)) => (&self.layout.diff_tabs, i),
+            _ => (&self.layout.tab_spans, self.buffers.active),
+        };
+        spans
+            .iter()
+            .find(|(_, _, i, is_close)| !is_close && *i == index)
+            .map_or(self.layout.tabs.x, |(start, _, _, _)| *start)
+    }
+
+    /// The two entries a tab offers, dropped at a point. Which tab they speak
+    /// about is whichever is in front, so callers put it there first.
+    fn open_tab_menu(&mut self, x: u16, y: u16) {
+        let settings = self.settings.clone();
+        self.menu = Some(Menu::commands(TAB_MENU, None, x, y, |command| {
+            settings.tui_chord(command).map(|c| c.to_string())
+        }));
     }
 
     /// The tab under the pointer, if the point is on a tab's label rather than
@@ -3356,8 +3435,31 @@ impl App {
         }
     }
 
-    /// Opens the context menu from the keyboard, on the selected row.
+    /// Opens the context menu from the keyboard — the only way in on the
+    /// terminals that keep the right button for a menu of their own, iTerm2
+    /// and macOS Terminal among them, and never report it to the program.
     fn open_menu_on_selection(&mut self) {
+        // Whichever pane holds the keyboard answers, the way the pointer's own
+        // menu answers wherever it is: the terminal renames its session, an
+        // editor tab offers what can be done to tabs, and everything else
+        // falls back to the navigator's row.
+        match self.focus {
+            Focus::Shell if !self.shell.sessions.is_empty() => {
+                let index = self.shell.sessions.active_index();
+                self.rename_terminal(index);
+                return;
+            }
+            Focus::Editor | Focus::Diff
+                if !self.buffers.is_empty()
+                    || self.active_diff.is_some()
+                    || self.active_preview.is_some() =>
+            {
+                let x = self.fronted_tab_x();
+                self.open_tab_menu(x, self.layout.tabs.y);
+                return;
+            }
+            _ => {}
+        }
         let (target, is_dir, dir) = match self.tree.rows().get(self.tree.selected) {
             Some(row) if row.is_dir => (Some(row.path.clone()), true, Some(row.path.clone())),
             Some(row) => (
@@ -3584,6 +3686,24 @@ impl App {
         }
     }
 
+    /// Moves the diff on to the next run of changed rows, or back to the one
+    /// before it, stopping at the ends. Reviewing a diff is going change to
+    /// change, so it is what the arrow keys and the header's own arrows do.
+    fn step_change(&mut self, forward: bool) {
+        let Some(index) = self.active_diff else {
+            return;
+        };
+        let Some(diff) = self.diffs.get_mut(index) else {
+            return;
+        };
+        let last = diff.rows.len().saturating_sub(1);
+        diff.scroll = if forward {
+            diff_of::next_change(&diff.rows, diff.scroll).unwrap_or(last)
+        } else {
+            diff_of::previous_change(&diff.rows, diff.scroll).unwrap_or(0)
+        };
+    }
+
     fn diff_key(&mut self, key: KeyEvent) {
         let height = self.layout.editor.height as usize;
         if let Some(index) = self.active_preview {
@@ -3625,20 +3745,8 @@ impl App {
             KeyCode::Enter => self.open_diff_file(),
             KeyCode::Down if by_line => diff.scroll = (diff.scroll + 1).min(last),
             KeyCode::Up if by_line => diff.scroll = diff.scroll.saturating_sub(1),
-            KeyCode::Down => {
-                if let Some(row) = diff_of::next_change(&diff.rows, diff.scroll) {
-                    diff.scroll = row;
-                } else {
-                    diff.scroll = last;
-                }
-            }
-            KeyCode::Up => {
-                if let Some(row) = diff_of::previous_change(&diff.rows, diff.scroll) {
-                    diff.scroll = row;
-                } else {
-                    diff.scroll = 0;
-                }
-            }
+            KeyCode::Down => self.step_change(true),
+            KeyCode::Up => self.step_change(false),
             KeyCode::PageDown => diff.scroll = (diff.scroll + height).min(last),
             KeyCode::PageUp => diff.scroll = diff.scroll.saturating_sub(height),
             KeyCode::Home => diff.scroll = 0,
@@ -4010,6 +4118,83 @@ mod tests {
         app.focus = Focus::Shell;
         assert!(app.command_applies(Command::NewTerminal, &chord));
         assert!(app.command_applies(Command::Quit, &chord));
+    }
+
+    #[test]
+    fn the_keyboard_opens_the_menu_of_the_pane_it_is_in() {
+        // Terminals that keep the right button for themselves — iTerm2 and
+        // macOS Terminal do — leave Shift+F10 as the only way in, so it has
+        // to reach the same menus the pointer would.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+        let mut app = App::new(Some(root.clone()));
+        app.buffers.open(root.join("Cargo.toml"));
+        app.focus = Focus::Editor;
+        app.execute(Command::ContextMenu);
+        let menu = app.menu.as_ref().expect("the tab's own menu");
+        assert!(matches!(
+            menu.item_at_row(0),
+            Some(crate::tui::menu::MenuItem::Command(Command::CloseTab))
+        ));
+        // With the keyboard back in the navigator it is the row's menu again.
+        app.menu = None;
+        app.focus = Focus::Tree;
+        app.execute(Command::ContextMenu);
+        let menu = app.menu.as_ref().expect("the navigator's menu");
+        assert!(matches!(
+            menu.item_at_row(0),
+            Some(crate::tui::menu::MenuItem::NewFile)
+        ));
+    }
+
+    #[test]
+    fn closing_a_tab_closes_whichever_one_is_in_front() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
+        let mut app = App::new(Some(root.clone()));
+        app.buffers.open(root.join("Cargo.toml"));
+        app.diffs.push(Diff {
+            path: "Cargo.toml".into(),
+            rows: Vec::new(),
+            scroll: 0,
+        });
+        app.active_diff = Some(0);
+        // The diff goes, and the file behind it stays open.
+        app.execute(Command::CloseTab);
+        assert!(app.diffs.is_empty());
+        assert_eq!(app.buffers.list.len(), 1);
+        // With nothing over it, the file is what closes.
+        app.execute(Command::CloseTab);
+        assert!(app.buffers.is_empty());
+    }
+
+    #[test]
+    fn a_diffs_arrows_stop_at_each_run_of_changed_rows() {
+        let unified = "@@ -1,6 +1,6 @@\n one\n two\n-three\n+THREE\n four\n five\n-six\n+SIX\n";
+        let mut app = App::new(None);
+        app.diffs.push(Diff {
+            path: "counts.txt".into(),
+            rows: diff::from_unified(unified),
+            scroll: 0,
+        });
+        app.active_diff = Some(0);
+        // Forward to the first change, then to the second.
+        app.step_change(true);
+        let first = app.active_diff().expect("the diff").scroll;
+        assert_eq!(app.diffs[0].rows[first].kind, diff::Kind::Changed);
+        app.step_change(true);
+        let second = app.active_diff().expect("the diff").scroll;
+        assert!(second > first);
+        assert_eq!(app.diffs[0].rows[second].kind, diff::Kind::Changed);
+        // And back, to the one before it.
+        app.step_change(false);
+        assert_eq!(app.active_diff().expect("the diff").scroll, first);
+        // The ends hold: past the last change is the last change, and past the
+        // first is the top of the file.
+        app.step_change(true);
+        app.step_change(true);
+        assert_eq!(app.active_diff().expect("the diff").scroll, second);
+        app.step_change(false);
+        app.step_change(false);
+        assert_eq!(app.active_diff().expect("the diff").scroll, 0);
     }
 
     #[test]

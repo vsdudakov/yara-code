@@ -100,26 +100,23 @@ impl Shell {
         pty.set_scrollback((current + delta).max(0) as usize);
     }
 
-    /// One notch of the wheel over a cell of the grid. A program that asked
-    /// for the mouse scrolls its own view and is handed the notch; anything
-    /// else leaves the wheel to the panel, which walks the history instead —
-    /// three rows a notch, as the arrow keys of a pager do.
-    pub fn wheel(&mut self, row: u16, col: u16, up: bool) {
+    /// One notch of the wheel over a cell of the grid, `rows` being how far
+    /// the panels themselves move for it. A program that asked for the mouse
+    /// scrolls its own view and is handed the notch; anything else leaves the
+    /// wheel to the panel, which walks the history instead.
+    pub fn wheel(&mut self, row: u16, col: u16, up: bool, rows: usize) {
         let Some(pty) = self.sessions.active_mut() else {
             return;
         };
         if pty.wants_mouse() {
-            // Two notches for one, so a pager or an agent moves at the pace
-            // the panels themselves do.
-            let bytes = pty.wheel_bytes(up, row, col).repeat(2);
+            // A pager's own notch is three lines, so it takes as many notches
+            // as it needs to keep up with the panels.
+            let notches = ((rows + 1) / 3).max(1);
+            let bytes = pty.wheel_bytes(up, row, col).repeat(notches);
             pty.write(&bytes);
             return;
         }
-        self.scroll(if up {
-            crate::tui::app::SCROLL_STEP
-        } else {
-            -crate::tui::app::SCROLL_STEP
-        });
+        self.scroll(if up { rows as isize } else { -(rows as isize) });
     }
 
     /// Forwards a key press to the shell as the bytes a terminal would send.

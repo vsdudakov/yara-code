@@ -120,26 +120,42 @@ impl DiffView {
         let removed = ansi_color(theme, 1);
         let added = ansi_color(theme, 2);
 
-        // The arrow keys walk the changes too, the way they do in the terminal
-        // frontend, unless something on the page — the terminal, a name being
-        // typed — is taking the keyboard.
-        if ui.memory(|m| m.focused().is_none()) {
-            let (down, up) = ui.input(|i| {
-                (
-                    i.key_pressed(egui::Key::ArrowDown),
-                    i.key_pressed(egui::Key::ArrowUp),
-                )
-            });
-            if down {
-                self.jump_to = Some(next_change(&self.rows, self.top_row).unwrap_or(last_row));
-            } else if up {
-                self.jump_to = Some(previous_change(&self.rows, self.top_row).unwrap_or(0));
-            }
-        }
-
         // What one row costs down the page: its own height and the gap the
         // layout leaves under it, which is what the scroll area counts in.
         let pitch = row_h + ui.spacing().item_spacing.y;
+
+        // The keyboard drives the view the way it does in the terminal
+        // frontend: the arrows walk the changes, Shift moves a line at a time,
+        // and Page and Home/End cover the rest. Only while nothing on the page
+        // — the terminal, a name being typed — is taking the keyboard.
+        if ui.memory(|m| m.focused().is_none()) {
+            let page = ((ui.available_height() / pitch) as usize).max(1);
+            let keys = ui.input(|i| {
+                (
+                    i.modifiers.shift,
+                    i.key_pressed(egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::ArrowUp),
+                    i.key_pressed(egui::Key::PageDown),
+                    i.key_pressed(egui::Key::PageUp),
+                    i.key_pressed(egui::Key::Home),
+                    i.key_pressed(egui::Key::End),
+                )
+            });
+            let (shift, down, up, page_down, page_up, home, end) = keys;
+            // The header's own arrows have already spoken this frame; a key
+            // that says nothing leaves what they asked for standing.
+            self.jump_to = match () {
+                _ if down && shift => Some((self.top_row + 1).min(last_row)),
+                _ if up && shift => Some(self.top_row.saturating_sub(1)),
+                _ if down => Some(next_change(&self.rows, self.top_row).unwrap_or(last_row)),
+                _ if up => Some(previous_change(&self.rows, self.top_row).unwrap_or(0)),
+                _ if page_down => Some((self.top_row + page).min(last_row)),
+                _ if page_up => Some(self.top_row.saturating_sub(page)),
+                _ if home => Some(0),
+                _ if end => Some(last_row),
+                _ => self.jump_to,
+            };
+        }
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         // An arrow moves the view by setting where it starts; every other
         // frame leaves the offset to the scroll area itself.

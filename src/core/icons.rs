@@ -23,6 +23,10 @@ pub struct Icons {
     /// Tabs that are not files: a diff, and a rendered markdown preview.
     pub diff: &'static str,
     pub preview: &'static str,
+    /// Step to the previous or next change in a diff. The window draws its own
+    /// arrows for the same pair, since it has the shapes to draw them with.
+    pub up: &'static str,
+    pub down: &'static str,
 }
 
 const UNICODE: Icons = Icons {
@@ -38,6 +42,8 @@ const UNICODE: Icons = Icons {
     ellipsis: "…",
     diff: "≠",
     preview: "◫",
+    up: "▴",
+    down: "▾",
 };
 
 const ASCII: Icons = Icons {
@@ -53,6 +59,8 @@ const ASCII: Icons = Icons {
     ellipsis: "...",
     diff: "=",
     preview: "#",
+    up: "^",
+    down: "v",
 };
 
 /// The full set, for a frontend that carries its own fonts and so never has
@@ -104,6 +112,8 @@ mod tests {
                 icons.ellipsis,
                 icons.diff,
                 icons.preview,
+                icons.up,
+                icons.down,
             ] {
                 assert!(!glyph.is_empty());
             }

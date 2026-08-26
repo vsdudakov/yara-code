@@ -52,9 +52,13 @@ right, each side with its own line numbers.
 The header carries the path, `+N −M`, a pair of arrows, an **Open File** button
 and a close mark. Reviewing a diff is going change to change: the arrows — and
 <kbd>↑</kbd> / <kbd>↓</kbd> in both frontends — jump to the top of the next run
-of changed lines rather than moving a line at a time. In the terminal frontend,
-<kbd>Shift</kbd> with an arrow moves by one line, <kbd>Esc</kbd> closes the diff
-and <kbd>Enter</kbd> opens the file it is showing.
+of changed lines rather than moving a line at a time. <kbd>Shift</kbd> with an
+arrow moves by one line, <kbd>PageUp</kbd> / <kbd>PageDown</kbd> by a screen and
+<kbd>Home</kbd> / <kbd>End</kbd> to the ends, again in both. In the terminal
+frontend <kbd>Esc</kbd> closes the diff and <kbd>Enter</kbd> opens the file it
+is showing. A diff is a tab like any other: right-clicking it offers Close Tab
+and Close All Tabs, and **Close Tab** closes whichever tab is in front rather
+than the file behind it.
 
 `git` itself does the diffing (`git diff -U1000000`), so what you see is what
 `git diff` says.

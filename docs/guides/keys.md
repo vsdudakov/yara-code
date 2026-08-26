@@ -94,15 +94,22 @@ The terminal frontend is fully mouse-driven, mirroring the GPU window:
 - **Right click** — context menu on the row under the pointer: Open, New File,
   New Folder, Rename, Move To..., Delete. A **folder** also offers Add Folder to
   Project, and a folder the project already holds offers Remove Folder from
-  Project in its place, instead of the on-disk operations. `Shift+F10` opens the
-  same menu from the keyboard; arrows and Enter drive it, Esc or a click outside
-  dismisses it. On an **editor tab** the right button offers Close Tab and Close
-  All Tabs; on a **terminal tab** it renames the session.
+  Project in its place, instead of the on-disk operations. On an **editor tab**
+  the right button offers Close Tab and Close All Tabs — as it does on a
+  **diff** or **markdown preview** tab, which are tabs like any other; on a
+  **terminal tab** it renames the session.
+- **`Shift+F10`** — the same menus from the keyboard, for the terminals that
+  keep the right button for a menu of their own and never report it: iTerm2 and
+  macOS Terminal both do, and there the right button reaches the emulator, not
+  Yara Code. The menu that opens is the one the focused pane would open under
+  the pointer — the navigator's row, the tab in front, or the terminal's own
+  name. Arrows and Enter drive it, Esc or a click outside dismisses it.
 - **Drag and drop** — press a navigator row and drag it onto a folder to move it;
   the target folder highlights, and dropping on empty space moves to the project
   root. Editor tabs and terminal tabs drag along their own strip to reorder.
 - **Hover** — rows and tabs light up under the pointer.
-- **Wheel** — scrolls whichever pane is under the pointer, six rows a notch.
+- **Wheel** — scrolls whichever pane is under the pointer, four rows a notch;
+  `scroll_speed` in [settings.json](settings.md) moves that either way.
 
 Icons use Unicode by default; set `YARA_ASCII=1` for terminals with sparse
 font coverage. Since the app captures the mouse, use your terminal's usual

@@ -15,7 +15,7 @@ two frontends is that you can move between them without thinking about it.
 brew install vsdudakov/tap/ycode
 ```
 
-On **macOS** that is the whole install: **Yara Code.app** is linked into
+On **macOS** that is the whole install: **Yara Code.app** is copied into
 `/Applications` with its own icon and opens from the Dock and from Spotlight.
 Both commands live inside the bundle and are linked onto your `PATH` at the
 same time, so `ycode` still works in a terminal.
@@ -72,22 +72,53 @@ sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode" /usr/local/bin/yc
 sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode-gui" /usr/local/bin/ycode-gui
 ```
 
-## Linux packages
+## Debian and Ubuntu
 
-Every release carries a `.deb` and an `.rpm` built from the same binaries:
+Add the repository once, and `apt install ycode` works from then on — upgrades
+included, with `apt upgrade` like anything else on the machine:
 
 ```bash
-# Debian, Ubuntu, Mint…
+sudo install -d /usr/share/keyrings
+curl -fsSL https://vsdudakov.github.io/packages/apt/ycode.gpg \
+  | sudo tee /usr/share/keyrings/ycode.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/ycode.gpg] https://vsdudakov.github.io/packages/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/ycode.list > /dev/null
+
+sudo apt update
+sudo apt install ycode
+```
+
+Both architectures are served: `amd64` and `arm64`. The repository's `Release`
+file is signed, and `signed-by` is what ties the key to it, so nothing else on
+the machine is trusted any further than it was.
+
+## Fedora, RHEL and openSUSE
+
+```bash
+sudo curl -fsSL -o /etc/yum.repos.d/ycode.repo \
+  https://vsdudakov.github.io/packages/yum/ycode.repo
+sudo dnf install ycode
+```
+
+`x86_64` and `aarch64`, and the repository metadata is signed with the same
+key, which `ycode.repo` points at.
+
+## A single package file
+
+Every release also carries the `.deb` and the `.rpm` on their own, for a
+machine that should not grow a new repository:
+
+```bash
 curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/ycode_X.Y.Z-1_amd64.deb
 sudo apt install ./ycode_X.Y.Z-1_amd64.deb
 
-# Fedora, RHEL, openSUSE…
 curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/ycode-X.Y.Z-1.x86_64.rpm
 sudo dnf install ./ycode-X.Y.Z-1.x86_64.rpm
 ```
 
-Both install `ycode` and `ycode-gui` into `/usr/bin` and register a desktop entry
-for the window frontend.
+Every Linux path installs `ycode` and `ycode-gui` into `/usr/bin` and registers
+a desktop entry for the window frontend. The repositories keep the ten most
+recent versions; older ones stay on their GitHub release.
 
 ### Arch Linux
 
@@ -98,12 +129,6 @@ curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/PKGBUIL
 makepkg -si
 ```
 
-!!! note "About apt and dnf repositories"
-
-    Yara Code is not served from an APT or DNF repository yet — the packages above
-    install straight from the release, which is why the commands name a file
-    rather than `apt install ycode`. A signed repository is planned; until then
-    `brew`, the `.deb`/`.rpm` files and the tarballs are the supported paths.
 
 ## From source
 

@@ -216,8 +216,14 @@ fn with_no_folder_the_window_shows_the_start_page() {
         "{}",
         harness.screen()
     );
-    // The menus and the key groups the start page is built from.
-    assert!(harness.shows("File") && harness.shows("View") && harness.shows("Help"));
+    // The menus and the key groups the start page is built from. On macOS the
+    // menus are in the system bar and the window draws no strip of its own,
+    // which is the whole point of the platform's own menu bar.
+    if cfg!(target_os = "macos") {
+        assert!(!harness.shows("View"), "{}", harness.screen());
+    } else {
+        assert!(harness.shows("File") && harness.shows("View") && harness.shows("Help"));
+    }
     assert!(harness.shows("PROJECT") && harness.shows("PANELS"));
     assert!(harness.shows("Toggle Terminal"));
 }
@@ -509,7 +515,11 @@ fn the_diff_arrows_jump_from_change_to_change() {
     );
 }
 
+/// The window's own menu strip, which every platform but macOS draws — there
+/// the same three menus are the system bar's, and AppKit draws them where no
+/// test harness of ours can read them.
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn the_help_menu_names_the_version_and_offers_the_update_check() {
     let project = Project::new("yara-gui-e2e-menus");
     let mut harness = Harness::open(Some(&project));

@@ -104,6 +104,27 @@ impl Default for GotoModifiers {
     }
 }
 
+/// Modifiers held while the pointer rests on a line to blame that line rather
+/// than the one the caret is on. Same shape as [`GotoModifiers`], and the same
+/// reason for being a list.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BlameModifiers {
+    pub gui: Vec<Modifier>,
+    pub tui: Vec<Modifier>,
+}
+
+impl Default for BlameModifiers {
+    fn default() -> Self {
+        // Shift in both: the other three are spoken for by go-to-definition
+        // in one frontend or the other.
+        Self {
+            gui: vec![Modifier::Shift],
+            tui: vec![Modifier::Shift],
+        }
+    }
+}
+
 pub type KeyMap = BTreeMap<String, Chord>;
 
 #[derive(Clone, Debug)]
@@ -364,6 +385,7 @@ struct ProjectOverrides {
     show_sidebar: Option<bool>,
     show_terminal: Option<bool>,
     goto_modifiers: Option<GotoModifiers>,
+    blame_modifiers: Option<BlameModifiers>,
     keys: Option<Keys>,
 }
 
@@ -389,6 +411,9 @@ impl ProjectOverrides {
         }
         if let Some(v) = self.goto_modifiers {
             settings.goto_modifiers = v;
+        }
+        if let Some(v) = self.blame_modifiers {
+            settings.blame_modifiers = v;
         }
         if let Some(keys) = self.keys {
             // A project's keys lay over the user's, as the user's lay over
@@ -427,6 +452,8 @@ pub struct Settings {
     pub show_terminal: bool,
     /// Modifier that turns a click into go-to-definition.
     pub goto_modifiers: GotoModifiers,
+    /// Modifier held while hovering a line to blame it.
+    pub blame_modifiers: BlameModifiers,
     pub keys: Keys,
     /// Recently opened project folders, most recent first.
     pub recent_projects: Vec<PathBuf>,
@@ -442,6 +469,7 @@ impl Default for Settings {
             show_sidebar: true,
             show_terminal: true,
             goto_modifiers: GotoModifiers::default(),
+            blame_modifiers: BlameModifiers::default(),
             keys: Keys::default(),
             recent_projects: Vec::new(),
         }
@@ -657,6 +685,11 @@ impl Settings {
   // Cmd, so the tui list is what the terminal frontend uses.
   "goto_modifiers": {goto_modifiers},
 
+  // Modifier held while the pointer rests on a line to read who last touched
+  // it, in the status bar, without moving the caret there. Same choices as
+  // above; a terminal cannot see Cmd.
+  "blame_modifiers": {blame_modifiers},
+
   // Key bindings per frontend, command id to chord. Only bindings that
   // differ from the defaults need listing, for example
   //   "keys": {{ "gui": {{ "save": "Cmd+S" }}, "tui": {{ "save": "Ctrl+S" }} }}
@@ -679,6 +712,7 @@ impl Settings {
             show_sidebar = json(&self.show_sidebar),
             show_terminal = json(&self.show_terminal),
             goto_modifiers = nested(json(&self.goto_modifiers)),
+            blame_modifiers = nested(json(&self.blame_modifiers)),
             keys = nested(json(&self.keys)),
             recent_projects = nested(json(&self.recent_projects)),
             docs = crate::core::DOCUMENTATION,
@@ -949,12 +983,33 @@ mod settings_tests {
     }
 
     #[test]
+    fn blaming_and_going_to_a_definition_never_want_the_same_modifier() {
+        let settings = Settings::default();
+        for (blame, goto) in [
+            (&settings.blame_modifiers.gui, &settings.goto_modifiers.gui),
+            (&settings.blame_modifiers.tui, &settings.goto_modifiers.tui),
+        ] {
+            assert!(!blame.is_empty(), "a modifier that is nothing blames never");
+            for held in blame {
+                assert!(
+                    !goto.contains(held),
+                    "{held:?} would blame and jump at once"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_field_survives_a_round_trip() {
         let mut settings = Settings {
             theme: "Monokai".into(),
             font_size: 15.0,
             scroll_speed: 2.5,
             show_terminal: false,
+            blame_modifiers: BlameModifiers {
+                gui: vec![Modifier::Alt],
+                tui: vec![Modifier::Alt],
+            },
             indent: Indent {
                 width: 2,
                 ..Default::default()
@@ -967,6 +1022,7 @@ mod settings_tests {
         assert_eq!(back.theme, "Monokai");
         assert_eq!(back.font_size, 15.0);
         assert_eq!(back.scroll_speed, 2.5);
+        assert_eq!(back.blame_modifiers.tui, [Modifier::Alt]);
         assert!(!back.show_terminal);
         assert_eq!(back.indent.width, 2);
         assert_eq!(back.recent_projects, [PathBuf::from("/work/one")]);
@@ -1184,6 +1240,7 @@ mod settings_tests {
             "\"show_sidebar\"",
             "\"show_terminal\"",
             "\"goto_modifiers\"",
+            "\"blame_modifiers\"",
             "\"keys\"",
             "\"recent_projects\"",
         ] {

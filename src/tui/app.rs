@@ -534,6 +534,9 @@ pub struct App {
     /// Who last touched the line the cursor is on, and what it was read for.
     pub blame: Option<core_git::Blame>,
     blame_key: Option<(PathBuf, usize)>,
+    /// Line the pointer rests on while the blame modifier is held, blamed in
+    /// the caret's place. Real line, counted from zero.
+    blame_hover: Option<usize>,
     /// Changed lines of the file in front, for the gutter marks.
     pub git_lines: BTreeMap<usize, core_git::LineState>,
     git_lines_key: Option<(PathBuf, usize)>,
@@ -651,6 +654,7 @@ impl App {
             installing: None,
             blame: None,
             blame_key: None,
+            blame_hover: None,
             git_lines: BTreeMap::new(),
             git_lines_key: None,
             git_selected: 0,
@@ -986,7 +990,12 @@ impl App {
             self.git_lines = core_git::changed_lines(&dir, &relative);
         }
 
-        let line = self.edit.get(self.buffers.active).map_or(0, |s| s.line) + 1;
+        // The pointer wins over the caret while the modifier is down, so a
+        // line can be blamed without going there.
+        let line = match self.blame_hover {
+            Some(hovered) => hovered + 1,
+            None => self.edit.get(self.buffers.active).map_or(0, |s| s.line) + 1,
+        };
         let blame_key = (path, line);
         if self.blame_key.as_ref() != Some(&blame_key) {
             self.blame_key = Some(blame_key);
@@ -1492,18 +1501,34 @@ impl App {
         Some((line, start - line_start, end - line_start, word))
     }
 
+    /// The real line under a point, if the point is on the text at all.
+    fn line_at_point(&self, x: u16, y: u16) -> Option<usize> {
+        if !hits(self.layout.editor, x, y) || self.buffers.is_empty() {
+            return None;
+        }
+        self.line_at_row(y)
+    }
+
+    /// Whether the pointer carries a configured blame modifier.
+    fn is_blame_modifier(&self, modifiers: KeyModifiers) -> bool {
+        Self::carries(&self.settings.blame_modifiers.tui, modifiers)
+    }
+
     /// Whether a click carries a configured go-to-definition modifier.
     /// Terminals cannot report Cmd, so the default here is Ctrl or Alt.
     fn is_goto_modifier(&self, modifiers: KeyModifiers) -> bool {
-        self.settings
-            .goto_modifiers
-            .tui
-            .iter()
-            .any(|wanted| match wanted {
-                Modifier::Cmd | Modifier::Ctrl => modifiers.contains(KeyModifiers::CONTROL),
-                Modifier::Alt => modifiers.contains(KeyModifiers::ALT),
-                Modifier::Shift => modifiers.contains(KeyModifiers::SHIFT),
-            })
+        Self::carries(&self.settings.goto_modifiers.tui, modifiers)
+    }
+
+    /// Whether the pointer holds any one of a settings list. Cmd is read as
+    /// Ctrl, since no terminal reports Cmd and a file that names it would
+    /// otherwise bind nothing at all.
+    fn carries(wanted: &[Modifier], modifiers: KeyModifiers) -> bool {
+        wanted.iter().any(|wanted| match wanted {
+            Modifier::Cmd | Modifier::Ctrl => modifiers.contains(KeyModifiers::CONTROL),
+            Modifier::Alt => modifiers.contains(KeyModifiers::ALT),
+            Modifier::Shift => modifiers.contains(KeyModifiers::SHIFT),
+        })
     }
 
     fn goto_definition(&mut self) {
@@ -1592,6 +1617,14 @@ impl App {
                 // under the pointer, the way ⌘-hover does in the window.
                 self.link = if self.is_goto_modifier(m.modifiers) {
                     self.word_at_point(x, y).map(|(l, s, e, _)| (l, s, e))
+                } else {
+                    None
+                };
+                // And holding the blame modifier reads the line under the
+                // pointer into the status bar, where the caret's line other-
+                // wise stands.
+                self.blame_hover = if self.is_blame_modifier(m.modifiers) {
+                    self.line_at_point(x, y)
                 } else {
                     None
                 };

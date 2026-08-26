@@ -917,10 +917,17 @@ impl App {
         }
     }
 
-    /// Reads who last touched the cursor's line, when the cursor moves to
-    /// another line or another file.
+    /// Reads who last touched a line — the one under the pointer while the
+    /// blame modifier is held, the caret's otherwise — when it changes, or
+    /// when another file comes to the front.
     fn refresh_blame(&mut self) {
-        let Some((buf, (line, _))) = self.editor.buffers.active().zip(self.editor.cursor) else {
+        let hovered = self.editor.blame_hover.map(|line| (line, 1));
+        let Some((buf, (line, _))) = self
+            .editor
+            .buffers
+            .active()
+            .zip(hovered.or(self.editor.cursor))
+        else {
             self.blame = None;
             self.blame_key = None;
             return;
@@ -2586,6 +2593,11 @@ impl App {
             )
             .show(ctx, |ui| {
                 // A preview tab shows the rendered file in place of the text.
+                // A diff and a preview stand where the text does, so the
+                // pointer over one blames nothing.
+                if self.editor.active_preview.is_some() || self.editor.active_diff.is_some() {
+                    self.editor.blame_hover = None;
+                }
                 if let Some(index) = self.editor.active_preview {
                     let Some(preview) = self.editor.previews.get(index) else {
                         self.editor.active_preview = None;
@@ -2629,6 +2641,7 @@ impl App {
                         &theme,
                         &self.settings.indent,
                         &self.settings.goto_modifiers.gui,
+                        &self.settings.blame_modifiers.gui,
                         &self.git_lines,
                     );
                 }

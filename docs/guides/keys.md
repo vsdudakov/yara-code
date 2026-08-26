@@ -88,6 +88,8 @@ The terminal frontend is fully mouse-driven, mirroring the GPU window:
   the text cursor, switch tabs, pick a search result or a prompt entry.
 - **Click the tab marker** — closes that tab. It shows a dot while the buffer has
   unsaved changes and turns into a cross when the pointer is over the tab.
+- **Shift+hover in the editor** — blames the line under the pointer in the
+  status bar, leaving the caret where it is.
 - **Ctrl+click / Alt+click in the editor** — go to definition. Two modifiers
   because some terminals grab one of them: macOS Terminal turns Ctrl+click into
   a right click, so use Alt+click there.

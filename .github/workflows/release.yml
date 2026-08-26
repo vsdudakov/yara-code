@@ -53,7 +53,17 @@ jobs:
         run: |
           staging="ycode-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$staging"
-          cp target/${{ matrix.target }}/release/ycode target/${{ matrix.target }}/release/ycode-gui "$staging/"
+          # macOS gets an application rather than two loose files: the bundle
+          # is what carries the icon and the name, and both commands live
+          # inside it, so nothing is shipped twice. Everything in a bundle is
+          # an ordinary file, signature included, so tar carries it whole.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            packaging/macos/bundle.sh "${GITHUB_REF_NAME#v}" \
+              "target/${{ matrix.target }}/release" "$staging"
+          else
+            cp target/${{ matrix.target }}/release/ycode \
+               target/${{ matrix.target }}/release/ycode-gui "$staging/"
+          fi
           cp README.md LICENSE "$staging/"
           tar czf "$staging.tar.gz" "$staging"
           shasum -a 256 "$staging.tar.gz" > "$staging.tar.gz.sha256"

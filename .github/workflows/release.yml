@@ -207,7 +207,9 @@ jobs:
           intel_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz.sha256)
           linux_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz.sha256)
           linux_arm_sha=$(cut -d' ' -f1 dist/ycode-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz.sha256)
-          for template in packaging/homebrew/ycode.rb.tmpl packaging/aur/PKGBUILD.tmpl; do
+          for template in packaging/homebrew/ycode.rb.tmpl \
+                          packaging/homebrew/yara-code.rb.tmpl \
+                          packaging/aur/PKGBUILD.tmpl; do
             out="$(basename "${template%.tmpl}")"
             sed -e "s/@VERSION@/$version/g" \
                 -e "s/@TAG@/$GITHUB_REF_NAME/g" \
@@ -224,11 +226,12 @@ jobs:
         if: env.TAP_TOKEN != ''
         run: |
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/vsdudakov/homebrew-tap.git" tap
-          mkdir -p tap/Formula
+          mkdir -p tap/Formula tap/Casks
           cp ycode.rb tap/Formula/ycode.rb
+          cp yara-code.rb tap/Casks/yara-code.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/ycode.rb
+          git add Formula/ycode.rb Casks/yara-code.rb
           git commit -m "ycode ${GITHUB_REF_NAME#v}"
           git push

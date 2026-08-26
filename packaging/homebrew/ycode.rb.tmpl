@@ -46,32 +46,19 @@ class Ycode < Formula
     end
   end
 
-  # Homebrew keeps its own tree, and an application is only an application once
-  # Finder and Spotlight can see it. A copy rather than a link: Homebrew's own
-  # casks stopped linking years ago because Launch Services indexes what it can
-  # see, and a symlinked bundle is not it. An upgrade replaces it wholesale.
-  def post_install
-    return unless OS.mac?
-
-    applications = Pathname.new("/Applications")
-    return unless applications.writable?
-
-    installed = applications/"Yara Code.app"
-    FileUtils.rm_rf(installed)
-    system "/usr/bin/ditto", prefix/"Yara Code.app", installed
-  end
-
+  # No copy into /Applications from here. A formula's post-install step runs in
+  # a sandbox that stops at Homebrew's own prefix, so a copy attempted from one
+  # never lands and never says why; putting an application where Finder can see
+  # it is a cask's job, and there is a cask beside this formula that does it.
   def caveats
     return unless OS.mac?
 
     <<~CAVEATS
-      Yara Code.app is in /Applications — open it from the Dock or from
-      Spotlight. It is signed ad-hoc rather than with an Apple Developer ID, so
-      the first open reports an unidentified developer: allow it once in
-      System Settings → Privacy & Security.
+      This installs the two commands. For Yara Code as an application — in
+      /Applications, with its icon, in the Dock and in Spotlight — install the
+      cask instead:
 
-      Uninstalling leaves that copy behind; remove it with
-        rm -rf "/Applications/Yara Code.app"
+        brew uninstall ycode && brew install vsdudakov/tap/yara-code
     CAVEATS
   end
 

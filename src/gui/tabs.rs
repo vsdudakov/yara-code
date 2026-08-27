@@ -100,6 +100,12 @@ const MARK: f32 = 12.0;
 const GAP: f32 = 5.0;
 const SEAM: f32 = 0.0;
 
+/// The height of the row a strip stands in, the same wherever one stands. A
+/// tab is shorter than this, and so is a label beside it: both are centred in
+/// the same band, which is what keeps the terminal's "TERMINAL" sitting level
+/// with its session tabs rather than riding above them.
+pub const HEIGHT: f32 = 30.0;
+
 /// Draws `tabs` in a row and says what the pointer did with them. `menu` adds
 /// the entries a right-click on a tab opens — the strip picks that tab first,
 /// so "this tab" is never in doubt. `reorder` is off for a strip whose order

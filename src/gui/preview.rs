@@ -100,7 +100,21 @@ impl PreviewView {
         let accent = color(theme.ui.accent_light);
         let code_bg = color(theme.ui.sidebar_bg);
         for (nth, block) in self.blocks.iter().enumerate() {
-            match block {
+            // A centred block is painted like any other, in a column that
+            // centres what goes in it and with its text set the same way —
+            // which is what a README's `<div align="center">` asked for.
+            let (block, centered) = match block {
+                Block::Center(inner) => (inner.as_ref(), true),
+                other => (other, false),
+            };
+            let job = |spans: &[Span], size: f32, heading: bool| {
+                let mut job = inline(spans, theme, size, heading);
+                if centered {
+                    job.halign = egui::Align::Center;
+                }
+                job
+            };
+            let paint = |ui: &mut egui::Ui| match block {
                 Block::Heading(level, spans) => {
                     let size = match level {
                         1 => 26.0,
@@ -109,14 +123,14 @@ impl PreviewView {
                         _ => 14.5,
                     };
                     ui.add_space(if *level <= 2 { 14.0 } else { 6.0 });
-                    ui.label(inline(spans, theme, size, true));
+                    ui.label(job(spans, size, true));
                     if *level <= 2 {
                         ui.add_space(2.0);
                         ui.separator();
                     }
                 }
                 Block::Paragraph(spans) => {
-                    ui.label(inline(spans, theme, BODY, false));
+                    ui.label(job(spans, BODY, false));
                 }
                 Block::Code(language, text) => {
                     egui::Frame::default()
@@ -150,7 +164,7 @@ impl PreviewView {
                             bottom: 4,
                         })
                         .show(ui, |ui| {
-                            let text = ui.label(inline(spans, theme, BODY, false));
+                            let text = ui.label(job(spans, BODY, false));
                             let bar = egui::Rect::from_min_size(
                                 egui::pos2(text.rect.left() - 12.0, text.rect.top()),
                                 egui::vec2(3.0, text.rect.height()),
@@ -161,6 +175,14 @@ impl PreviewView {
                 Block::Rule => {
                     ui.separator();
                 }
+                // Unwrapped above: a centred block holds one block, never
+                // another wrapper.
+                Block::Center(_) => {}
+            };
+            if centered {
+                ui.vertical_centered(paint);
+            } else {
+                paint(ui);
             }
         }
     }
@@ -467,6 +489,13 @@ fn inline(spans: &[Span], theme: &Theme, size: f32, heading: bool) -> egui::text
                 let mut f = fmt(prop.clone(), color(theme.ui.accent_light), none);
                 f.underline = egui::Stroke::new(1.0_f32, color(theme.ui.accent_light));
                 job.append(t, 0.0, f);
+            }
+            // Nothing here decodes a picture, so an image is set as what it
+            // was described as, marked as standing in for one.
+            Span::Image(alt, _) => {
+                let mut f = fmt(prop.clone(), color(theme.ui.fg_dim), none);
+                f.italics = true;
+                job.append(&format!("{} {alt}", icons().preview), 0.0, f);
             }
         }
     }

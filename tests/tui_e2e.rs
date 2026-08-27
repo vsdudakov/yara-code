@@ -1282,7 +1282,9 @@ fn a_markdown_file_previews_as_a_reader_sees_it() {
     let project = Project::new("yara-e2e-preview");
     project.file(
         "README.md",
-        "# Yara Code\n\nSome **bold** text.\n\n- one\n- two\n\n```rust\nfn main() {}\n```\n",
+        "<div align=\"center\">\n\n# Yara Code\n\nSome **bold** text.\n\n\
+         [![CI](https://x/badge.svg)](https://x/ci)\n\n- one\n- two\n\n</div>\n\n\
+         ```rust\nfn main() {}\n```\n",
     );
     let mut harness = Harness::open(&project);
     let row = harness.row_of("README.md").unwrap();
@@ -1305,6 +1307,10 @@ fn a_markdown_file_previews_as_a_reader_sees_it() {
         screen.contains("fn main() {}") && !screen.contains("```"),
         "{screen}"
     );
+    // A README's wrapper is markup for a browser, and a badge is the name it
+    // was given — neither is painted as the markup it was written as.
+    assert!(!screen.contains("<div"), "{screen}");
+    assert!(screen.contains("CI") && !screen.contains("]("), "{screen}");
     assert!(screen.contains("◫ README.md"), "a tab of its own: {screen}");
     // The toggle again puts it away; a non-markdown file has none.
     harness.press(

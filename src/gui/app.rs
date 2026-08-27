@@ -2616,9 +2616,16 @@ impl App {
                     let focused = self.terminal.focused;
                     egui::Frame::default()
                         .fill(color(theme.ui.status_bg))
-                        .inner_margin(egui::Margin::symmetric(10, 3))
+                        .inner_margin(egui::Margin::symmetric(10, 0))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                // The row is given the strip's own height
+                                // before anything goes in it: egui centres an
+                                // item in the row as it stands, so a label put
+                                // in first would otherwise be centred on
+                                // itself and left riding above the taller tabs
+                                // that follow.
+                                ui.set_min_height(crate::gui::tabs::HEIGHT);
                                 let mut text =
                                     egui::RichText::new("TERMINAL")
                                         .size(11.0)
@@ -2660,7 +2667,7 @@ impl App {
             || !self.editor.previews.is_empty()
         {
             egui::TopBottomPanel::top("tabs")
-                .exact_height(30.0)
+                .exact_height(crate::gui::tabs::HEIGHT)
                 .frame(egui::Frame::default().fill(color(theme.ui.status_bg)))
                 .show(ctx, |ui| {
                     let preview_chord = self

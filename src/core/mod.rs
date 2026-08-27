@@ -14,6 +14,8 @@ pub mod glob;
 pub mod history;
 pub mod icons;
 pub mod indent;
+#[cfg(feature = "pty")]
+pub mod keyboard;
 pub mod markdown;
 pub mod project;
 

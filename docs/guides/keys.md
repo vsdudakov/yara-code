@@ -51,10 +51,12 @@ own; everything else is the binding you already know.
 
 Telling `Ctrl+Shift+S` from `Ctrl+S` needs the **kitty keyboard protocol**. The
 terminal frontend asks for it at startup and gets it in iTerm2, Kitty, WezTerm,
-Ghostty and Alacritty; in a terminal without it (macOS Terminal.app), rebind
-that handful of commands to something plainer in `settings.json` — the status
-bar says so at startup when the protocol is missing. Bindings that collide are
-reported there too, naming both commands.
+Ghostty, Alacritty — and in Yara Code's own terminal, which speaks it in both
+frontends, so `ycode` runs inside `ycode-gui` with every chord it has. In a
+terminal without it (macOS Terminal.app, and the browser terminals such as
+ttyd), rebind that handful of commands to something plainer in `settings.json`
+— the status bar says so at startup when the protocol is missing. Bindings that
+collide are reported there too, naming both commands.
 
 ## In the navigator
 

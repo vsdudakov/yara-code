@@ -12,11 +12,13 @@ use crate::gui::theme::{color, cross, dot};
 
 /// One tab, as the strip needs to know it.
 pub struct Tab {
-    /// What this tab is, told apart from its neighbours for as long as it
-    /// lives — a file's path, a shell's number. The widget is named after it
-    /// rather than after the tab's position, because the strip reorders itself
-    /// under a drag: named by position, the drag would end up holding
-    /// whichever tab slid into the slot it started from.
+    /// What this tab is, told apart from every other tab in the strip for as
+    /// long as it lives — a file's path, a shell's number. The widget is named
+    /// after it rather than after the tab's position, because the strip
+    /// reorders itself under a drag: named by position, the drag would end up
+    /// holding whichever tab slid into the slot it started from. A path alone
+    /// is not enough, because a file and the preview of it stand in the strip
+    /// together and would answer the pointer as one tab.
     pub key: String,
     pub label: String,
     /// Wears a dot in place of the cross until the pointer is on it, the way

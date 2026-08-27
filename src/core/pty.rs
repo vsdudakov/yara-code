@@ -10,11 +10,19 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+use crate::core::command::{Key, Mods};
+use crate::core::keyboard;
+
 const SCROLLBACK: usize = 5000;
 
 pub struct Pty {
     parser: Arc<Mutex<vt100::Parser>>,
-    writer: Box<dyn Write + Send>,
+    /// Shared with the reader thread, which answers the keyboard protocol's
+    /// questions as they arrive rather than at the next frame: the program
+    /// asking is waiting on the reply before it decides what its keys are.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// What the program in front has asked to be told about a key press.
+    keyboard: Arc<Mutex<keyboard::Protocol>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     size: (u16, u16), // (rows, cols)
@@ -125,15 +133,29 @@ impl Pty {
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        let writer = Arc::new(Mutex::new(writer));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+        let keyboard = Arc::new(Mutex::new(keyboard::Protocol::default()));
         let sink = Arc::clone(&parser);
+        let asked = Arc::clone(&keyboard);
+        let back = Arc::clone(&writer);
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        // The keyboard protocol is read off the same stream
+                        // that draws the screen, and answered from here: a
+                        // program asks what the terminal can tell apart before
+                        // it draws its first frame, and waits for the answer.
+                        let reply = asked.lock().unwrap().feed(&buf[..n]);
+                        if !reply.is_empty() {
+                            let mut back = back.lock().unwrap();
+                            let _ = back.write_all(&reply);
+                            let _ = back.flush();
+                        }
                         sink.lock().unwrap().process(&buf[..n]);
                         notify();
                     }
@@ -145,6 +167,7 @@ impl Pty {
         Ok(Self {
             parser,
             writer,
+            keyboard,
             master: pair.master,
             child,
             size: (rows, cols),
@@ -220,8 +243,31 @@ impl Pty {
         if bytes.is_empty() {
             return;
         }
-        let _ = self.writer.write_all(bytes);
-        let _ = self.writer.flush();
+        let mut writer = self.writer.lock().unwrap();
+        let _ = writer.write_all(bytes);
+        let _ = writer.flush();
+    }
+
+    /// Sends a key press as the program in front has asked to be told about
+    /// it — see [`crate::core::keyboard`]. Both frontends hand their own key
+    /// events over here, so a shell is typed at the same way in a window as
+    /// over SSH.
+    pub fn send_key(&mut self, key: &Key, mods: Mods) {
+        let flags = self.keyboard.lock().unwrap().flags();
+        let bytes = keyboard::bytes(key, mods, flags);
+        if bytes.is_empty() {
+            return;
+        }
+        // Any key press returns the view to the live screen, as terminals do,
+        // and drops a selection the way typing does in the editor.
+        self.set_scrollback(0);
+        self.clear_selection();
+        self.write(&bytes);
+    }
+
+    /// Whether the program in front asked to be told Ctrl+Shift from Ctrl.
+    pub fn tells_modifiers(&self) -> bool {
+        self.keyboard.lock().unwrap().flags() & keyboard::DISAMBIGUATE != 0
     }
 
     /// Runs `f` over the current screen. Scrollback is applied first, so what
@@ -613,6 +659,76 @@ mod tests {
         }
         // Asked again at once, the cached answer comes back unchanged.
         assert_eq!(pty.title(), title);
+    }
+
+    /// Waits up to ten seconds for `ready`, which is what a shell on a CI
+    /// runner can take to start.
+    fn wait_for(mut ready: impl FnMut() -> bool) -> bool {
+        for _ in 0..200 {
+            if ready() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
+    }
+
+    #[test]
+    fn a_program_that_asks_to_be_told_ctrl_shift_from_ctrl_is() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-keyboard");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        assert!(!pty.tells_modifiers(), "nothing has asked yet");
+        // The rest is said in the shell's own words, and cmd.exe does not
+        // speak them.
+        if !cfg!(unix) {
+            return;
+        }
+
+        // What a program pushes on its way in. It goes out through the shell,
+        // which is the same stream a program of its own would write it on.
+        pty.write(b"printf '\\033[>1u'\r");
+        assert!(
+            wait_for(|| pty.tells_modifiers()),
+            "the terminal never took the flags"
+        );
+        pty.write(b"printf '\\033[<1u'\r");
+        assert!(
+            wait_for(|| !pty.tells_modifiers()),
+            "the flags were never given back"
+        );
+        // And a key press goes out spelled the way the flags in force ask
+        // for — which, now that they are back off, is the byte it always was.
+        pty.send_key(
+            &Key::Char('v'),
+            Mods {
+                ctrl: true,
+                shift: true,
+                ..Mods::default()
+            },
+        );
+    }
+
+    #[test]
+    fn a_program_asking_what_this_terminal_can_tell_apart_gets_an_answer() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-query");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        pty.resize(24, 80);
+        if !cfg!(unix) {
+            return;
+        }
+        // The answer is written back to the pty, which is the program's own
+        // input; read raw and shown, it is the five bytes of `CSI ? 0 u`.
+        pty.write(b"stty raw -echo; printf '\\033[?u'; head -c 5 | cat -v; stty sane\r");
+        let seen = wait_for(|| pty.with_screen(|screen| screen.contents().contains("^[[?0u")));
+        assert!(
+            seen,
+            "the answer never came back: {}",
+            pty.with_screen(|screen| screen.contents())
+        );
     }
 
     fn point(row: isize, col: u16) -> GridPoint {

@@ -1603,6 +1603,11 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                 Md::Bold(t) => Span::styled(t.clone(), base.add_modifier(Modifier::BOLD)),
                 Md::Italic(t) => Span::styled(t.clone(), base.add_modifier(Modifier::ITALIC)),
                 Md::Code(t) => Span::styled(format!(" {t} "), code),
+                // The window opens a link when it is clicked; a terminal
+                // leaves that to the terminal, which knows whether there is a
+                // browser on this side of the connection at all — over SSH
+                // there is not. What is painted is what the terminal's own
+                // link handling needs: the text, underlined.
                 Md::Link(t, _) => Span::styled(
                     t.clone(),
                     base.fg(color(theme.ui.accent_light))
@@ -1616,6 +1621,20 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                     base.fg(color(theme.ui.fg_dim))
                         .add_modifier(Modifier::ITALIC),
                 ),
+            })
+            .collect()
+    };
+    // What `inline` will actually put on the row. A picture is named after an
+    // icon and a snippet is set off by a space either side, so text measured
+    // as it was written wraps a column or two short and is clipped at the edge
+    // of the pane.
+    let laid = |spans: &[Md]| -> String {
+        spans
+            .iter()
+            .map(|s| match s {
+                Md::Text(t) | Md::Bold(t) | Md::Italic(t) | Md::Link(t, _) => t.clone(),
+                Md::Code(t) => format!(" {t} "),
+                Md::Image(alt, _) => format!("{} {alt}", app.icons.preview),
             })
             .collect()
     };
@@ -1642,7 +1661,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
     // kept where the run fits on one row and dropped where it wraps, which is
     // where it would go wrong anyway.
     let run = |spans: &[Md], lead: &str, hang: &str, base: Style, lead_style: Style| {
-        let rows = wrap(&plain(spans), lead.chars().count());
+        let rows = wrap(&laid(spans), lead.chars().count());
         let mut lines = Vec::new();
         if rows.len() == 1 {
             let mut styled = vec![Span::styled(lead.to_string(), lead_style)];
@@ -1679,8 +1698,10 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                     heading(*level),
                 )));
                 // The window rules under its first two levels; so does this,
-                // with the two weights a terminal has to tell them apart.
-                if *level <= 2 {
+                // with the two weights a terminal has to tell them apart. A
+                // centred heading is a README's title rather than the start of
+                // a section, and wears no rule in either frontend.
+                if *level <= 2 && !centered {
                     let rule = if *level == 1 { "═" } else { "─" };
                     lines.push(Line::from(Span::styled(
                         format!("{marker}{}", rule.repeat(text.chars().count().min(width))),

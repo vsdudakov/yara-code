@@ -37,6 +37,13 @@ the Return that submits it. In the terminal frontend this needs the kitty
 keyboard protocol, which is what tells <kbd>Shift+Enter</kbd> from
 <kbd>Enter</kbd>; see [Key bindings](keys.md).
 
+This panel speaks that protocol itself. A program running in it — an agent, an
+editor, `ycode` in the window's own terminal — asks what the terminal can tell
+apart and is answered, and from then on its keys are spelled out in full:
+<kbd>Ctrl+Shift+V</kbd> arrives as itself rather than as <kbd>Ctrl+V</kbd>
+again, and <kbd>Shift+Enter</kbd> as itself rather than as an escape. What a
+program asks for it gets back when it leaves, so the shell keeps its own.
+
 ## Selecting, pasting and the wheel
 
 **Drag across the grid** to select what the shell printed — in both frontends —

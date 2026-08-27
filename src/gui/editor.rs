@@ -458,7 +458,8 @@ impl Editor {
                         .list
                         .iter()
                         .map(|buf| {
-                            tabs::Tab::new(buf.path.display(), buf.name()).modified(buf.modified())
+                            tabs::Tab::new(format!("file:{}", buf.path.display()), buf.name())
+                                .modified(buf.modified())
                         })
                         .collect();
                     let in_file = self.active_diff.is_none() && self.active_preview.is_none();
@@ -484,7 +485,10 @@ impl Editor {
                         .iter()
                         .map(|diff| {
                             let name = diff.path.rsplit('/').next().unwrap_or(&diff.path);
-                            tabs::Tab::new(&diff.path, format!("{} {name}", icons().diff))
+                            tabs::Tab::new(
+                                format!("diff:{}", diff.path),
+                                format!("{} {name}", icons().diff),
+                            )
                         })
                         .collect();
                     let row = tabs::row(
@@ -509,7 +513,7 @@ impl Editor {
                         .iter()
                         .map(|preview| {
                             tabs::Tab::new(
-                                preview.path.display(),
+                                format!("preview:{}", preview.path.display()),
                                 format!("{} {} preview", icons().preview, preview.name()),
                             )
                         })

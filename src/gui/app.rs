@@ -2618,12 +2618,15 @@ impl App {
             });
 
         // Terminal panel. Declared after the sidebar so it sits under the
-        // editor only, matching the terminal frontend.
+        // editor only, matching the terminal frontend. It can be pulled up
+        // as far as that one's can — to within a few lines of the top —
+        // rather than to a fixed height that a tall window makes a third.
         if self.show_terminal {
+            let tallest = (ctx.available_rect().height() - 120.0).max(80.0);
             egui::TopBottomPanel::bottom("terminal")
                 .resizable(true)
                 .default_height(240.0)
-                .height_range(80.0..=600.0)
+                .height_range(80.0..=tallest)
                 .frame(
                     egui::Frame::default()
                         .fill(color(theme.ui.editor_bg))

@@ -513,6 +513,72 @@ fn the_git_panel_opens_a_diff_tab_in_the_window() {
 }
 
 #[test]
+fn the_seam_of_a_diff_is_dragged_to_give_one_side_more_room_in_the_window() {
+    let project = Project::new("yara-gui-e2e-diff-seam");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@e.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "First"]);
+    project.file("README.md", "# Title\nChanged.\n");
+
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::G, Modifiers::CTRL | Modifiers::SHIFT);
+    let at = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.contains("README.md") && !t.contains("×"))
+        .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
+        .unwrap();
+    harness.click(at);
+    assert!(harness.shows("Changed."), "{}", harness.screen());
+
+    // Where the galleys were painted, uncorrected: the left number, the left
+    // text and the right text of the diff's rows give the gutter's width and
+    // so where the seam is.
+    let raw = |harness: &Harness, text: &str| -> Pos2 {
+        harness
+            .text
+            .iter()
+            .find(|(t, _)| t == text)
+            .map(|(_, p)| *p)
+            .unwrap_or_else(|| panic!("{text:?} on screen: {}", harness.screen()))
+    };
+    let number = raw(&harness, "1");
+    let left = raw(&harness, "A line of prose.");
+    let right = raw(&harness, "Changed.");
+    let char_w = (left.x - number.x) / 2.0;
+    let seam = right.x - char_w * 6.0;
+
+    harness.drag(
+        Pos2::new(seam, right.y + 4.0),
+        Pos2::new(seam + 80.0, right.y + 4.0),
+    );
+    let moved = raw(&harness, "Changed.");
+    assert!(
+        (moved.x - (right.x + 80.0)).abs() <= 4.0,
+        "the new side moved with the seam: {} -> {}",
+        right.x,
+        moved.x
+    );
+    assert!(
+        harness.shows("A line of prose."),
+        "the old side still reads: {}",
+        harness.screen()
+    );
+}
+
+#[test]
 fn the_diff_arrows_jump_from_change_to_change() {
     let project = Project::new("yara-gui-e2e-diff-arrows");
     let git = |args: &[&str]| {

@@ -47,6 +47,8 @@ use crate::tui::ui;
 pub enum Splitter {
     Sidebar,
     Shell,
+    /// The seam between the two sides of a diff.
+    Diff,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -99,6 +101,9 @@ pub struct Diff {
     pub rows: Vec<diff::Row>,
     /// First row drawn.
     pub scroll: usize,
+    /// How much of the width the old version gets, as a share — the seam is
+    /// dragged, and a share survives the pane being resized around it.
+    pub split: f32,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -439,6 +444,8 @@ pub struct Layout {
     pub v_split: Rect,
     /// The draggable border above the terminal panel.
     pub h_split: Rect,
+    /// The draggable seam of the diff in front, while one is drawn.
+    pub diff_split: Rect,
     /// The region the panes share, used to clamp a drag.
     pub body: Rect,
     pub tab_files: Rect,
@@ -1668,6 +1675,8 @@ impl App {
                     self.resizing = Some(Splitter::Sidebar);
                 } else if hits(self.layout.h_split, x, y) {
                     self.resizing = Some(Splitter::Shell);
+                } else if hits(self.layout.diff_split, x, y) {
+                    self.resizing = Some(Splitter::Diff);
                 } else {
                     self.left_click(x, y, m.modifiers);
                 }
@@ -1772,6 +1781,17 @@ impl App {
                 let max = body.height.saturating_sub(6).max(3);
                 self.shell_height = bottom.saturating_sub(y).saturating_sub(1).clamp(3, max);
             }
+            Some(Splitter::Diff) => {
+                // Kept as a share of the pane, and never so far over that
+                // either side loses its line numbers.
+                let viewer = self.layout.viewer;
+                if viewer.width > 0 {
+                    let share = f32::from(x.saturating_sub(viewer.x)) / f32::from(viewer.width);
+                    if let Some(diff) = self.active_diff_mut() {
+                        diff.split = share.clamp(0.15, 0.85);
+                    }
+                }
+            }
             None => {}
         }
     }
@@ -1786,6 +1806,8 @@ impl App {
             Some(Splitter::Sidebar)
         } else if hits(self.layout.h_split, x, y) {
             Some(Splitter::Shell)
+        } else if hits(self.layout.diff_split, x, y) {
+            Some(Splitter::Diff)
         } else {
             None
         }
@@ -3654,6 +3676,7 @@ impl App {
         match core_git::diff(&dir, &change) {
             Ok(rows) => {
                 let diff = Diff {
+                    split: 0.5,
                     path: change.path.clone(),
                     rows,
                     scroll: 0,
@@ -3724,6 +3747,10 @@ impl App {
     /// The diff tab in front, if one is.
     pub fn active_diff(&self) -> Option<&Diff> {
         self.active_diff.and_then(|i| self.diffs.get(i))
+    }
+
+    pub fn active_diff_mut(&mut self) -> Option<&mut Diff> {
+        self.active_diff.and_then(|i| self.diffs.get_mut(i))
     }
 
     pub fn close_diff(&mut self, index: usize) {
@@ -4254,6 +4281,7 @@ mod tests {
             path: "Cargo.toml".into(),
             rows: Vec::new(),
             scroll: 0,
+            split: 0.5,
         });
         app.active_diff = Some(0);
         // The diff goes, and the file behind it stays open.
@@ -4274,6 +4302,7 @@ mod tests {
             path: "counts.txt".into(),
             rows: diff::from_unified(unified),
             scroll: 0,
+            split: 0.5,
         });
         app.active_diff = Some(0);
         // Forward to the first change, then to the second.

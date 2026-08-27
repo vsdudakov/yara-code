@@ -48,6 +48,10 @@ and the terminal panel is right there.
 
     ![The same diff in the window frontend](../assets/shots/gui-git-diff.png)
 
+The seam between the two versions is a handle: drag it to give the old side or
+the new one more of the width. Each diff keeps its own, as a share of the pane,
+so a window resized around it keeps the proportion.
+
 
 Clicking a changed file opens a **side-by-side diff** as a tab of its own,
 beside the open files: what the file was on the left, what it is now on the

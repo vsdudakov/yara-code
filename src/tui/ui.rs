@@ -1515,16 +1515,34 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
         Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
         area,
     );
-    let half = (area.width / 2) as usize;
     let number_width = 5usize;
-    let text_width = half.saturating_sub(number_width + 2);
+    // The seam sits where the diff's share puts it, and never so close to an
+    // edge that a side has no room for its numbers and a few characters.
+    let least = (number_width + 6) as u16;
+    let left_width = ((f32::from(area.width) * diff.split).round() as u16).clamp(
+        least.min(area.width),
+        area.width.saturating_sub(least + 1).max(least),
+    );
+    let right_width = area.width.saturating_sub(left_width + 1);
+    let seam = Rect {
+        x: area.x + left_width,
+        y: area.y,
+        width: 1,
+        height: area.height,
+    };
+    let seam_style = if app.hovering_split() == Some(Splitter::Diff) {
+        on(theme.ui.accent_light, theme.ui.editor_bg)
+    } else {
+        on(theme.ui.border, theme.ui.editor_bg)
+    };
     let lines: Vec<Line> = diff
         .rows
         .iter()
         .skip(diff.scroll)
         .take(area.height as usize)
         .map(|row| {
-            let side = |cell: Option<&diff::Side>, tint: Option<(u8, u8, u8)>| {
+            let side = |cell: Option<&diff::Side>, tint: Option<(u8, u8, u8)>, width: u16| {
+                let text_width = (width as usize).saturating_sub(number_width + 2);
                 let bg = match tint {
                     Some(rgb) => wash(rgb, theme.ui.editor_bg),
                     None => theme.ui.editor_bg,
@@ -1553,15 +1571,16 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
                 diff::Kind::Added => (None, Some(added)),
                 diff::Kind::Removed => (Some(removed), None),
             };
-            let mut spans = side(row.left.as_ref(), left_tint);
-            spans.push(Span::styled("│", on(theme.ui.border, theme.ui.editor_bg)));
-            spans.extend(side(row.right.as_ref(), right_tint));
+            let mut spans = side(row.left.as_ref(), left_tint, left_width);
+            spans.push(Span::styled("│", seam_style));
+            spans.extend(side(row.right.as_ref(), right_tint, right_width));
             Line::from(spans)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
     app.layout.diff_prev = prev_button;
     app.layout.diff_next = next_button;
+    app.layout.diff_split = seam;
 }
 
 /// A markdown file as a reader sees it: headings in the accent, code on the
@@ -2162,6 +2181,8 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let text_area = area;
     app.layout.editor = text_area;
     app.layout.viewer = Rect::default();
+    // No diff in front, no seam to catch a click.
+    app.layout.diff_split = Rect::default();
     if app.buffers.is_empty() {
         draw_start_page(frame, app, text_area);
         return;

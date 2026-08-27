@@ -156,6 +156,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         reset_git_rects(app);
     }
     draw_tab_strip(frame, app, tab_row);
+    // The start page's rows only exist while the start page is what's in
+    // front; a diff or preview opened over an empty editor must not leave
+    // them live for a click to land on.
+    app.layout.start_rows.clear();
     if app.active_preview().is_some() {
         draw_preview(frame, app, editor_area);
     } else if app.active_diff().is_some() {

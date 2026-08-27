@@ -169,6 +169,12 @@ impl Terminal {
 
         let font_id = code_font(ui);
         let (cell_w, cell_h) = ui.fonts(|f| (f.glyph_width(&font_id, ' '), f.row_height(&font_id)));
+        // Laying out a run, epaint rounds each glyph's advance to a physical
+        // pixel; a grid built on the raw advance drifts away from the glyphs
+        // by a fraction per cell, and the cursor ends up further right the
+        // longer the line. Snap the cell to the same pixel so they agree.
+        let ppp = ui.ctx().pixels_per_point();
+        let cell_w = (cell_w * ppp).round() / ppp;
 
         let avail = ui.available_size();
         let (rect, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());

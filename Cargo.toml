@@ -25,6 +25,15 @@ name = "ycode-gui"
 path = "src/bin/ycode-gui.rs"
 required-features = ["gui"]
 
+# Renders a frame of the window frontend to a file, for the README and the
+# docs. It draws with egui and wgpu, so it is gated like the window binary —
+# `cargo test --no-default-features --features tui` builds the examples too,
+# and would otherwise try to compile this against a `gui` module that is not
+# there.
+[[example]]
+name = "screenshot"
+required-features = ["gui"]
+
 [features]
 default = ["gui", "tui"]
 gui = [

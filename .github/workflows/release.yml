@@ -155,7 +155,19 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Every step below is conditional on the token, so without it the job
+      # goes green having published nothing — and `apt install ycode` keeps
+      # 404ing while the release looks finished. Say so on the run.
+      - name: Say so when there is nowhere to publish to
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        if: env.PACKAGES_TOKEN == ''
+        run: |
+          echo "::warning title=APT and DNF repositories not published::PACKAGES_TOKEN is unset, so vsdudakov/packages was left untouched. The documented 'apt install ycode' and 'dnf install ycode' will not work for this release."
       - name: Install the repository tools
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        if: env.PACKAGES_TOKEN != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev apt-utils createrepo-c

@@ -19,6 +19,14 @@ packages="${1:?usage: publish-repos.sh <packages-dir> <site-dir> [version]}"
 site="${2:?usage: publish-repos.sh <packages-dir> <site-dir> [version]}"
 version="${3:-}"
 
+# Both are resolved before anything runs, because the APT index is written from
+# inside the tree it describes — a caller who passed a relative path, as the
+# release workflow does, would otherwise have the redirect land a second copy
+# of that path under the first.
+mkdir -p "$packages" "$site"
+packages="$(cd "$packages" && pwd)"
+site="$(cd "$site" && pwd)"
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The key lives in a home of its own, thrown away with the job, so nothing is

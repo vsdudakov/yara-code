@@ -1,6 +1,6 @@
 [package]
 name = "yara"
-version = "0.5.15"
+version = "0.5.16"
 edition = "2021"
 description = "Minimal code editor: a GPU-accelerated window and a terminal UI, sharing one core"
 license = "MIT"

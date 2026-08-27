@@ -47,6 +47,8 @@ use crate::tui::ui;
 pub enum Splitter {
     Sidebar,
     Shell,
+    /// The seam between the two sides of a diff.
+    Diff,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -99,6 +101,9 @@ pub struct Diff {
     pub rows: Vec<diff::Row>,
     /// First row drawn.
     pub scroll: usize,
+    /// How much of the width the old version gets, as a share — the seam is
+    /// dragged, and a share survives the pane being resized around it.
+    pub split: f32,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -141,6 +146,8 @@ pub enum Prompt {
     ConfirmDelete(PathBuf),
     /// Every match in the project is about to be rewritten on disk.
     ConfirmReplaceAll,
+    /// Save As named a file that exists, and is not the buffer's own.
+    ConfirmOverwrite(PathBuf),
     /// Closing buffer `index`, which has unsaved changes.
     ConfirmClose {
         index: usize,
@@ -193,6 +200,7 @@ impl Prompt {
             Self::Rename(path) => format!("Rename {}", short(path)),
             Self::MoveTo(path) => format!("Move {} into folder", short(path)),
             Self::ConfirmDelete(path) => format!("Delete \"{}\"?", short(path)),
+            Self::ConfirmOverwrite(path) => format!("Replace \"{}\"?", short(path)),
             // The question itself is built by the caller, from the search.
             Self::ConfirmReplaceAll => String::new(),
             Self::ConfirmClose {
@@ -250,7 +258,10 @@ impl Prompt {
     pub fn is_question(&self) -> bool {
         matches!(
             self,
-            Self::ConfirmDelete(_) | Self::ConfirmClose { .. } | Self::ConfirmReplaceAll
+            Self::ConfirmDelete(_)
+                | Self::ConfirmClose { .. }
+                | Self::ConfirmReplaceAll
+                | Self::ConfirmOverwrite(_)
         )
     }
 
@@ -272,6 +283,10 @@ impl Prompt {
             Self::ConfirmReplaceAll => vec![
                 crate::core::search::Search::REPLACE_ALL_WARNING.to_string(),
                 "Enter / y  Replace All      Esc / n  Cancel".to_string(),
+            ],
+            Self::ConfirmOverwrite(_) => vec![
+                "The file already exists. Its contents will be replaced.".to_string(),
+                "Enter / y  Replace      Esc / n  Cancel".to_string(),
             ],
             _ => Vec::new(),
         }
@@ -429,6 +444,8 @@ pub struct Layout {
     pub v_split: Rect,
     /// The draggable border above the terminal panel.
     pub h_split: Rect,
+    /// The draggable seam of the diff in front, while one is drawn.
+    pub diff_split: Rect,
     /// The region the panes share, used to clamp a drag.
     pub body: Rect,
     pub tab_files: Rect,
@@ -1647,11 +1664,19 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Right) => self.right_click(x, y),
             MouseEventKind::Down(MouseButton::Left) => {
-                self.tab_drag = self.tab_at(x, y);
+                // A question names a tab by its index; a drag under it would
+                // move the tabs and hand the answer to a different one.
+                self.tab_drag = if self.prompt.is_some() {
+                    None
+                } else {
+                    self.tab_at(x, y)
+                };
                 if hits(self.layout.v_split, x, y) {
                     self.resizing = Some(Splitter::Sidebar);
                 } else if hits(self.layout.h_split, x, y) {
                     self.resizing = Some(Splitter::Shell);
+                } else if hits(self.layout.diff_split, x, y) {
+                    self.resizing = Some(Splitter::Diff);
                 } else {
                     self.left_click(x, y, m.modifiers);
                 }
@@ -1688,6 +1713,10 @@ impl App {
                 self.drag_over = self.drop_target_at(x, y);
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.prompt.is_some() {
+                    self.tab_drag = None;
+                    self.tab_drag_over = None;
+                }
                 if let (Some((strip, from)), Some(to)) =
                     (self.tab_drag.take(), self.tab_drag_over.take())
                 {
@@ -1752,6 +1781,17 @@ impl App {
                 let max = body.height.saturating_sub(6).max(3);
                 self.shell_height = bottom.saturating_sub(y).saturating_sub(1).clamp(3, max);
             }
+            Some(Splitter::Diff) => {
+                // Kept as a share of the pane, and never so far over that
+                // either side loses its line numbers.
+                let viewer = self.layout.viewer;
+                if viewer.width > 0 {
+                    let share = f32::from(x.saturating_sub(viewer.x)) / f32::from(viewer.width);
+                    if let Some(diff) = self.active_diff_mut() {
+                        diff.split = share.clamp(0.15, 0.85);
+                    }
+                }
+            }
             None => {}
         }
     }
@@ -1766,6 +1806,8 @@ impl App {
             Some(Splitter::Sidebar)
         } else if hits(self.layout.h_split, x, y) {
             Some(Splitter::Shell)
+        } else if hits(self.layout.diff_split, x, y) {
+            Some(Splitter::Diff)
         } else {
             None
         }
@@ -2940,6 +2982,26 @@ impl App {
         self.status = format!("project: {}", root.display());
     }
 
+    /// Points the buffer in front at `path` and writes it there.
+    fn save_as_now(&mut self, path: PathBuf) {
+        let Some(buf) = self.buffers.active_mut() else {
+            self.status = "nothing to save".into();
+            return;
+        };
+        buf.path = path.clone();
+        buf.extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.buffers.save_active() {
+            self.tree.rebuild();
+            self.tree.reveal(&path);
+            self.status = format!("saved as {}", short(&path));
+        } else {
+            self.status = format!("could not write {}", path.display());
+        }
+    }
+
     /// Re-reads settings after the settings file itself is saved.
     fn after_save(&mut self) {
         // A save changes the git status; show it right away, not on the timer.
@@ -3614,6 +3676,7 @@ impl App {
         match core_git::diff(&dir, &change) {
             Ok(rows) => {
                 let diff = Diff {
+                    split: 0.5,
                     path: change.path.clone(),
                     rows,
                     scroll: 0,
@@ -3684,6 +3747,10 @@ impl App {
     /// The diff tab in front, if one is.
     pub fn active_diff(&self) -> Option<&Diff> {
         self.active_diff.and_then(|i| self.diffs.get(i))
+    }
+
+    pub fn active_diff_mut(&mut self) -> Option<&mut Diff> {
+        self.active_diff.and_then(|i| self.diffs.get_mut(i))
     }
 
     pub fn close_diff(&mut self, index: usize) {
@@ -4075,24 +4142,19 @@ impl App {
             }
             Prompt::SaveAs => {
                 let path = self.resolve(&input);
-                match self.buffers.active_mut() {
-                    Some(buf) if !input.trim().is_empty() => {
-                        buf.path = path.clone();
-                        buf.extension = path
-                            .extension()
-                            .map(|e| e.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        if self.buffers.save_active() {
-                            self.tree.rebuild();
-                            self.tree.reveal(&path);
-                            self.status = format!("saved as {}", short(&path));
-                        } else {
-                            self.status = format!("could not write {}", path.display());
-                        }
+                match self.buffers.active() {
+                    Some(_) if input.trim().is_empty() => self.status = "nothing to save".into(),
+                    // Another file by that name is asked about, as the
+                    // window's dialog asks; the buffer's own file is just a
+                    // save.
+                    Some(buf) if path.exists() && buf.path != path => {
+                        self.prompt = Some(Prompt::ConfirmOverwrite(path));
                     }
-                    _ => self.status = "nothing to save".into(),
+                    Some(_) => self.save_as_now(path),
+                    None => self.status = "nothing to save".into(),
                 }
             }
+            Prompt::ConfirmOverwrite(path) => self.save_as_now(path),
             Prompt::Help(_) => {}
             Prompt::Recent => {
                 if let Some(path) = self.settings.recent_projects.get(self.prompt_selected) {
@@ -4135,8 +4197,37 @@ impl App {
 mod tests {
     use super::*;
 
+    /// Opening the editor writes the recent list, and a theme or an indent
+    /// picked in a test writes that: all of it lands here, in a directory of
+    /// the test's own, and never in the developer's settings.json. The lock
+    /// is held for as long as the app is, because the variable is one for
+    /// the whole test binary.
+    struct Isolated {
+        _dir: crate::core::test_support::Dir,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn isolated() -> Isolated {
+        let lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = crate::core::test_support::Dir::new("yara-tui-app");
+        std::env::set_var("YARA_CONFIG_DIR", dir.path());
+        Isolated {
+            _dir: dir,
+            _lock: lock,
+        }
+    }
+
+    impl Drop for Isolated {
+        fn drop(&mut self) {
+            std::env::remove_var("YARA_CONFIG_DIR");
+        }
+    }
+
     #[test]
     fn the_terminal_keeps_ctrl_j_so_an_agent_can_take_a_new_line() {
+        let _config = isolated();
         let mut app = App::new(None);
         let chord: Chord = "Ctrl+J".parse().expect("a chord");
         app.focus = Focus::Shell;
@@ -4158,6 +4249,7 @@ mod tests {
         // Terminals that keep the right button for themselves — iTerm2 and
         // macOS Terminal do — leave Shift+F10 as the only way in, so it has
         // to reach the same menus the pointer would.
+        let _config = isolated();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
         let mut app = App::new(Some(root.clone()));
         app.buffers.open(root.join("Cargo.toml"));
@@ -4181,6 +4273,7 @@ mod tests {
 
     #[test]
     fn closing_a_tab_closes_whichever_one_is_in_front() {
+        let _config = isolated();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
         let mut app = App::new(Some(root.clone()));
         app.buffers.open(root.join("Cargo.toml"));
@@ -4188,6 +4281,7 @@ mod tests {
             path: "Cargo.toml".into(),
             rows: Vec::new(),
             scroll: 0,
+            split: 0.5,
         });
         app.active_diff = Some(0);
         // The diff goes, and the file behind it stays open.
@@ -4202,11 +4296,13 @@ mod tests {
     #[test]
     fn a_diffs_arrows_stop_at_each_run_of_changed_rows() {
         let unified = "@@ -1,6 +1,6 @@\n one\n two\n-three\n+THREE\n four\n five\n-six\n+SIX\n";
+        let _config = isolated();
         let mut app = App::new(None);
         app.diffs.push(Diff {
             path: "counts.txt".into(),
             rows: diff::from_unified(unified),
             scroll: 0,
+            split: 0.5,
         });
         app.active_diff = Some(0);
         // Forward to the first change, then to the second.

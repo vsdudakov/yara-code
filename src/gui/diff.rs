@@ -15,6 +15,10 @@ pub struct DiffView {
     /// Row at the top of the view as it was last drawn, which is where the
     /// arrows count the next change from.
     top_row: usize,
+    /// How much of the width the old version gets, as a share: the seam
+    /// between the two sides is dragged, and a share survives the window
+    /// being resized around it.
+    split: f32,
 }
 
 impl DiffView {
@@ -26,6 +30,7 @@ impl DiffView {
                 error: None,
                 jump_to: None,
                 top_row: 0,
+                split: 0.5,
             },
             Err(message) => Self {
                 path,
@@ -33,6 +38,7 @@ impl DiffView {
                 error: Some(message),
                 jump_to: None,
                 top_row: 0,
+                split: 0.5,
             },
         }
     }
@@ -162,10 +168,15 @@ impl DiffView {
         if let Some(row) = self.jump_to.take() {
             area = area.vertical_scroll_offset(row as f32 * pitch);
         }
+        // Where the seam was drawn this frame, for the drag handle over it.
+        let mut seam_x: Option<f32> = None;
+        let split = self.split;
         let output = area.show_rows(ui, row_h, self.rows.len(), |ui, range| {
             let width = ui.available_width();
-            let half = (width / 2.0).max(80.0);
+            let half =
+                (width * split).clamp(80.0_f32.min(width / 2.0), (width - 80.0).max(width / 2.0));
             for row in &self.rows[range] {
+                seam_x.get_or_insert(ui.cursor().min.x + half);
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::hover());
                 if !ui.is_rect_visible(rect) {
@@ -239,6 +250,30 @@ impl DiffView {
             }
         });
         self.top_row = (output.state.offset.y / pitch).round() as usize;
+
+        // The seam is a handle: drag it and the old version gets more of the
+        // width or less, as the sidebar's border does for the sidebar. It is
+        // drawn brighter while the pointer is on it, so it reads as one.
+        if let Some(x) = seam_x {
+            let viewport = output.inner_rect;
+            let handle = egui::Rect::from_x_y_ranges(x - 4.0..=x + 4.0, viewport.y_range());
+            let response = ui
+                .interact(handle, ui.id().with("diff seam"), egui::Sense::drag())
+                .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            if response.dragged() {
+                if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                    let share = (pointer.x - viewport.min.x) / viewport.width().max(1.0);
+                    self.split = share.clamp(0.15, 0.85);
+                }
+            }
+            if response.hovered() || response.dragged() {
+                ui.painter().vline(
+                    x,
+                    viewport.y_range(),
+                    egui::Stroke::new(1.0_f32, color(theme.ui.accent_light)),
+                );
+            }
+        }
         event
     }
 }

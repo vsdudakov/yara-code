@@ -243,12 +243,12 @@ impl Search {
         let mut truncated = false;
         let mut visit = |path: &Path, text: &str| {
             let mut matches = Vec::new();
-            for (i, line) in text.lines().enumerate() {
-                if total >= MAX_MATCHES {
-                    truncated = true;
-                    break;
-                }
-                if let Some(m) = regex.find(line) {
+            'lines: for (i, line) in text.lines().enumerate() {
+                for m in regex.find_iter(line) {
+                    if total >= MAX_MATCHES {
+                        truncated = true;
+                        break 'lines;
+                    }
                     matches.push(make_match(i + 1, line, m.start(), m.end()));
                     total += 1;
                 }
@@ -270,6 +270,11 @@ impl Search {
 
     /// Rewrites every match in the current results. Returns how many matches
     /// were replaced in how many files, or why it could not run.
+    ///
+    /// The search matched line by line, and so does this: a pattern is never
+    /// given the file whole, where `^`, `$` and a class that admits a newline
+    /// would find things the panel never showed. What was listed is what is
+    /// rewritten, and each line keeps the ending it had.
     pub fn replace_all(&mut self, roots: &[PathBuf]) -> Result<(usize, usize), String> {
         if self.query.is_empty() {
             return Err("nothing to replace".into());
@@ -290,12 +295,24 @@ impl Search {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let hits = regex.find_iter(&text).count();
+            let mut hits = 0usize;
+            let mut updated = String::with_capacity(text.len());
+            for piece in text.split_inclusive('\n') {
+                let (line, ending) = match piece.strip_suffix("\r\n") {
+                    Some(line) => (line, "\r\n"),
+                    None => match piece.strip_suffix('\n') {
+                        Some(line) => (line, "\n"),
+                        None => (piece, ""),
+                    },
+                };
+                hits += regex.find_iter(line).count();
+                updated.push_str(&regex.replace_all(line, replacement.as_str()));
+                updated.push_str(ending);
+            }
             if hits == 0 {
                 continue;
             }
-            let updated = regex.replace_all(&text, replacement.as_str());
-            if std::fs::write(&path, updated.as_ref()).is_ok() {
+            if std::fs::write(&path, updated).is_ok() {
                 files += 1;
                 count += hits;
             }
@@ -658,6 +675,68 @@ mod tests {
         assert_eq!(a, "let sum = 1;\nlet TOTAL = 2;\n");
         // The results refresh, so the replaced text is gone from them.
         assert_eq!(s.total_matches(), 0);
+    }
+
+    #[test]
+    fn replace_all_rewrites_only_what_the_panel_showed() {
+        let (_dir, root) = project();
+        // A class that admits a newline would, over the whole file, run from
+        // the unbalanced quote on line 2 into line 3 and merge them.
+        std::fs::write(
+            root.join("src/q.rs"),
+            "let a = \"x\";\n// it's \"unbalanced\nlet b = \"y\";\n",
+        )
+        .unwrap();
+        let mut s = search(&root, |s| {
+            s.query = "\"[^\"]*\"".into();
+            s.regex = true;
+            s.replace = "S".into();
+        });
+        let shown = s.total_matches();
+        let (count, _) = s.replace_all(std::slice::from_ref(&root)).unwrap();
+        assert_eq!(count, shown, "the count is what the panel listed");
+        let q = std::fs::read_to_string(root.join("src/q.rs")).unwrap();
+        assert_eq!(q, "let a = S;\n// it's \"unbalanced\nlet b = S;\n");
+    }
+
+    #[test]
+    fn replace_all_reaches_every_line_a_start_anchor_matched() {
+        let (_dir, root) = project();
+        std::fs::write(root.join("src/u.rs"), "use a;\nuse b;\r\nuse c;\n").unwrap();
+        let mut s = search(&root, |s| {
+            s.query = "^use ".into();
+            s.regex = true;
+            s.replace = "pub use ".into();
+        });
+        let (count, _) = s.replace_all(std::slice::from_ref(&root)).unwrap();
+        assert_eq!(count, 3);
+        let u = std::fs::read_to_string(root.join("src/u.rs")).unwrap();
+        assert_eq!(
+            u, "pub use a;\npub use b;\r\npub use c;\n",
+            "each line keeps its ending"
+        );
+    }
+
+    #[test]
+    fn every_match_on_a_line_is_listed_and_replaced() {
+        let (_dir, root) = project();
+        std::fs::write(root.join("src/t.rs"), "foo foo\n").unwrap();
+        let mut s = search(&root, |s| {
+            s.query = "foo".into();
+            s.replace = "bar".into();
+        });
+        assert_eq!(
+            s.results
+                .iter()
+                .find(|f| f.path.ends_with("t.rs"))
+                .map(|f| f.matches.len()),
+            Some(2)
+        );
+        s.replace_all(std::slice::from_ref(&root)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/t.rs")).unwrap(),
+            "bar bar\n"
+        );
     }
 
     #[test]

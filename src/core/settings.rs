@@ -19,7 +19,7 @@ pub enum IndentStyle {
     Tabs,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Indent {
     pub style: IndentStyle,
@@ -87,7 +87,7 @@ pub enum Modifier {
     Shift,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GotoModifiers {
     pub gui: Vec<Modifier>,
@@ -107,7 +107,7 @@ impl Default for GotoModifiers {
 /// Modifiers held while the pointer rests on a line to blame that line rather
 /// than the one the caret is on. Same shape as [`GotoModifiers`], and the same
 /// reason for being a list.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BlameModifiers {
     pub gui: Vec<Modifier>,
@@ -127,6 +127,10 @@ impl Default for BlameModifiers {
 
 pub type KeyMap = BTreeMap<String, Chord>;
 
+/// A chord that could not be read: which frontend, which command, what the
+/// file said.
+pub type Rejected = (&'static str, String, String);
+
 #[derive(Clone, Debug)]
 pub struct Keys {
     pub gui: KeyMap,
@@ -134,25 +138,34 @@ pub struct Keys {
     /// Bindings the file spelled wrongly, as `(frontend, command, text)`. They
     /// keep their defaults and are named in the status bar; one typo does not
     /// cost the user the rest of their settings.
-    pub rejected: Vec<(&'static str, String, String)>,
+    pub rejected: Vec<Rejected>,
 }
 
 /// Only bindings that differ from the defaults are written out. Saving the
 /// whole map would freeze today's defaults into every user's file, so a later
 /// change to a default — or a newly added command — would never reach them.
+/// A chord the file had that could not be read is written back as it was: the
+/// user is told about it, and a save is not the moment to lose their line.
 impl Serialize for Keys {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let defaults = Keys::default();
-        let changed = |map: &KeyMap, base: &KeyMap| -> KeyMap {
-            map.iter()
+        let changed = |frontend: &str, map: &KeyMap, base: &KeyMap| -> BTreeMap<String, String> {
+            let mut out: BTreeMap<String, String> = map
+                .iter()
                 .filter(|(id, chord)| base.get(*id) != Some(chord))
-                .map(|(id, chord)| (id.clone(), chord.clone()))
-                .collect()
+                .map(|(id, chord)| (id.clone(), chord.to_string()))
+                .collect();
+            for (from, id, text) in &self.rejected {
+                if *from == frontend {
+                    out.insert(id.clone(), text.clone());
+                }
+            }
+            out
         };
         let mut out = s.serialize_struct("Keys", 2)?;
-        out.serialize_field("gui", &changed(&self.gui, &defaults.gui))?;
-        out.serialize_field("tui", &changed(&self.tui, &defaults.tui))?;
+        out.serialize_field("gui", &changed("gui", &self.gui, &defaults.gui))?;
+        out.serialize_field("tui", &changed("tui", &self.tui, &defaults.tui))?;
         out.end()
     }
 }
@@ -379,7 +392,7 @@ pub const PROJECT_DIR: &str = ".ycode";
 /// What a project file may say. Every field is optional, so a project that
 /// only cares about indentation says only that; `recent_projects` is not
 /// here on purpose — that is the user's, not the project's.
-#[derive(Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct ProjectOverrides {
     theme: Option<String>,
@@ -390,16 +403,44 @@ struct ProjectOverrides {
     show_terminal: Option<bool>,
     goto_modifiers: Option<GotoModifiers>,
     blame_modifiers: Option<BlameModifiers>,
-    keys: Option<Keys>,
+    keys: Option<ProjectKeys>,
+}
+
+/// A project's chords as the file spells them. They are kept as text rather
+/// than read through `Keys`, which lays a file over the defaults and so
+/// cannot tell "named the default" from "did not mention it" — and a project
+/// that names the default is asking for it back over the user's rebind.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ProjectKeys {
+    gui: BTreeMap<String, String>,
+    tui: BTreeMap<String, String>,
+}
+
+impl ProjectKeys {
+    /// Every chord the project named, parsed, and every one it misspelt.
+    fn parsed(&self) -> (Vec<(&'static str, String, Chord)>, Vec<Rejected>) {
+        let mut chords = Vec::new();
+        let mut rejected = Vec::new();
+        for (frontend, map) in [("gui", &self.gui), ("tui", &self.tui)] {
+            for (id, text) in map {
+                match text.parse::<Chord>() {
+                    Ok(chord) => chords.push((frontend, id.clone(), chord)),
+                    Err(_) => rejected.push((frontend, id.clone(), text.clone())),
+                }
+            }
+        }
+        (chords, rejected)
+    }
 }
 
 impl ProjectOverrides {
-    fn apply(self, settings: &mut Settings) {
-        if let Some(v) = self.theme {
-            settings.theme = v;
+    fn apply(&self, settings: &mut Settings) {
+        if let Some(v) = &self.theme {
+            settings.theme = v.clone();
         }
-        if let Some(v) = self.indent {
-            settings.indent = v;
+        if let Some(v) = &self.indent {
+            settings.indent = v.clone();
         }
         if let Some(v) = self.font_size {
             settings.font_size = v;
@@ -413,28 +454,72 @@ impl ProjectOverrides {
         if let Some(v) = self.show_terminal {
             settings.show_terminal = v;
         }
-        if let Some(v) = self.goto_modifiers {
-            settings.goto_modifiers = v;
+        if let Some(v) = &self.goto_modifiers {
+            settings.goto_modifiers = v.clone();
         }
-        if let Some(v) = self.blame_modifiers {
-            settings.blame_modifiers = v;
+        if let Some(v) = &self.blame_modifiers {
+            settings.blame_modifiers = v.clone();
         }
-        if let Some(keys) = self.keys {
+        if let Some(keys) = &self.keys {
             // A project's keys lay over the user's, as the user's lay over
-            // the defaults. Keys deserialises over the defaults, so only the
-            // entries the file actually named differ from them.
-            let defaults = Keys::default();
-            for (id, chord) in keys.gui {
-                if defaults.gui.get(&id) != Some(&chord) {
-                    settings.keys.gui.insert(id, chord);
+            // the defaults — every one it names, the default included.
+            let (chords, rejected) = keys.parsed();
+            for (frontend, id, chord) in chords {
+                match frontend {
+                    "gui" => settings.keys.gui.insert(id, chord),
+                    _ => settings.keys.tui.insert(id, chord),
+                };
+            }
+            settings.keys.rejected.extend(rejected);
+        }
+    }
+
+    /// Puts the user's own values back under everything the project set and
+    /// nothing has changed since — what the global file should hold. A value
+    /// the user changed while the project was open is theirs, and stays.
+    fn strip_from(&self, settings: &mut Settings, global: &Settings) {
+        if self.theme.as_ref() == Some(&settings.theme) {
+            settings.theme = global.theme.clone();
+        }
+        if self.indent.as_ref() == Some(&settings.indent) {
+            settings.indent = global.indent.clone();
+        }
+        if self.font_size == Some(settings.font_size) {
+            settings.font_size = global.font_size;
+        }
+        if self.scroll_speed == Some(settings.scroll_speed) {
+            settings.scroll_speed = global.scroll_speed;
+        }
+        if self.show_sidebar == Some(settings.show_sidebar) {
+            settings.show_sidebar = global.show_sidebar;
+        }
+        if self.show_terminal == Some(settings.show_terminal) {
+            settings.show_terminal = global.show_terminal;
+        }
+        if self.goto_modifiers.as_ref() == Some(&settings.goto_modifiers) {
+            settings.goto_modifiers = global.goto_modifiers.clone();
+        }
+        if self.blame_modifiers.as_ref() == Some(&settings.blame_modifiers) {
+            settings.blame_modifiers = global.blame_modifiers.clone();
+        }
+        if let Some(keys) = &self.keys {
+            let (chords, rejected) = keys.parsed();
+            for (frontend, id, chord) in chords {
+                let (map, base) = match frontend {
+                    "gui" => (&mut settings.keys.gui, &global.keys.gui),
+                    _ => (&mut settings.keys.tui, &global.keys.tui),
+                };
+                if map.get(&id) == Some(&chord) {
+                    match base.get(&id) {
+                        Some(theirs) => map.insert(id, theirs.clone()),
+                        None => map.remove(&id),
+                    };
                 }
             }
-            for (id, chord) in keys.tui {
-                if defaults.tui.get(&id) != Some(&chord) {
-                    settings.keys.tui.insert(id, chord);
-                }
-            }
-            settings.keys.rejected.extend(keys.rejected);
+            settings
+                .keys
+                .rejected
+                .retain(|entry| !rejected.contains(entry));
         }
     }
 }
@@ -461,6 +546,18 @@ pub struct Settings {
     pub keys: Keys,
     /// Recently opened project folders, most recent first.
     pub recent_projects: Vec<PathBuf>,
+    /// The global file could not be read. Nothing is written over it until
+    /// it can: a save would replace the user's file, typo and all, with the
+    /// defaults these settings fell back to.
+    #[serde(skip)]
+    pub unreadable: bool,
+    /// The global file as it was read, before a project laid its own over
+    /// it, and that project's file — so a save can put the user's values back
+    /// under what the project changed rather than writing them out as theirs.
+    #[serde(skip)]
+    global: Option<Box<Settings>>,
+    #[serde(skip)]
+    project: Option<ProjectOverrides>,
 }
 
 impl Default for Settings {
@@ -476,6 +573,9 @@ impl Default for Settings {
             blame_modifiers: BlameModifiers::default(),
             keys: Keys::default(),
             recent_projects: Vec::new(),
+            unreadable: false,
+            global: None,
+            project: None,
         }
     }
 }
@@ -567,8 +667,13 @@ impl Settings {
             Some(text) => match serde_json::from_str::<Self>(&strip_comments(&text)) {
                 Ok(settings) => settings,
                 Err(e) => {
-                    complaint = Some(format!("settings.json ignored: {e}"));
-                    Self::default()
+                    complaint = Some(format!(
+                        "settings.json ignored: {e} — fix it or delete it; it will not be written over"
+                    ));
+                    Self {
+                        unreadable: true,
+                        ..Self::default()
+                    }
                 }
             },
             None => Self::default(),
@@ -576,7 +681,11 @@ impl Settings {
         if let Some(project) = root.map(Self::project_path) {
             if let Ok(text) = std::fs::read_to_string(&project) {
                 match serde_json::from_str::<ProjectOverrides>(&strip_comments(&text)) {
-                    Ok(overrides) => overrides.apply(&mut settings),
+                    Ok(overrides) => {
+                        settings.global = Some(Box::new(settings.clone()));
+                        overrides.apply(&mut settings);
+                        settings.project = Some(overrides);
+                    }
                     Err(e) => {
                         complaint = Some(format!(".ycode/settings.json ignored: {e}"));
                     }
@@ -630,16 +739,35 @@ impl Settings {
     }
 
     /// Writes the global file: every setting, each with a line saying what it
-    /// is for, so the file explains itself when opened.
+    /// is for, so the file explains itself when opened. A file that could not
+    /// be read is left alone — the user's, mistake included, beats ours.
     pub fn save(&self) -> std::io::Result<PathBuf> {
+        if self.unreadable {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "settings.json could not be read and was not written over",
+            ));
+        }
         let path = Self::path().ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "no config directory")
         })?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&path, self.to_commented_json())?;
+        std::fs::write(&path, self.for_disk().to_commented_json())?;
         Ok(path)
+    }
+
+    /// These settings as the global file should record them: with whatever
+    /// the open project laid over the user's own put back, unless the user
+    /// changed it since. A project's pin is the project's; it must not follow
+    /// the user into the next folder they open.
+    fn for_disk(&self) -> Settings {
+        let mut out = self.clone();
+        if let (Some(project), Some(global)) = (&self.project, &self.global) {
+            project.strip_from(&mut out, global);
+        }
+        out
     }
 
     /// The settings as JSON with a comment over each key. The values are what
@@ -655,9 +783,9 @@ impl Settings {
         let reference = Self::keys_reference();
         format!(
             r#"// Yara Code settings. Every key is optional: leave one out and the built-in
-// default applies. Lines starting with // are comments and are kept when the
-// editor writes the file. A project can override any of these from its own
-// .ycode/settings.json.
+// default applies. Lines starting with // are comments; the editor writes the
+// file afresh, with these comments, whenever it saves a setting. A project
+// can override any of these from its own .ycode/settings.json.
 {{
   // Colour theme: {themes}. Also View → Theme.
   "theme": {theme},
@@ -1144,6 +1272,116 @@ mod settings_tests {
                 .unwrap();
         assert_eq!(settings.goto_modifiers.gui, [Modifier::Cmd]);
         assert_eq!(settings.goto_modifiers.tui, [Modifier::Ctrl, Modifier::Alt]);
+    }
+
+    #[test]
+    fn a_settings_file_that_cannot_be_read_is_not_written_over() {
+        let dir = crate::core::test_support::Dir::new("yara-broken-settings");
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path());
+        // One trailing comma: the file the user has, mistake and all.
+        let broken = "{\n  \"theme\": \"Monokai\",\n}\n";
+        let path = Settings::path().unwrap();
+        std::fs::write(&path, broken).unwrap();
+
+        let (mut settings, complaint) = Settings::load_for(None);
+        assert!(
+            complaint
+                .as_deref()
+                .is_some_and(|c| c.contains("not be written over")),
+            "{complaint:?}"
+        );
+        // Opening a folder records it and saves, as both frontends do.
+        settings.push_recent(dir.path());
+        assert!(settings.save().is_err());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            broken,
+            "the user's file is theirs to fix"
+        );
+        std::env::remove_var("YARA_CONFIG_DIR");
+    }
+
+    #[test]
+    fn a_projects_pins_stay_out_of_the_users_own_file() {
+        let dir = crate::core::test_support::Dir::new("yara-project-pins");
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path().join("config"));
+        // The user's own file: a theme, and Save moved off its default.
+        let mut theirs = Settings {
+            theme: "Dark+".into(),
+            ..Settings::default()
+        };
+        theirs
+            .keys
+            .tui
+            .insert("save".into(), "Ctrl+D".parse().unwrap());
+        theirs.save().unwrap();
+        // The project pins a theme and an indent, and asks for the default
+        // Save key back.
+        std::fs::create_dir_all(dir.path().join(PROJECT_DIR)).unwrap();
+        std::fs::write(
+            Settings::project_path(dir.path()),
+            r#"{"theme":"Light+","indent":{"style":"tabs","width":8},"keys":{"tui":{"save":"Ctrl+S"}}}"#,
+        )
+        .unwrap();
+
+        let (mut settings, complaint) = Settings::load_for(Some(dir.path()));
+        assert_eq!(complaint, None);
+        assert_eq!(settings.theme, "Light+");
+        assert_eq!(
+            settings.tui_chord(Command::Save).unwrap().to_string(),
+            "Ctrl+S",
+            "a project can name the default over a rebind"
+        );
+        // Opening the project records it, as the frontends do.
+        settings.push_recent(dir.path());
+        settings.save().unwrap();
+
+        let (again, _) = Settings::load_for(None);
+        assert_eq!(again.theme, "Dark+", "the pin did not follow the user home");
+        assert_eq!(again.indent, Settings::default().indent);
+        assert_eq!(
+            again.tui_chord(Command::Save).unwrap().to_string(),
+            "Ctrl+D"
+        );
+        assert!(again.recent_projects.contains(&dir.path().to_path_buf()));
+
+        // A change the user makes while the project is open is theirs.
+        settings.theme = "Monokai".into();
+        settings.save().unwrap();
+        let (again, _) = Settings::load_for(None);
+        assert_eq!(again.theme, "Monokai");
+        std::env::remove_var("YARA_CONFIG_DIR");
+    }
+
+    #[test]
+    fn a_chord_that_could_not_be_read_survives_a_save() {
+        let dir = crate::core::test_support::Dir::new("yara-rejected-chord");
+        let _lock = crate::core::test_support::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path());
+        let path = Settings::path().unwrap();
+        std::fs::write(&path, r#"{"keys":{"tui":{"save":"Ctrl+"}}}"#).unwrap();
+        let (settings, complaint) = Settings::load_for(None);
+        assert!(
+            complaint
+                .as_deref()
+                .is_some_and(|c| c.contains("not a key chord")),
+            "{complaint:?}"
+        );
+        settings.save().unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains(r#""save": "Ctrl+""#),
+            "the line is kept for the user to fix: {written}"
+        );
+        std::env::remove_var("YARA_CONFIG_DIR");
     }
 
     #[test]

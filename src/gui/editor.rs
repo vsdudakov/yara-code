@@ -737,6 +737,10 @@ impl Editor {
 
         let row_height = ui.fonts(|f| f.row_height(&code_font(ui)));
         let mut toggle: Option<usize> = None;
+        // Where the caret stood once the widget had run, in characters of the
+        // display text: the one thing that tells an edit at a fold's seam
+        // which side of the fold it went.
+        let mut caret_after: Option<usize> = None;
 
         let scroll = egui::ScrollArea::both()
             .auto_shrink([false, false])
@@ -909,6 +913,36 @@ impl Editor {
                         }
                     }
 
+                    // Tab is the indent unit — spaces of the set width, or a
+                    // tab — as it is in the terminal frontend. Left to the
+                    // widget it would be a literal tab whatever the setting
+                    // said, and the status bar would go on saying "Spaces".
+                    if ui.memory(|m| m.has_focus(te_id))
+                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+                    {
+                        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), te_id)
+                            .unwrap_or_default();
+                        if let Some(range) = state.cursor.char_range() {
+                            let char_count = shown.chars().count();
+                            let (a, b) = (range.primary.index, range.secondary.index);
+                            let (start, end) = (a.min(b).min(char_count), a.max(b).min(char_count));
+                            let byte_of = |idx: usize, text: &str| {
+                                text.char_indices().nth(idx).map_or(text.len(), |(b, _)| b)
+                            };
+                            let (bs, be) = (byte_of(start, &shown), byte_of(end, &shown));
+                            if start != end {
+                                shown.replace_range(bs..be, "");
+                            }
+                            let unit = indent_config.unit();
+                            shown.insert_str(bs, &unit);
+                            let new_cursor = egui::text::CCursor::new(start + unit.chars().count());
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::one(new_cursor)));
+                            state.store(ui.ctx(), te_id);
+                        }
+                    }
+
                     let output = egui::TextEdit::multiline(&mut shown)
                         .id(te_id)
                         .code_editor()
@@ -1006,6 +1040,7 @@ impl Editor {
                         }
                     }
 
+                    caret_after = output.cursor_range.map(|r| r.primary.ccursor.index);
                     // Cursor position is reported in real line numbers.
                     self.cursor = output.cursor_range.map(|r| {
                         let idx = r.primary.ccursor.index;
@@ -1043,7 +1078,13 @@ impl Editor {
             if hidden.is_empty() {
                 buf.text = shown;
             } else {
-                mapping.splice(&mut buf.text, &shown);
+                let caret = caret_after.map(|idx| {
+                    shown
+                        .char_indices()
+                        .nth(idx)
+                        .map_or(shown.len(), |(b, _)| b)
+                });
+                mapping.splice_at(&mut buf.text, &shown, caret);
             }
         }
         // Match highlighting is painted from character offsets, so an edit

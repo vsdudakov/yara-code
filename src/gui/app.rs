@@ -189,6 +189,17 @@ impl App {
 
     /// Runs a bound command, whether it came from a key chord or the menu bar.
     fn execute(&mut self, ctx: &egui::Context, command: Command) {
+        // The find bar's commands are the bar's. Hidden — closed, or
+        // belonging to a tab that is not in front — it has nothing to act
+        // on, and they would act on the file in front instead. The terminal
+        // frontend makes the same refusal in `command_applies`.
+        if matches!(
+            command,
+            Command::FindNext | Command::FindPrev | Command::ReplaceAll
+        ) && !self.editor.find_showing()
+        {
+            return;
+        }
         self.status = None;
         match command {
             Command::OpenFile => {
@@ -1407,8 +1418,14 @@ impl App {
 
     #[cfg(target_os = "macos")]
     fn drain_system_menu(&mut self, ctx: &egui::Context) {
-        for command in crate::gui::mac_menu::drain() {
-            self.execute(ctx, command);
+        // A dialog owns the keyboard while it is up, and the menu bar with
+        // it: a pick made then is dropped, as a chord pressed then is, rather
+        // than run under a question it may answer by accident.
+        let picked = crate::gui::mac_menu::drain();
+        if !self.modal_open() {
+            for command in picked {
+                self.execute(ctx, command);
+            }
         }
         for _ in 0..crate::gui::mac_menu::drain_new_windows() {
             if let Err(error) = crate::gui::mac_menu::open_new_window() {
@@ -2408,13 +2425,16 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         // The window's close button is a Quit too: with unsaved work, hold
-        // the window open and ask.
+        // the window open and ask. Every close request is held while there
+        // is unsaved work — a second click on the button while the question
+        // is up would otherwise be taken as the answer, and lose the lot.
         if ctx.input(|i| i.viewport().close_requested())
             && self.editor.buffers.list.iter().any(|b| b.modified())
-            && !self.quit_after_close
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.request_quit(ctx);
+            if !self.quit_after_close {
+                self.request_quit(ctx);
+            }
         }
         self.menu_bar(ctx);
         self.system_menu_bar(ctx);
@@ -2598,12 +2618,15 @@ impl App {
             });
 
         // Terminal panel. Declared after the sidebar so it sits under the
-        // editor only, matching the terminal frontend.
+        // editor only, matching the terminal frontend. It can be pulled up
+        // as far as that one's can — to within a few lines of the top —
+        // rather than to a fixed height that a tall window makes a third.
         if self.show_terminal {
+            let tallest = (ctx.available_rect().height() - 120.0).max(80.0);
             egui::TopBottomPanel::bottom("terminal")
                 .resizable(true)
                 .default_height(240.0)
-                .height_range(80.0..=600.0)
+                .height_range(80.0..=tallest)
                 .frame(
                     egui::Frame::default()
                         .fill(color(theme.ui.editor_bg))

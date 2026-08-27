@@ -367,6 +367,32 @@ impl Harness {
 }
 
 #[test]
+fn tab_in_the_editor_inserts_the_indent_unit_rather_than_a_tab_character() {
+    let project = Project::new("yara-gui-e2e-tab");
+    // A file at the top level, where the navigator shows it unopened.
+    project.file("code.rs", "fn main() {\n}\n");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("code.rs").unwrap();
+    harness.click(at);
+    // Into the text, then to the start of its first line.
+    let line = harness.position_of("fn main() {").unwrap();
+    harness.click(line);
+    harness.press(Key::Home, Modifiers::NONE);
+    harness.press(Key::Tab, Modifiers::NONE);
+    harness.press(Key::S, Modifiers::COMMAND);
+
+    let saved = std::fs::read_to_string(project.path().join("code.rs")).unwrap();
+    assert!(
+        !saved.contains('\t'),
+        "a literal tab was inserted: {saved:?}"
+    );
+    assert!(
+        saved.starts_with("    fn main() {"),
+        "the indent unit, spaces of the set width: {saved:?}"
+    );
+}
+
+#[test]
 fn find_and_replace_in_the_open_file_works_through_the_bar() {
     let project = Project::new("yara-gui-e2e-find");
     project.file("many.txt", "one\none\none\n");
@@ -484,6 +510,72 @@ fn the_git_panel_opens_a_diff_tab_in_the_window() {
         harness.screen()
     );
     assert!(harness.shows("Open File"), "{}", harness.screen());
+}
+
+#[test]
+fn the_seam_of_a_diff_is_dragged_to_give_one_side_more_room_in_the_window() {
+    let project = Project::new("yara-gui-e2e-diff-seam");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@e.com"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "First"]);
+    project.file("README.md", "# Title\nChanged.\n");
+
+    let mut harness = Harness::open(Some(&project));
+    harness.press(Key::G, Modifiers::CTRL | Modifiers::SHIFT);
+    let at = harness
+        .text
+        .iter()
+        .find(|(t, _)| t.contains("README.md") && !t.contains("×"))
+        .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
+        .unwrap();
+    harness.click(at);
+    assert!(harness.shows("Changed."), "{}", harness.screen());
+
+    // Where the galleys were painted, uncorrected: the left number, the left
+    // text and the right text of the diff's rows give the gutter's width and
+    // so where the seam is.
+    let raw = |harness: &Harness, text: &str| -> Pos2 {
+        harness
+            .text
+            .iter()
+            .find(|(t, _)| t == text)
+            .map(|(_, p)| *p)
+            .unwrap_or_else(|| panic!("{text:?} on screen: {}", harness.screen()))
+    };
+    let number = raw(&harness, "1");
+    let left = raw(&harness, "A line of prose.");
+    let right = raw(&harness, "Changed.");
+    let char_w = (left.x - number.x) / 2.0;
+    let seam = right.x - char_w * 6.0;
+
+    harness.drag(
+        Pos2::new(seam, right.y + 4.0),
+        Pos2::new(seam + 80.0, right.y + 4.0),
+    );
+    let moved = raw(&harness, "Changed.");
+    assert!(
+        (moved.x - (right.x + 80.0)).abs() <= 4.0,
+        "the new side moved with the seam: {} -> {}",
+        right.x,
+        moved.x
+    );
+    assert!(
+        harness.shows("A line of prose."),
+        "the old side still reads: {}",
+        harness.screen()
+    );
 }
 
 #[test]

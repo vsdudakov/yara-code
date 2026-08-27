@@ -367,6 +367,32 @@ impl Harness {
 }
 
 #[test]
+fn tab_in_the_editor_inserts_the_indent_unit_rather_than_a_tab_character() {
+    let project = Project::new("yara-gui-e2e-tab");
+    // A file at the top level, where the navigator shows it unopened.
+    project.file("code.rs", "fn main() {\n}\n");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("code.rs").unwrap();
+    harness.click(at);
+    // Into the text, then to the start of its first line.
+    let line = harness.position_of("fn main() {").unwrap();
+    harness.click(line);
+    harness.press(Key::Home, Modifiers::NONE);
+    harness.press(Key::Tab, Modifiers::NONE);
+    harness.press(Key::S, Modifiers::COMMAND);
+
+    let saved = std::fs::read_to_string(project.path().join("code.rs")).unwrap();
+    assert!(
+        !saved.contains('\t'),
+        "a literal tab was inserted: {saved:?}"
+    );
+    assert!(
+        saved.starts_with("    fn main() {"),
+        "the indent unit, spaces of the set width: {saved:?}"
+    );
+}
+
+#[test]
 fn find_and_replace_in_the_open_file_works_through_the_bar() {
     let project = Project::new("yara-gui-e2e-find");
     project.file("many.txt", "one\none\none\n");

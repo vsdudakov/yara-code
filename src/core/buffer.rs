@@ -14,6 +14,19 @@ pub struct Buffer {
     /// When the file was last written, as far as this buffer knows — so an
     /// edit made outside the editor is noticed.
     pub disk_stamp: Option<std::time::SystemTime>,
+    /// The file ends its lines with `\r\n`. In the buffer every line ends
+    /// with `\n` — a carriage return would be an invisible column the caret
+    /// could stand in — and the file gets its own endings back on save.
+    pub crlf: bool,
+}
+
+/// A file's text as the buffer holds it, and whether it came with `\r\n`.
+fn normalise(text: String) -> (String, bool) {
+    if text.contains("\r\n") {
+        (text.replace("\r\n", "\n"), true)
+    } else {
+        (text, false)
+    }
 }
 
 /// What a look at the disk found for one open file.
@@ -100,6 +113,7 @@ impl Buffers {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return false;
         };
+        let (text, crlf) = normalise(text);
         let extension = path
             .extension()
             .map(|e| e.to_string_lossy().into_owned())
@@ -111,6 +125,7 @@ impl Buffers {
             text,
             extension,
             history: History::default(),
+            crlf,
         });
         self.active = self.list.len() - 1;
         true
@@ -131,7 +146,12 @@ impl Buffers {
         let Some(buf) = self.list.get_mut(index) else {
             return Err(SaveError::NoBuffer);
         };
-        std::fs::write(&buf.path, &buf.text).map_err(SaveError::Io)?;
+        let on_disk = if buf.crlf {
+            buf.text.replace('\n', "\r\n")
+        } else {
+            buf.text.clone()
+        };
+        std::fs::write(&buf.path, on_disk).map_err(SaveError::Io)?;
         buf.saved_text = buf.text.clone();
         buf.disk_stamp = stamp_of(&buf.path);
         Ok(())
@@ -155,6 +175,8 @@ impl Buffers {
             let Ok(text) = std::fs::read_to_string(&buf.path) else {
                 continue;
             };
+            let (text, crlf) = normalise(text);
+            buf.crlf = crlf;
             if text == buf.text {
                 continue;
             }
@@ -417,6 +439,37 @@ mod buffer_tests {
     }
 
     #[test]
+    fn a_crlf_file_is_edited_as_lines_and_saved_with_its_own_endings() {
+        let dir = crate::core::test_support::Dir::new("yara-crlf");
+        let path = dir.file("win.txt", "abc\r\ndef\r\n");
+        let mut buffers = Buffers::default();
+        assert!(buffers.open(path.clone()));
+        let buf = buffers.active_mut().unwrap();
+        assert_eq!(
+            buf.text, "abc\ndef\n",
+            "no carriage return to stand the caret in"
+        );
+        assert!(buf.crlf);
+        // Type at the end of the first line and add a line, as an editor would.
+        buf.text = "abcX\ndef\nghi\n".into();
+        assert!(buffers.save_active());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "abcX\r\ndef\r\nghi\r\n",
+            "every line, the new one included, ends the way the file did"
+        );
+        // A file that never had them does not grow any.
+        let plain = dir.file("unix.txt", "one\ntwo\n");
+        assert!(buffers.open(plain.clone()));
+        buffers.active_mut().unwrap().text = "one\ntwo\nthree\n".into();
+        assert!(buffers.save_active());
+        assert_eq!(
+            std::fs::read_to_string(&plain).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+    }
+
+    #[test]
     fn a_buffer_names_itself_after_its_file() {
         let buffer = Buffer {
             path: PathBuf::from("/a/b/main.rs"),
@@ -425,6 +478,7 @@ mod buffer_tests {
             extension: "rs".into(),
             history: History::default(),
             disk_stamp: None,
+            crlf: false,
         };
         assert_eq!(buffer.name(), "main.rs");
         assert!(!buffer.modified());

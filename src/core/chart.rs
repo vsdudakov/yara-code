@@ -761,17 +761,22 @@ fn label_on(canvas: &mut [Vec<char>], wire: &Wire, label: &str) {
     // The label goes on the side the arrow leaves towards, so the branch it
     // names is the one the reader's eye follows from it.
     let leftwards = wire.points.last().is_some_and(|last| last.0 < start.0);
-    let right = start.0 + 1;
-    let left = start.0.wrapping_sub(text.len() + 1);
-    let spots = [start.1.wrapping_sub(1), start.1 + 1, start.1]
+    // A wire that leaves near the left edge has no room for a label on that
+    // side, and a wire on the top row has none above it: those spots do not
+    // exist, rather than wrapping round to the far side of the canvas.
+    let right = Some(start.0 + 1);
+    let left = start.0.checked_sub(text.len() + 1);
+    let spots = [start.1.checked_sub(1), Some(start.1 + 1), Some(start.1)]
         .into_iter()
+        .flatten()
         .flat_map(|y| {
             if leftwards {
                 [(left, y), (right, y)]
             } else {
                 [(right, y), (left, y)]
             }
-        });
+        })
+        .filter_map(|(x, y)| Some((x?, y)));
     let Some((x, y)) = spots.into_iter().find(|(x, y)| {
         canvas.get(*y).is_some_and(|row| {
             row.len() >= x + text.len() && row[*x..x + text.len()].iter().all(|c| *c == ' ')
@@ -797,6 +802,23 @@ pub fn shares(slices: &[Slice]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_label_on_a_wire_at_the_left_edge_is_placed_or_left_off_never_panics() {
+        // A label longer than the room to the left of a wire that starts in
+        // column 0 used to wrap its x round and index past the row.
+        for source in [
+            "graph TD\n A -->|yes| B",
+            "graph LR\n A -->|a very long label indeed| B",
+            "graph TD\n A -->|no| B\n B -->|yes| A",
+        ] {
+            let Some(Chart::Flow(flow)) = parse(source) else {
+                panic!("a flow chart");
+            };
+            let _ = draw(&flow, true);
+            let _ = draw(&flow, false);
+        }
+    }
 
     #[test]
     fn a_pie_reads_its_title_and_its_slices() {

@@ -500,6 +500,94 @@ fn two_files_share_the_tab_strip_and_close_one_at_a_time() {
 }
 
 #[test]
+fn a_tab_dragged_under_a_close_question_cannot_change_which_tab_the_answer_closes() {
+    let project = Project::new("yara-e2e-drag-under-question");
+    let mut harness = Harness::open(&project);
+    // Two files, both edited.
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    harness.type_text("x");
+    let src = harness.row_of("src").unwrap();
+    harness.click(4, src);
+    let main = harness.row_of("main.rs").unwrap();
+    harness.click(6, main);
+    harness.type_text("y");
+    assert!(harness.shows("yfn main()"), "{}", harness.screen());
+
+    // Close asks about main.rs, the tab in front.
+    harness.ctrl('w');
+    assert!(harness.shows("Don't Save"), "{}", harness.screen());
+
+    // Drag the README tab onto main.rs while the question is up. Both tabs
+    // wear the unsaved mark, and the strip is the one row naming them both.
+    let screen = harness.screen();
+    let (strip, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("README.md") && l.contains("main.rs"))
+        .unwrap_or_else(|| panic!("both tabs on one strip: {screen}"));
+    let readme = line.find("README.md").unwrap() as u16 + 2;
+    let main_tab = line.find("main.rs").unwrap() as u16 + 2;
+    harness.drag((readme, strip as u16), (main_tab, strip as u16));
+
+    // "Don't Save" closes main.rs — the file that was asked about — and
+    // README keeps its edit and its place in front.
+    harness.key(KeyCode::Char('n'));
+    let screen = harness.screen();
+    assert!(
+        !screen
+            .lines()
+            .any(|l| l.contains("README.md") && l.contains("main.rs")),
+        "main.rs is off the strip: {screen}"
+    );
+    assert!(screen.contains("x# Title"), "{screen}");
+}
+
+#[test]
+fn save_as_over_another_file_asks_first() {
+    let project = Project::new("yara-e2e-save-as");
+    let mut harness = Harness::open(&project);
+    let row = harness.row_of("README.md").unwrap();
+    harness.click(4, row);
+    let before = std::fs::read_to_string(project.path().join("src/main.rs")).unwrap();
+
+    harness.press(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    harness.type_text("src/main.rs");
+    harness.key(KeyCode::Enter);
+    assert!(
+        harness.shows("Replace \"main.rs\"?"),
+        "{}",
+        harness.screen()
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("src/main.rs")).unwrap(),
+        before,
+        "nothing is written until the question is answered"
+    );
+    harness.key(KeyCode::Esc);
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("src/main.rs")).unwrap(),
+        before
+    );
+
+    // Asked again and told yes, it writes.
+    harness.press(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
+    harness.type_text("src/main.rs");
+    harness.key(KeyCode::Enter);
+    harness.key(KeyCode::Char('y'));
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("src/main.rs")).unwrap(),
+        "# Title\nA line of prose.\n"
+    );
+}
+
+#[test]
 fn the_navigator_makes_and_renames_and_deletes_files() {
     let project = Project::new("yara-e2e-files");
     let mut harness = Harness::open(&project);

@@ -58,11 +58,16 @@ impl Mapping {
             }
             real_offset += real_len;
         }
-        // `split` produced a trailing empty piece for a text ending in a
-        // newline; drop the extra newline the loop appended.
-        display.pop();
-        if let Some(last) = segments.last_mut() {
-            last.len = last.len.saturating_sub(1);
+        // The loop put a newline after every visible line, and the real text
+        // has one after every line but the last. When the last line is on
+        // show, the display has one newline too many; when a fold hides it,
+        // every newline in the display is a real one and all of them stay.
+        let last_line = text.split('\n').count() - 1;
+        if !hidden.contains(&last_line) {
+            display.pop();
+            if let Some(last) = segments.last_mut() {
+                last.len = last.len.saturating_sub(1);
+            }
         }
 
         Self {
@@ -73,7 +78,10 @@ impl Mapping {
         }
     }
 
-    /// Real byte offset for a display byte offset.
+    /// Real byte offset for a display byte offset. The end of the display is
+    /// the end of the last visible line, not the end of the file: a fold may
+    /// hide everything after it, and an edit at the end of what is shown
+    /// belongs before that, not after.
     fn to_real(&self, offset: usize) -> usize {
         for segment in &self.segments {
             if offset < segment.display_start + segment.len {
@@ -81,11 +89,33 @@ impl Mapping {
                 return segment.real_start + within;
             }
         }
-        self.real_len
+        match self.segments.last() {
+            Some(last) if offset <= last.display_start + last.len => last.real_start + last.len,
+            Some(_) => self.real_len,
+            None => 0,
+        }
+    }
+
+    /// Whether a display offset sits on the seam between a visible line and
+    /// a fold after it — where "just after" and "just before" the fold are
+    /// different places in the real text.
+    fn at_fold(&self, offset: usize) -> bool {
+        self.segments.iter().any(|segment| {
+            offset == segment.display_start + segment.len
+                && segment.real_start + segment.len < self.real_len
+        })
     }
 
     /// Applies an edit made against the display string to the real text.
     pub fn splice(&self, real: &mut String, edited: &str) {
+        self.splice_at(real, edited, None);
+    }
+
+    /// The same, told where the caret ended up in `edited`. An edit that
+    /// starts and ends with the same character as the text around a fold —
+    /// Enter at the end of a folded header, say — reads the same whether it
+    /// went before the fold or after it, and only the caret can tell which.
+    pub fn splice_at(&self, real: &mut String, edited: &str, caret: Option<usize>) {
         if edited == self.display {
             return;
         }
@@ -104,12 +134,28 @@ impl Mapping {
         {
             tail += 1;
         }
+        let mut old_end = old.len() - tail;
+        let mut new_end = new.len() - tail;
+        // The shared head ran as far as it could, which can carry the edit
+        // across a fold's seam: "fn f() {" + "\n    " + "\n" and
+        // "fn f() {\n" + "    \n" are the same string. When the caret says
+        // the edit ended earlier, the span is slid back over the seam.
+        if let Some(caret) = caret {
+            while head > 0
+                && new_end > caret
+                && old_end > 0
+                && old[old_end - 1] == new[new_end - 1]
+                && self.at_fold(head)
+            {
+                head -= 1;
+                old_end -= 1;
+                new_end -= 1;
+            }
+        }
         // Back off to character boundaries so the splice stays valid UTF-8.
         while head > 0 && (!self.display.is_char_boundary(head) || !edited.is_char_boundary(head)) {
             head -= 1;
         }
-        let mut old_end = old.len() - tail;
-        let mut new_end = new.len() - tail;
         while old_end < old.len()
             && (!self.display.is_char_boundary(old_end) || !edited.is_char_boundary(new_end))
         {
@@ -182,6 +228,50 @@ mod tests {
         let mut real = text.to_string();
         m.splice(&mut real, "фыва\nzzz");
         assert_eq!(real, "фыва\nбюё\nzzz");
+    }
+
+    #[test]
+    fn a_fold_to_the_end_of_a_file_without_a_final_newline_keeps_its_body() {
+        // The last line is hidden and carries no newline, so nothing was
+        // appended for it and nothing is popped: the display keeps its
+        // newline, and its end is the end of the header, not of the file.
+        let text = "fn main() {\n    x\n}";
+        let m = Mapping::new(text, &hidden(&[1, 2]));
+        assert_eq!(m.display, "fn main() {\n");
+
+        let mut real = text.to_string();
+        m.splice(&mut real, "fn main() {X\n");
+        assert_eq!(real, "fn main() {X\n    x\n}", "typing lands on the header");
+
+        let mut real = text.to_string();
+        m.splice(&mut real, "fn main() \n");
+        assert_eq!(
+            real, "fn main() \n    x\n}",
+            "backspace takes one character"
+        );
+    }
+
+    #[test]
+    fn enter_at_the_end_of_a_folded_header_opens_a_line_under_it() {
+        let text = "fn main() {\n    a();\n    b();\n}\n";
+        let m = Mapping::new(text, &hidden(&[1, 2, 3]));
+        assert_eq!(m.display, "fn main() {\n");
+        // Smart indent inserted "\n    " after the brace; the caret sits at
+        // the end of that.
+        let edited = "fn main() {\n    \n";
+        let mut real = text.to_string();
+        m.splice_at(&mut real, edited, Some("fn main() {\n    ".len()));
+        assert_eq!(real, "fn main() {\n    \n    a();\n    b();\n}\n");
+    }
+
+    #[test]
+    fn enter_before_the_line_after_a_fold_stays_after_it() {
+        // Caret before "d", Enter: the new line goes before d, after the
+        // hidden block — the caret says so.
+        let m = Mapping::new(TEXT, &hidden(&[1, 2]));
+        let mut real = TEXT.to_string();
+        m.splice_at(&mut real, "a\n\nd\ne", Some(3));
+        assert_eq!(real, "a\nb\nc\n\nd\ne");
     }
 
     #[test]

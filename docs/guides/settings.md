@@ -14,8 +14,10 @@ written on first run to:
 ~/.config/ycode/settings.json
 ```
 
-The file explains itself: every key is written out with a comment over it, and
-`//` comments survive the editor writing the file back.
+The file explains itself: every key is written out with a comment over it.
+The editor writes the whole file afresh when it saves a setting — a theme
+picked, a folder opened — so a comment of your own is best kept in a
+project's `.ycode/settings.json`, which the editor only reads.
 
 ```jsonc
 // Yara Code settings. Every key is optional: leave one out and the built-in

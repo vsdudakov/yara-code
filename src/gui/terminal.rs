@@ -435,20 +435,35 @@ fn cell_at(
 fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
     let mut bytes: Vec<u8> = Vec::new();
     let mut presses: Vec<(Key, Mods)> = Vec::new();
+    let mut pastes: Vec<String> = Vec::new();
     // A copy while the grid has the keyboard takes what the mouse dragged
     // over. Taking it clears the highlight, so the next Ctrl+C is the shell's
     // interrupt again — the same trade the terminal frontend makes.
+    //
+    // Off macOS the copy key *is* Ctrl+C: egui turns it into this event and
+    // never reports the key, so with nothing selected the event has to be
+    // the interrupt itself, or no program in the panel could ever be
+    // stopped. Cut is Ctrl+X by the same route. On a Mac the copy key is ⌘C
+    // and Ctrl+C reaches the shell as a key of its own.
+    let copies = cfg!(target_os = "macos");
     if ui.input(|i| i.events.contains(&egui::Event::Copy)) {
         if let Some(text) = pty.selected_text() {
             ui.ctx().copy_text(text);
             pty.clear_selection();
+        } else if !copies {
+            bytes.push(0x03);
         }
+    }
+    if !copies && ui.input(|i| i.events.contains(&egui::Event::Cut)) {
+        bytes.push(0x18);
     }
     ui.input(|i| {
         for event in &i.events {
             match event {
                 egui::Event::Text(t) => bytes.extend_from_slice(t.as_bytes()),
-                egui::Event::Paste(t) => bytes.extend_from_slice(t.as_bytes()),
+                // A paste goes the way the core sends one — bracketed when
+                // the program asked, line ends as Return — not as raw text.
+                egui::Event::Paste(t) => pastes.push(t.clone()),
                 egui::Event::Key {
                     key,
                     pressed: true,
@@ -481,6 +496,9 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
         pty.set_scrollback(0);
         pty.clear_selection();
         pty.write(&bytes);
+    }
+    for text in pastes {
+        pty.paste(&text);
     }
     // What each press spells is [`crate::core::keyboard`]'s to say: with the
     // protocol on, Ctrl+Shift+V is a key of its own rather than Ctrl+V again.

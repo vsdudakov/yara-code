@@ -230,6 +230,9 @@ impl Pty {
             return;
         }
         self.size = (rows, cols);
+        // The grid is about to be re-laid; a selection made over the old one
+        // would name cells that are somewhere else now, or nowhere.
+        self.selection = None;
         self.parser.lock().unwrap().set_size(rows, cols);
         let _ = self.master.resize(PtySize {
             rows,
@@ -355,8 +358,12 @@ impl Pty {
     /// taller than the panel — dragged, then scrolled — is reached by moving
     /// the view to it and back, which the caller never sees.
     pub fn selected_text(&mut self) -> Option<String> {
-        let (start, end) = self.selection()?.ordered();
+        let (start, mut end) = self.selection()?.ordered();
         let (rows, cols) = self.size;
+        // A selection can outlive the screen it was made on: the end row is
+        // held to the last row there is, and a pass that makes no headway
+        // ends the loop rather than repeating for ever.
+        end.row = end.row.min(rows as isize - 1);
         let restore = self.scrollback();
         let mut text = String::new();
         let mut row = start.row;
@@ -378,7 +385,11 @@ impl Pty {
                 cols
             };
             text.push_str(&self.with_screen(|screen| screen.contents_between(top, from, last, to)));
-            row = last as isize - back as isize + 1;
+            let next = last as isize - back as isize + 1;
+            if next <= row {
+                break;
+            }
+            row = next;
             if row <= end.row {
                 text.push('\n');
             }
@@ -782,6 +793,25 @@ mod tests {
         };
         assert_eq!(scrolled.span_on(-2, 10), Some((3, 10)));
         assert_eq!(scrolled.span_on(-1, 10), Some((0, 6)));
+    }
+
+    #[test]
+    fn a_selection_the_panel_has_shrunk_under_is_dropped_and_never_loops() {
+        let dir = crate::core::test_support::Dir::new("yara-pty-shrink");
+        let mut terminals = Terminals::default();
+        terminals.open(dir.path(), || {});
+        let pty = terminals.active_mut().expect("a shell started");
+        pty.begin_selection(20, 0);
+        pty.extend_selection(22, 5);
+        assert!(pty.selection().is_some());
+        // The panel shrinks; rows 20 to 22 no longer exist.
+        pty.resize(15, 80);
+        assert!(pty.selection().is_none(), "a resize drops the selection");
+        // A selection dragged past the bottom of the panel reads to the last
+        // row there is and stops, rather than chasing a row it cannot reach.
+        pty.begin_selection(12, 0);
+        pty.extend_selection(40, 3);
+        let _ = pty.selected_text();
     }
 
     #[test]

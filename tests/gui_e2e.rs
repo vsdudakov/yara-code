@@ -809,7 +809,7 @@ fn a_markdown_file_previews_in_the_window() {
     let project = Project::new("yara-gui-e2e-preview");
     project.file(
         "README.md",
-        "# Yara Code\n\nSome **bold** text.\n\n- one\n- two\n",
+        "<div align=\"center\">\n\n# Yara Code\n\nSome **bold** text.\n\n         [![CI](https://x/badge.svg)](https://x/ci)\n\n- one\n- two\n\n</div>\n",
     );
     let mut harness = Harness::open(Some(&project));
     let at = harness.position_of("README.md").unwrap();
@@ -826,6 +826,11 @@ fn a_markdown_file_previews_in_the_window() {
         harness.screen()
     );
     assert!(harness.shows("•"), "{}", harness.screen());
+    // A README's wrapper is markup for a browser, and a badge is the name it
+    // was given — neither is painted as the markup it was written as.
+    let screen = harness.screen();
+    assert!(!screen.contains("<div"), "{screen}");
+    assert!(screen.contains("CI") && !screen.contains("]("), "{screen}");
     harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
     assert!(!harness.shows("README.md preview"), "{}", harness.screen());
 }

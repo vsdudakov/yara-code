@@ -432,7 +432,11 @@ impl Editor {
             // What stands at the right edge is measured first so the strip
             // knows how much room it has.
             let controls = if self.tabs_overflow { 52.0 } else { 0.0 }
-                + if markdown_in_front { 96.0 } else { 0.0 };
+                + if markdown_in_front {
+                    PREVIEW_BUTTON
+                } else {
+                    0.0
+                };
             let strip_width = (ui.available_width() - controls).max(0.0);
             let mut area = egui::ScrollArea::horizontal()
                 .id_salt("tab_strip")
@@ -574,17 +578,15 @@ impl Editor {
                     Some(chord) => format!("Render this markdown ({chord})"),
                     None => "Render this markdown".to_string(),
                 };
-                let label = egui::RichText::new(format!("{} Preview", icons().preview))
-                    .size(12.5)
-                    .color(color(theme.ui.fg));
-                if ui
-                    .add(egui::Button::new(label).frame(false))
-                    .on_hover_text(hint)
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .clicked()
-                {
-                    preview_clicked = true;
-                }
+                // Laid out from the right, so the space comes off the window's
+                // edge and the button stands clear of it rather than against
+                // it.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(8.0);
+                    if preview_button(ui, theme).on_hover_text(hint).clicked() {
+                        preview_clicked = true;
+                    }
+                });
             }
         });
         if preview_clicked {
@@ -1199,6 +1201,42 @@ fn chevron(painter: &egui::Painter, center: egui::Pos2, expanded: bool, color: e
         ]
     };
     painter.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
+}
+
+/// The room the Preview button asks of the strip: its own width, plus the gap
+/// that keeps it off the window's edge.
+const PREVIEW_BUTTON: f32 = 104.0;
+
+/// The Preview button, at the right of the strip whenever markdown is in
+/// front. It is drawn as a button and not as bare words, because it is the one
+/// thing in the strip that is neither a tab nor a scroll arrow: an outline and
+/// a fill say it can be pressed, and the fill answers the pointer.
+fn preview_button(ui: &mut egui::Ui, theme: &Theme) -> egui::Response {
+    let label = egui::RichText::new(format!("{} Preview", icons().preview))
+        .size(12.0)
+        .color(color(theme.ui.fg));
+    let outline = color(theme.ui.border);
+    let widgets = &mut ui.style_mut().visuals.widgets;
+    widgets.inactive.weak_bg_fill = color(theme.ui.tab_inactive_bg);
+    widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, outline);
+    widgets.hovered.weak_bg_fill = color(theme.ui.hover_bg);
+    widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, color(theme.ui.accent_light));
+    widgets.active.weak_bg_fill = color(theme.ui.selected_bg);
+    widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, color(theme.ui.accent));
+    for state in [
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+    ] {
+        state.corner_radius = egui::CornerRadius::same(5);
+        state.expansion = 0.0;
+    }
+    ui.add(
+        egui::Button::new(label)
+            .min_size(egui::vec2(0.0, 20.0))
+            .corner_radius(egui::CornerRadius::same(5)),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// The two entries a right-click on a tab opens, whatever the tab holds. The

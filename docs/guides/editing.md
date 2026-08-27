@@ -71,6 +71,13 @@ keystroke. Both frontends draw the same document:
   `pie` or a `flowchart`/`graph` — boxes, arrows and the labels on them, laid
   out the same way in both frontends. Every other mermaid diagram is left as
   the code it was written as, which is easier to read than a wrong picture.
+- **Images**, as the alt text they were described as: neither frontend fetches
+  or decodes a picture, and a README's badges say what they say in their names.
+  A badge written the usual way — a link wrapped round an image — stays the
+  link it is.
+- **Raw HTML** is markup for a browser and is not painted. The one thing it is
+  obeyed for is centring: what a `<div align="center">` holds is centred, which
+  is how most READMEs set their title, their badges and their screenshot.
 
 ## Go to definition
 

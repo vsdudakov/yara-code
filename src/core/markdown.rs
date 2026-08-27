@@ -18,6 +18,10 @@ pub enum Span {
     Code(String),
     /// Link text and where it goes.
     Link(String, String),
+    /// An image's alt text and its source. Nothing here fetches or decodes a
+    /// picture, so what a frontend can show of one is what it was described
+    /// as — which is the whole of what a badge says anyway.
+    Image(String, String),
 }
 
 /// What stands in front of a list item.
@@ -76,6 +80,11 @@ pub enum Block {
     Chart(Chart),
     Quote(Vec<Span>),
     Rule,
+    /// A block written inside `<div align="center">`, which is how a README
+    /// centres its title and its badges. One block, not the group: the
+    /// terminal scrolls the preview a block at a time, and a group would make
+    /// a whole header one step.
+    Center(Box<Block>),
 }
 
 /// Reads a document into blocks.
@@ -125,6 +134,27 @@ pub fn parse(text: &str) -> Vec<Block> {
 
         if trimmed.is_empty() {
             flush(&mut paragraph, &mut blocks);
+            i += 1;
+            continue;
+        }
+
+        // A line that is nothing but raw HTML — the `<div align="center">` a
+        // README opens with, and the `</div>` that closes it — is markup for a
+        // browser to obey, not text to paint. The one thing it is obeyed for
+        // is centring: what such a tag holds is read on its own and comes back
+        // centred.
+        if is_html_only(trimmed) {
+            flush(&mut paragraph, &mut blocks);
+            if centers(trimmed) {
+                let (inner, read) = take_until_close(&lines, i);
+                blocks.extend(
+                    parse(&inner)
+                        .into_iter()
+                        .map(|block| Block::Center(Box::new(block))),
+                );
+                i = read;
+                continue;
+            }
             i += 1;
             continue;
         }
@@ -408,7 +438,7 @@ pub fn spans(text: &str) -> Vec<Span> {
         if at(i, "**") {
             if let Some(end) = find_from(i + 2, "**") {
                 push_plain(&mut plain, &mut out);
-                out.push(Span::Bold(slice(i + 2, end)));
+                out.extend(emphasised(&slice(i + 2, end), Span::Bold));
                 i = end + 2;
                 continue;
             }
@@ -418,20 +448,39 @@ pub fn spans(text: &str) -> Vec<Span> {
             if let Some(end) = find_from(i + 1, &mark) {
                 if end > i + 1 {
                     push_plain(&mut plain, &mut out);
-                    out.push(Span::Italic(slice(i + 1, end)));
+                    out.extend(emphasised(&slice(i + 1, end), Span::Italic));
                     i = end + 1;
                     continue;
                 }
             }
         }
+        if at(i, "![") {
+            if let Some((alt, src, next)) = bracketed(&chars, i + 1) {
+                push_plain(&mut plain, &mut out);
+                out.push(Span::Image(alt, src));
+                i = next;
+                continue;
+            }
+        }
         if at(i, "[") {
-            if let Some(close) = find_from(i, "](") {
-                if let Some(end) = find_from(close + 2, ")") {
-                    push_plain(&mut plain, &mut out);
-                    out.push(Span::Link(slice(i + 1, close), slice(close + 2, end)));
-                    i = end + 1;
-                    continue;
-                }
+            if let Some((text, dest, next)) = bracketed(&chars, i) {
+                push_plain(&mut plain, &mut out);
+                // A link written round an image is how every badge in a README
+                // is written; it reads as the image's alt text, so the row of
+                // them comes out as CI, Release, Docs rather than as their
+                // markup.
+                out.push(Span::Link(self::plain(&spans(&text)), dest));
+                i = next;
+                continue;
+            }
+        }
+        // An HTML tag in the middle of a line — `<br>`, `<sub>` — goes the way
+        // a whole line of them does. A lone `<` that opens no tag stays: it is
+        // a less-than sign.
+        if at(i, "<") {
+            if let Some(end) = tag_end(&chars, i) {
+                i = end;
+                continue;
             }
         }
         plain.push(chars[i]);
@@ -441,6 +490,121 @@ pub fn spans(text: &str) -> Vec<Span> {
     out
 }
 
+/// Whether a tag asks for what it holds to be centred.
+fn centers(line: &str) -> bool {
+    let line = line.replace(['"', '\''], "");
+    line.contains("align=center") || line.contains("text-align: center")
+}
+
+/// The lines a centring tag holds, and the line to go on from. The tags in
+/// between are counted, so a `<div>` inside the one that centres does not end
+/// it early; a tag never closed holds the rest of the document, which is what
+/// a browser does with it too.
+fn take_until_close(lines: &[&str], open: usize) -> (String, usize) {
+    let mut depth = 0usize;
+    for (k, line) in lines.iter().enumerate().skip(open) {
+        let trimmed = line.trim();
+        if !is_html_only(trimmed) {
+            continue;
+        }
+        // A tag that closes itself — `<img …/>`, `<br>` — opens nothing.
+        if trimmed.starts_with("</") {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return (lines[open + 1..k].join("\n"), k + 1);
+            }
+        } else if !trimmed.ends_with("/>") && !trimmed.starts_with("<!") {
+            depth += 1;
+        }
+    }
+    (lines[open + 1..].join("\n"), lines.len())
+}
+
+/// What stands inside `**…**` or `*…*`, read again so a link or a snippet of
+/// code inside emphasis is not left as its own markup. Only plain text takes
+/// the emphasis on: a link inside bold is still a link, which is as much as
+/// one run of spans can say.
+fn emphasised(inner: &str, mark: fn(String) -> Span) -> Vec<Span> {
+    spans(inner)
+        .into_iter()
+        .map(|span| match span {
+            Span::Text(t) => mark(t),
+            other => other,
+        })
+        .collect()
+}
+
+/// `[text](dest)` starting at the `[`, and where reading it ended. Brackets
+/// inside the text are counted rather than the first `](` taken, because a
+/// link wrapped round an image — the shape every badge in a README is written
+/// in — would otherwise be cut at the image's own closing bracket.
+fn bracketed(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+    let close = matching(chars, start, '[', ']')?;
+    let open = close + 1;
+    if chars.get(open) != Some(&'(') {
+        return None;
+    }
+    let end = matching(chars, open, '(', ')')?;
+    let text: String = chars[start + 1..close].iter().collect();
+    let dest: String = chars[open + 1..end].iter().collect();
+    Some((text, dest, end + 1))
+}
+
+/// Where the `open` at `start` is closed, counting the pairs in between.
+fn matching(chars: &[char], start: usize, open: char, close: char) -> Option<usize> {
+    if chars.get(start) != Some(&open) {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (k, c) in chars.iter().enumerate().skip(start) {
+        if *c == open {
+            depth += 1;
+        } else if *c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(k);
+            }
+        }
+    }
+    None
+}
+
+/// Where the tag opening at `start` ends, if what stands there is one: a `<`,
+/// a name or a closing slash, and a `>` reached without another `<` on the
+/// way.
+fn tag_end(chars: &[char], start: usize) -> Option<usize> {
+    let after = *chars.get(start + 1)?;
+    if !(after.is_ascii_alphabetic() || after == '/' || after == '!') {
+        return None;
+    }
+    chars[start + 1..]
+        .iter()
+        .take_while(|c| **c != '<')
+        .position(|c| *c == '>')
+        .map(|k| start + k + 2)
+}
+
+/// Whether a line is raw HTML and nothing else, tag after tag.
+fn is_html_only(line: &str) -> bool {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    let mut tags = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
+        match tag_end(&chars, i) {
+            Some(end) => {
+                tags += 1;
+                i = end;
+            }
+            None => return false,
+        }
+    }
+    tags > 0
+}
+
 /// The text of a run of spans with the markup stripped — what the terminal
 /// paints when it has no way to show a style.
 pub fn plain(spans: &[Span]) -> String {
@@ -448,7 +612,7 @@ pub fn plain(spans: &[Span]) -> String {
         .iter()
         .map(|span| match span {
             Span::Text(t) | Span::Bold(t) | Span::Italic(t) | Span::Code(t) => t.as_str(),
-            Span::Link(t, _) => t.as_str(),
+            Span::Link(t, _) | Span::Image(t, _) => t.as_str(),
         })
         .collect()
 }
@@ -596,6 +760,52 @@ mod tests {
         assert_eq!(
             parse("## Title ##")[0],
             Block::Heading(2, vec![Span::Text("Title".into())])
+        );
+    }
+
+    #[test]
+    fn a_badge_reads_as_the_name_it_was_given() {
+        // The shape a README's badges are written in: a link wrapped round an
+        // image, which used to be cut at the image's own closing bracket.
+        let s = spans("[![CI](https://x/badge.svg)](https://x/ci), then ![shot](a.gif)");
+        assert_eq!(s[0], Span::Link("CI".into(), "https://x/ci".into()));
+        assert_eq!(s[1], Span::Text(", then ".into()));
+        assert_eq!(s[2], Span::Image("shot".into(), "a.gif".into()));
+    }
+
+    #[test]
+    fn raw_html_is_markup_for_a_browser_and_not_text_to_paint() {
+        let doc = "<section>\n\n# Title\n\nOne<br>two\n\n</section>\n";
+        let blocks = parse(doc);
+        assert_eq!(
+            blocks,
+            vec![
+                Block::Heading(1, vec![Span::Text("Title".into())]),
+                Block::Paragraph(vec![Span::Text("Onetwo".into())]),
+            ]
+        );
+        // A lone `<` opens no tag, so it stays the less-than sign it is.
+        assert_eq!(spans("a < b"), vec![Span::Text("a < b".into())]);
+    }
+
+    #[test]
+    fn a_centring_tag_is_the_one_html_asks_for_that_is_obeyed() {
+        let doc = "<div align=\"center\">\n\n# Title\n\n</div>\n\nAfter.\n";
+        let blocks = parse(doc);
+        assert_eq!(
+            blocks,
+            vec![
+                Block::Center(Box::new(Block::Heading(
+                    1,
+                    vec![Span::Text("Title".into())]
+                ))),
+                Block::Paragraph(vec![Span::Text("After.".into())]),
+            ]
+        );
+        // A plain wrapper centres nothing.
+        assert_eq!(
+            parse("<div>\n\n# Title\n\n</div>"),
+            vec![Block::Heading(1, vec![Span::Text("Title".into())])]
         );
     }
 

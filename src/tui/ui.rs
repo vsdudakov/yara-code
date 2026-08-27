@@ -1608,6 +1608,14 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                     base.fg(color(theme.ui.accent_light))
                         .add_modifier(Modifier::UNDERLINED),
                 ),
+                // A picture cannot be drawn in a terminal cell, so it is named
+                // instead: the icon says one stands here, the alt text says
+                // what it shows.
+                Md::Image(alt, _) => Span::styled(
+                    format!("{} {alt}", app.icons.preview),
+                    base.fg(color(theme.ui.fg_dim))
+                        .add_modifier(Modifier::ITALIC),
+                ),
             })
             .collect()
     };
@@ -1654,6 +1662,14 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     for block in preview.blocks.iter().skip(preview.scroll) {
+        // A centred block is laid out like any other and then moved into the
+        // middle of the pane, row by row, which is as close as a grid of cells
+        // gets to what `<div align="center">` asks for.
+        let (block, centered) = match block {
+            Block::Center(inner) => (inner.as_ref(), true),
+            other => (other, false),
+        };
+        let from = lines.len();
         match block {
             Block::Heading(level, spans) => {
                 let text = plain(spans);
@@ -1765,6 +1781,18 @@ fn draw_preview(frame: &mut Frame, app: &mut App, whole: Rect) {
                     faint,
                 )));
                 lines.push(Line::from(""));
+            }
+            // Unwrapped above: a centred block holds one block, never another
+            // wrapper.
+            Block::Center(_) => {}
+        }
+        if centered {
+            for line in &mut lines[from..] {
+                let filled: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+                let pad = (width + 2).saturating_sub(filled) / 2;
+                if pad > 0 {
+                    line.spans.insert(0, Span::styled(" ".repeat(pad), body));
+                }
             }
         }
         if lines.len() > whole.height as usize + 1 {
@@ -1989,7 +2017,9 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
         Some(chord) => format!(" {} Preview {chord} ", icons.preview),
         None => format!(" {} Preview ", icons.preview),
     });
-    let hint_width = hint.as_ref().map_or(0, |h| h.chars().count() as u16);
+    // One column past the button is left bare, so it stands clear of the
+    // screen's edge the way the window's does.
+    let hint_width = hint.as_ref().map_or(0, |h| h.chars().count() as u16 + 1);
     let total = x.saturating_sub(tab_area.x);
     let overflow = total > tab_area.width.saturating_sub(hint_width);
     let arrows_width = if overflow { 4 } else { 0 };
@@ -2081,6 +2111,7 @@ fn draw_tab_strip(frame: &mut Frame, app: &mut App, tab_area: Rect) {
                 hint,
                 on(theme.ui.fg_bright, theme.ui.tab_inactive_bg),
             ));
+            spans.push(Span::styled(" ", on(theme.ui.fg_dim, theme.ui.status_bg)));
             app.layout.preview_hint = Some((at, at + width));
         }
     } else {

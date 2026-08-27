@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::core::command::{Key, Mods};
 use crate::core::pty::{Pty, Terminals};
 use crate::core::theme::Theme;
 use crate::gui::file_tree::menu_item;
@@ -433,6 +434,7 @@ fn cell_at(
 
 fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
     let mut bytes: Vec<u8> = Vec::new();
+    let mut presses: Vec<(Key, Mods)> = Vec::new();
     // A copy while the grid has the keyboard takes what the mouse dragged
     // over. Taking it clears the highlight, so the next Ctrl+C is the shell's
     // interrupt again — the same trade the terminal frontend makes.
@@ -459,35 +461,14 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
                     if modifiers.mac_cmd {
                         continue; // global app shortcuts
                     }
-                    if modifiers.ctrl {
-                        let name = key.name();
-                        if name.len() == 1 {
-                            let ch = name.as_bytes()[0].to_ascii_lowercase();
-                            if ch.is_ascii_lowercase() {
-                                bytes.push(ch - b'a' + 1);
-                                continue;
-                            }
-                        }
-                    }
-                    match key {
-                        // Shift+Enter is the newline an agent's prompt asks
-                        // for, and ESC then Return is what a terminal set up
-                        // for one sends.
-                        egui::Key::Enter if modifiers.shift => bytes.extend_from_slice(b"\x1b\r"),
-                        egui::Key::Enter => bytes.push(b'\r'),
-                        egui::Key::Backspace => bytes.push(0x7f),
-                        egui::Key::Tab => bytes.push(b'\t'),
-                        egui::Key::Escape => bytes.push(0x1b),
-                        egui::Key::ArrowUp => bytes.extend_from_slice(b"\x1b[A"),
-                        egui::Key::ArrowDown => bytes.extend_from_slice(b"\x1b[B"),
-                        egui::Key::ArrowRight => bytes.extend_from_slice(b"\x1b[C"),
-                        egui::Key::ArrowLeft => bytes.extend_from_slice(b"\x1b[D"),
-                        egui::Key::Home => bytes.extend_from_slice(b"\x1b[H"),
-                        egui::Key::End => bytes.extend_from_slice(b"\x1b[F"),
-                        egui::Key::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
-                        egui::Key::PageDown => bytes.extend_from_slice(b"\x1b[6~"),
-                        egui::Key::Delete => bytes.extend_from_slice(b"\x1b[3~"),
-                        _ => {}
+                    let mods = Mods {
+                        cmd: false,
+                        ctrl: modifiers.ctrl,
+                        alt: modifiers.alt,
+                        shift: modifiers.shift,
+                    };
+                    if let Some(key) = shell_key(*key, mods) {
+                        presses.push((key, mods));
                     }
                 }
                 _ => {}
@@ -500,6 +481,54 @@ fn handle_input(ui: &mut egui::Ui, pty: &mut Pty) {
         pty.set_scrollback(0);
         pty.clear_selection();
         pty.write(&bytes);
+    }
+    // What each press spells is [`crate::core::keyboard`]'s to say: with the
+    // protocol on, Ctrl+Shift+V is a key of its own rather than Ctrl+V again.
+    for (key, mods) in presses {
+        pty.send_key(&key, mods);
+    }
+}
+
+/// The key as [`crate::core::keyboard`] names it, or nothing where the press
+/// is not the shell's to hear. A character typed with no Ctrl or Alt on it
+/// arrives as text of its own and is sent as that: taking the key press too
+/// would type everything twice.
+fn shell_key(key: egui::Key, mods: Mods) -> Option<Key> {
+    use egui::Key as K;
+    let named = |name: &str| Some(Key::Named(name.to_string()));
+    match key {
+        K::Enter => named("enter"),
+        K::Tab if mods.shift => named("backtab"),
+        K::Tab => named("tab"),
+        K::Backspace => named("backspace"),
+        K::Escape => named("esc"),
+        K::ArrowUp => named("up"),
+        K::ArrowDown => named("down"),
+        K::ArrowRight => named("right"),
+        K::ArrowLeft => named("left"),
+        K::Home => named("home"),
+        K::End => named("end"),
+        K::PageUp => named("pageup"),
+        K::PageDown => named("pagedown"),
+        K::Delete => named("delete"),
+        K::Insert => named("insert"),
+        K::Space if mods.ctrl || mods.alt => named("space"),
+        other => {
+            let name = other.name();
+            if name
+                .strip_prefix('F')
+                .is_some_and(|n| n.parse::<u8>().is_ok())
+            {
+                return named(&name.to_ascii_lowercase());
+            }
+            // The keys that stand for one character: the letters, the digits,
+            // and the punctuation egui names by its symbol.
+            let mut chars = name.chars();
+            match (chars.next(), chars.next(), mods.ctrl || mods.alt) {
+                (Some(c), None, true) => Some(Key::Char(c.to_ascii_lowercase())),
+                _ => None,
+            }
+        }
     }
 }
 

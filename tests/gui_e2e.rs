@@ -89,6 +89,11 @@ struct Harness {
     strokes: Vec<[Pos2; 2]>,
     /// What the last frame put on the clipboard, if anything.
     copied: Option<String>,
+    /// The last link the window asked to be opened.
+    opened: Option<String>,
+    /// How many lines each piece of text was laid out over, so a test can say
+    /// that something stands on one line.
+    rows: Vec<(String, usize)>,
 }
 
 impl Harness {
@@ -102,6 +107,8 @@ impl Harness {
             text: Vec::new(),
             strokes: Vec::new(),
             copied: None,
+            opened: None,
+            rows: Vec::new(),
         };
         // Two frames: egui lays out on the first and settles on the second.
         harness.frame();
@@ -126,6 +133,16 @@ impl Harness {
                 _ => None,
             })
             .collect();
+        self.rows = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => {
+                    Some((text.galley.text().to_string(), text.galley.rows.len()))
+                }
+                _ => None,
+            })
+            .collect();
         self.strokes = output
             .shapes
             .iter()
@@ -142,6 +159,18 @@ impl Harness {
                 egui::OutputCommand::CopyText(text) => Some(text.clone()),
                 _ => None,
             });
+        if let Some(url) =
+            output
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+                    _ => None,
+                })
+        {
+            self.opened = Some(url);
+        }
     }
 
     fn press(&mut self, key: Key, modifiers: Modifiers) {
@@ -183,6 +212,14 @@ impl Harness {
         // A click is answered on the frame after it, once egui has the
         // interaction.
         self.frame();
+    }
+
+    /// How many lines a piece of text was laid out over.
+    fn rows_of(&self, text: &str) -> Option<usize> {
+        self.rows
+            .iter()
+            .find(|(drawn, _)| drawn == text)
+            .map(|(_, rows)| *rows)
     }
 
     fn shows(&self, text: &str) -> bool {
@@ -775,6 +812,54 @@ fn escape_closes_one_thing_at_a_time() {
 }
 
 #[test]
+fn a_table_cell_keeps_its_column_wide_enough_for_it() {
+    let project = Project::new("yara-gui-e2e-preview-table");
+    project.file(
+        "README.md",
+        "| Action | Terminal | Window |\n| --- | :---: | ---: |\n| Preview | `Ctrl+Shift+V` | `Cmd+Shift+V` |\n",
+    );
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
+    // A cell is measured before its column is, so a cell wrapped to the room
+    // it happens to have shrinks its own column and the table folds up into a
+    // stack a few letters wide.
+    let screen = harness.screen();
+    assert_eq!(harness.rows_of("Terminal"), Some(1), "{screen}");
+    assert_eq!(harness.rows_of(" Ctrl+Shift+V "), Some(1), "{screen}");
+    // A centred column stands its heading over its cells, and a right-hand one
+    // ends both at the same edge.
+    let head = harness.position_of("Terminal").unwrap();
+    let cell = harness.position_of(" Ctrl+Shift+V ").unwrap();
+    assert!((head.x - cell.x).abs() < 4.0, "centred: {head:?} {cell:?}");
+}
+
+#[test]
+fn a_link_in_the_preview_opens_where_it_points() {
+    let project = Project::new("yara-gui-e2e-preview-link");
+    project.file("README.md", "<https://example.com/docs>\n\nPlain prose.\n");
+    let mut harness = Harness::open(Some(&project));
+    let at = harness.position_of("README.md").unwrap();
+    harness.click(at);
+    harness.press(Key::V, Modifiers::COMMAND | Modifiers::SHIFT);
+    // An autolink is the link it names, and a click on it opens it.
+    let at = harness.position_of("https://example.com/docs").unwrap();
+    harness.click(at);
+    assert_eq!(
+        harness.opened.as_deref(),
+        Some("https://example.com/docs"),
+        "{}",
+        harness.screen()
+    );
+    // A click on prose that is not a link opens nothing.
+    harness.opened = None;
+    let at = harness.position_of("Plain prose.").unwrap();
+    harness.click(at);
+    assert_eq!(harness.opened, None);
+}
+
+#[test]
 fn a_preview_draws_its_lists_tables_and_charts_in_the_window() {
     let project = Project::new("yara-gui-e2e-preview-rich");
     project.file("README.md", "# Yara Code\n\n## Lists\n\n- one\n  - nested\n- [x] done\n- [ ] todo\n\n## Table\n\n| Name | Size |\n|:-----|-----:|\n| one | 1 |\n| two | 22 |\n\n## Charts\n\n```mermaid\npie title Languages\n  \"Rust\" : 70\n  \"Docs\" : 30\n```\n\n```mermaid\nflowchart LR\n  A[Edit] --> B[Ship]\n```\n");
@@ -826,6 +911,14 @@ fn a_markdown_file_previews_in_the_window() {
         harness.screen()
     );
     assert!(harness.shows("•"), "{}", harness.screen());
+    // A file and the preview of it stand in the strip together. Named after
+    // the path alone they were one widget to egui, which paints the clash
+    // across the two tabs and hands one tab's click to the other.
+    assert!(
+        !harness.screen().contains("widget ID"),
+        "the tabs are two widgets: {}",
+        harness.screen()
+    );
     // A README's wrapper is markup for a browser, and a badge is the name it
     // was given — neither is painted as the markup it was written as.
     let screen = harness.screen();

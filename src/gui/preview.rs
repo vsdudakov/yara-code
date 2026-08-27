@@ -107,12 +107,11 @@ impl PreviewView {
                 Block::Center(inner) => (inner.as_ref(), true),
                 other => (other, false),
             };
-            let job = |spans: &[Span], size: f32, heading: bool| {
-                let mut job = inline(spans, theme, size, heading);
-                if centered {
-                    job.halign = egui::Align::Center;
-                }
-                job
+            // Centring is the column's to do, not the job's: a label lays its
+            // job out with the alignment of the layout it stands in, so what
+            // the job was told is overwritten before it is ever read.
+            let job = |ui: &egui::Ui, spans: &[Span], size: f32, heading: bool| {
+                inline(ui, spans, theme, size, heading)
             };
             let paint = |ui: &mut egui::Ui| match block {
                 Block::Heading(level, spans) => {
@@ -123,14 +122,19 @@ impl PreviewView {
                         _ => 14.5,
                     };
                     ui.add_space(if *level <= 2 { 14.0 } else { 6.0 });
-                    ui.label(job(spans, size, true));
-                    if *level <= 2 {
+                    let title = job(ui, spans, size, true);
+                    prose(ui, title);
+                    // A centred heading is a README's title, not the start
+                    // of a section: the rule a section wears would run right
+                    // across the header it stands in.
+                    if *level <= 2 && !centered {
                         ui.add_space(2.0);
                         ui.separator();
                     }
                 }
                 Block::Paragraph(spans) => {
-                    ui.label(job(spans, BODY, false));
+                    let run = job(ui, spans, BODY, false);
+                    prose(ui, run);
                 }
                 Block::Code(language, text) => {
                     egui::Frame::default()
@@ -164,7 +168,8 @@ impl PreviewView {
                             bottom: 4,
                         })
                         .show(ui, |ui| {
-                            let text = ui.label(job(spans, BODY, false));
+                            let quoted = job(ui, spans, BODY, false);
+                            let text = prose(ui, quoted);
                             let bar = egui::Rect::from_min_size(
                                 egui::pos2(text.rect.left() - 12.0, text.rect.top()),
                                 egui::vec2(3.0, text.rect.height()),
@@ -190,40 +195,61 @@ impl PreviewView {
 
 /// The items of a list, each set in by its depth and led by its own marker.
 fn list(ui: &mut egui::Ui, theme: &Theme, items: &[Item]) {
-    for item in items {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.add_space(10.0 + item.depth as f32 * NESTING);
-            match item.marker {
-                Marker::Task(done) => {
-                    let (mark, tint) = if done {
-                        (icons().check_on, color(theme.ui.accent_light))
-                    } else {
-                        (icons().check_off, color(theme.ui.fg_faint))
-                    };
-                    ui.label(egui::RichText::new(mark).color(tint).size(BODY));
-                }
-                Marker::Number(n) => {
-                    ui.label(
-                        egui::RichText::new(format!("{n}."))
-                            .color(color(theme.ui.fg_faint))
-                            .size(BODY),
-                    );
-                }
-                Marker::Bullet => {
-                    // A level of nesting changes the bullet, as a printed list
-                    // does, so depth is legible without counting indents.
-                    let bullet = ["•", "◦", "▪"][item.depth % 3];
-                    ui.label(
-                        egui::RichText::new(bullet)
-                            .color(color(theme.ui.fg_faint))
-                            .size(BODY),
-                    );
-                }
+    // The items of a list are one block. Stood as far apart as one block
+    // stands from the next they read as several, so they close up here and
+    // the space around them is left to the block above and below.
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        for item in items {
+            item_row(ui, theme, item);
+        }
+    });
+}
+
+/// One item: its marker, then its text beside it. The row is laid out from its
+/// top rather than its middle, so the marker keeps to the item's first line
+/// instead of floating down the side of one that wraps.
+fn item_row(ui: &mut egui::Ui, theme: &Theme, item: &Item) {
+    // As `horizontal_wrapped` lays a row out, but from the top of it: the row
+    // starts one line tall and grows with what goes in it.
+    let row = egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true);
+    let size = egui::vec2(
+        ui.available_size_before_wrap().x,
+        ui.spacing().interact_size.y,
+    );
+    ui.allocate_ui_with_layout(size, row, |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.add_space(10.0 + item.depth as f32 * NESTING);
+        match item.marker {
+            Marker::Task(done) => {
+                let (mark, tint) = if done {
+                    (icons().check_on, color(theme.ui.accent_light))
+                } else {
+                    (icons().check_off, color(theme.ui.fg_faint))
+                };
+                ui.label(egui::RichText::new(mark).color(tint).size(BODY));
             }
-            ui.label(inline(&item.spans, theme, BODY, false));
-        });
-    }
+            Marker::Number(n) => {
+                ui.label(
+                    egui::RichText::new(format!("{n}."))
+                        .color(color(theme.ui.fg_faint))
+                        .size(BODY),
+                );
+            }
+            Marker::Bullet => {
+                // A level of nesting changes the bullet, as a printed list
+                // does, so depth is legible without counting indents.
+                let bullet = ["•", "◦", "▪"][item.depth % 3];
+                ui.label(
+                    egui::RichText::new(bullet)
+                        .color(color(theme.ui.fg_faint))
+                        .size(BODY),
+                );
+            }
+        }
+        let text = inline(ui, &item.spans, theme, BODY, false);
+        prose(ui, text);
+    });
 }
 
 /// A table, ruled under its heading and striped through its rows so a wide row
@@ -233,13 +259,33 @@ fn grid(ui: &mut egui::Ui, theme: &Theme, table: &Table, nth: usize) {
         return;
     }
     let cell = |ui: &mut egui::Ui, spans: &[Span], align: Align, head: bool| {
-        let job = inline(spans, theme, BODY, head);
-        let layout = match align {
-            Align::Left => egui::Layout::left_to_right(egui::Align::Center),
-            Align::Center => egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-            Align::Right => egui::Layout::right_to_left(egui::Align::Center),
+        let mut run = inline(ui, spans, theme, BODY, head);
+        // A cell is one line, not a paragraph: led like prose, a cell of plain
+        // text carries half a line of air under it and rides that much higher
+        // in the row than the cell of code beside it.
+        for section in &mut run.job.sections {
+            section.format.line_height = None;
+        }
+        // The column says where its cells stand, and a cell is justified to
+        // the column's width so that saying it means something.
+        let (layout, halign) = match align {
+            Align::Left => (
+                egui::Layout::left_to_right(egui::Align::Center),
+                egui::Align::LEFT,
+            ),
+            Align::Center => (
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                egui::Align::Center,
+            ),
+            // A right-hand column is a row laid out from the right: the cell
+            // stands at the column's right edge, and its text starts where the
+            // cell does.
+            Align::Right => (
+                egui::Layout::right_to_left(egui::Align::Center),
+                egui::Align::LEFT,
+            ),
         };
-        ui.with_layout(layout, |ui| ui.label(job));
+        ui.with_layout(layout, |ui| aligned(ui, run, halign));
     };
     egui::Frame::default()
         .stroke(egui::Stroke::new(1.0_f32, color(theme.ui.border)))
@@ -444,8 +490,9 @@ fn dashes(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, stroke: egu
 }
 
 /// A run of spans as one laid-out job, so bold, code and links sit inline.
-fn inline(spans: &[Span], theme: &Theme, size: f32, heading: bool) -> egui::text::LayoutJob {
+fn inline(ui: &egui::Ui, spans: &[Span], theme: &Theme, size: f32, heading: bool) -> Prose {
     let mut job = egui::text::LayoutJob::default();
+    let mut links: Vec<(std::ops::Range<usize>, String)> = Vec::new();
     let base_color = if heading {
         color(theme.ui.accent_light)
     } else {
@@ -463,6 +510,15 @@ fn inline(spans: &[Span], theme: &Theme, size: f32, heading: bool) -> egui::text
             line_height: Some(leading),
             ..Default::default()
         };
+    // A run that draws something at its own bottom — the box behind a snippet
+    // of code, the line under a link — is boxed to the height of its face
+    // rather than to the line's leading, which would leave the mark hanging
+    // half a line under the letters it belongs to.
+    let tight = |mut f: egui::text::TextFormat| {
+        f.line_height = Some(ui.fonts(|fonts| fonts.row_height(&f.font_id)));
+        f.valign = egui::Align::TOP;
+        f
+    };
     let prop = egui::FontId::proportional(size);
     let none = egui::Color32::TRANSPARENT;
     for span in spans {
@@ -476,19 +532,17 @@ fn inline(spans: &[Span], theme: &Theme, size: f32, heading: bool) -> egui::text
                 f.italics = true;
                 job.append(t, 0.0, f);
             }
-            Span::Code(t) => job.append(
-                &format!(" {t} "),
-                0.0,
-                fmt(
-                    egui::FontId::monospace(size - 1.0),
-                    color(theme.ui.fg),
-                    color(theme.ui.sidebar_bg),
-                ),
-            ),
-            Span::Link(t, _) => {
-                let mut f = fmt(prop.clone(), color(theme.ui.accent_light), none);
+            Span::Code(t) => {
+                let font = egui::FontId::monospace(size - 1.0);
+                let f = fmt(font, color(theme.ui.fg), color(theme.ui.sidebar_bg));
+                job.append(&format!(" {t} "), 0.0, tight(f));
+            }
+            Span::Link(t, dest) => {
+                let mut f = tight(fmt(prop.clone(), color(theme.ui.accent_light), none));
                 f.underline = egui::Stroke::new(1.0_f32, color(theme.ui.accent_light));
+                let from = job.text.chars().count();
                 job.append(t, 0.0, f);
+                links.push((from..job.text.chars().count(), dest.clone()));
             }
             // Nothing here decodes a picture, so an image is set as what it
             // was described as, marked as standing in for one.
@@ -499,5 +553,72 @@ fn inline(spans: &[Span], theme: &Theme, size: f32, heading: bool) -> egui::text
             }
         }
     }
-    job
+    Prose { job, links }
+}
+
+/// A run of prose ready to paint: what it says, and where in it a link stands,
+/// so a click can find the one it landed on.
+struct Prose {
+    job: egui::text::LayoutJob,
+    links: Vec<(std::ops::Range<usize>, String)>,
+}
+
+/// Paints a run of prose where the layout puts it.
+fn prose(ui: &mut egui::Ui, run: Prose) -> egui::Response {
+    let halign = ui.layout().horizontal_placement();
+    aligned(ui, run, halign)
+}
+
+/// Paints a run of prose set to `halign`, and answers a click on a link inside
+/// it: the pointer over one is a hand, and a click on one opens it. The text is
+/// laid out here rather than by the label, because knowing which link the
+/// pointer is on means knowing where every letter of the run ended up.
+fn aligned(ui: &mut egui::Ui, run: Prose, halign: egui::Align) -> egui::Response {
+    let Prose { mut job, links } = run;
+    // Laying the text out here means saying where it wraps, which the label
+    // would otherwise have asked the layout: prose wraps to the column, and a
+    // table cell is not wrapped at all — its column is measured from what the
+    // cell asks for, and a cell that wrapped to the room it had would shrink
+    // its own column to nothing.
+    job.wrap.max_width = match ui.wrap_mode() {
+        egui::TextWrapMode::Extend => f32::INFINITY,
+        _ => ui.available_width(),
+    };
+    job.halign = halign;
+    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+    let response = ui.add(egui::Label::new(galley.clone()).sense(egui::Sense::click()));
+    if links.is_empty() {
+        return response;
+    }
+    // Where the label put the galley, which is what the pointer is measured
+    // against: a centred run is laid out about its middle, not its left edge.
+    let origin = match halign {
+        egui::Align::LEFT => response.rect.left_top(),
+        egui::Align::Center => response.rect.center_top(),
+        egui::Align::RIGHT => response.rect.right_top(),
+    };
+    let Some(pointer) = response.hover_pos() else {
+        return response;
+    };
+    let at = pointer - origin.to_vec2();
+    let cursor = galley.cursor_from_pos(at.to_vec2());
+    // The nearest place in the text is answered for a pointer anywhere in the
+    // label, so a pointer past the end of a row would otherwise open the link
+    // that row happens to end with.
+    let on_the_row = galley
+        .rows
+        .get(cursor.rcursor.row)
+        .is_some_and(|row| row.rect.x_range().contains(at.x));
+    let url = links
+        .iter()
+        .find(|(run, _)| on_the_row && run.contains(&cursor.ccursor.index))
+        .map(|(_, url)| url.clone());
+    let Some(url) = url else {
+        return response;
+    };
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if response.clicked() {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+    }
+    response
 }

@@ -145,16 +145,58 @@ pub fn parse(text: &str) -> Vec<Block> {
         // centred.
         if is_html_only(trimmed) {
             flush(&mut paragraph, &mut blocks);
+            // A badge row is written as raw HTML as often as it is written as
+            // markdown, and a line of tags that names a picture or a link is
+            // not markup to drop: it is the row.
+            if !centers(trimmed) {
+                let inline = spans(trimmed);
+                if !inline.is_empty() {
+                    blocks.push(Block::Paragraph(inline));
+                }
+                i += 1;
+                continue;
+            }
             if centers(trimmed) {
                 let (inner, read) = take_until_close(&lines, i);
-                blocks.extend(
-                    parse(&inner)
-                        .into_iter()
-                        .map(|block| Block::Center(Box::new(block))),
-                );
+                blocks.extend(parse(&inner).into_iter().map(|block| match block {
+                    // A centring tag inside another asks for nothing the
+                    // outer one did not. Wrapped twice it would be unwrapped
+                    // once and the wrapper painted, which is nothing at all.
+                    centred @ Block::Center(_) => centred,
+                    block => Block::Center(Box::new(block)),
+                }));
                 i = read;
                 continue;
             }
+            i += 1;
+            continue;
+        }
+
+        // A tag that centres and closes on the line it opened centres that
+        // one line: `<h1 align="center">Yara Code</h1>` and the tagline under
+        // it are how a README writes a header without a block around it.
+        if centers(trimmed) && nesting(trimmed) <= 0 {
+            let (level, inner) = match html_heading(trimmed) {
+                Some((level, inner)) => (Some(level), spans(inner)),
+                None => (None, spans(trimmed)),
+            };
+            if !inner.is_empty() {
+                flush(&mut paragraph, &mut blocks);
+                blocks.push(Block::Center(Box::new(match level {
+                    Some(level) => Block::Heading(level, inner),
+                    None => Block::Paragraph(inner),
+                })));
+                i += 1;
+                continue;
+            }
+        }
+
+        // A heading written as HTML — `<h1>Yara Code</h1>`, the title every
+        // centred README header is built from — is a heading, not the line of
+        // body text that dropping its tags would leave.
+        if let Some((level, inner)) = html_heading(trimmed) {
+            flush(&mut paragraph, &mut blocks);
+            blocks.push(Block::Heading(level, spans(inner)));
             i += 1;
             continue;
         }
@@ -474,10 +516,25 @@ pub fn spans(text: &str) -> Vec<Span> {
                 continue;
             }
         }
-        // An HTML tag in the middle of a line — `<br>`, `<sub>` — goes the way
-        // a whole line of them does. A lone `<` that opens no tag stays: it is
-        // a less-than sign.
+        // A tag that says something a preview can paint — a picture, a link,
+        // a run of emphasis — says it. Every other tag in the middle of a line
+        // — `<br>`, `<sub>` — goes the way a whole line of them does, and a
+        // lone `<` that opens no tag stays: it is a less-than sign.
         if at(i, "<") {
+            // A link written as itself, which is the only way to write one
+            // that has no name of its own.
+            if let Some((link, next)) = autolink(&chars, i) {
+                push_plain(&mut plain, &mut out);
+                out.push(link);
+                i = next;
+                continue;
+            }
+            if let Some((painted, next)) = tagged(&chars, i) {
+                push_plain(&mut plain, &mut out);
+                out.extend(painted);
+                i = next;
+                continue;
+            }
             if let Some(end) = tag_end(&chars, i) {
                 i = end;
                 continue;
@@ -488,6 +545,147 @@ pub fn spans(text: &str) -> Vec<Span> {
     }
     push_plain(&mut plain, &mut out);
     out
+}
+
+/// `<https://example.com>` or `<hi@example.com>` — a link standing as its own
+/// name — and where reading it ended. Only what a browser would follow counts:
+/// a scheme it knows, or an address, so the `<String>` of a type is left where
+/// it stands.
+fn autolink(chars: &[char], start: usize) -> Option<(Span, usize)> {
+    if chars.get(start) != Some(&'<') {
+        return None;
+    }
+    let end = chars[start + 1..]
+        .iter()
+        .take_while(|c| !c.is_whitespace() && **c != '<')
+        .position(|c| *c == '>')
+        .map(|k| start + 1 + k)?;
+    let text: String = chars[start + 1..end].iter().collect();
+    let scheme = text
+        .split_once("://")
+        .filter(|(scheme, rest)| {
+            !scheme.is_empty()
+                && !rest.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
+        .is_some();
+    // An address is shown as itself and followed as mail, however it was
+    // written.
+    let address = text.strip_prefix("mailto:").unwrap_or(&text);
+    let mailable = address
+        .split_once('@')
+        .is_some_and(|(name, host)| !name.is_empty() && host.contains('.') && !host.contains('@'));
+    let link = if scheme {
+        Span::Link(text.clone(), text)
+    } else if mailable {
+        Span::Link(address.to_string(), format!("mailto:{address}"))
+    } else {
+        return None;
+    };
+    Some((link, end + 1))
+}
+
+/// What a tag standing in a line of prose says, where it says anything a
+/// preview can paint, and where reading it ended. A picture is what it was
+/// described as, a link is where it goes, and `<b>`, `<em>` and `<code>` are
+/// the runs markdown writes with punctuation. Everything else comes back
+/// `None` and is dropped as the markup for a browser it is.
+fn tagged(chars: &[char], start: usize) -> Option<(Vec<Span>, usize)> {
+    let end = tag_end(chars, start)?;
+    let tag: String = chars[start..end].iter().collect();
+    let name = tag_name(&tag)?;
+    if name == "img" {
+        // A picture with nothing said about it is named after its file, which
+        // is more than the icon alone would say.
+        let src = attr(&tag, "src").unwrap_or_default();
+        let alt = attr(&tag, "alt")
+            .filter(|alt| !alt.is_empty())
+            .unwrap_or_else(|| src.rsplit('/').next().unwrap_or_default().to_string());
+        return Some((vec![Span::Image(alt, src)], end));
+    }
+    let (inner, next) = held(chars, end, &name)?;
+    let painted = match name.as_str() {
+        "b" | "strong" => emphasised(&inner, Span::Bold),
+        "i" | "em" => emphasised(&inner, Span::Italic),
+        "code" | "kbd" | "samp" => vec![Span::Code(plain(&spans(&inner)))],
+        // A link written round a picture reads as the picture's name, which is
+        // how a badge says which badge it is — the same reading a markdown
+        // badge is given.
+        "a" => vec![Span::Link(
+            plain(&spans(&inner)),
+            attr(&tag, "href").unwrap_or_default(),
+        )],
+        _ => return None,
+    };
+    Some((painted, next))
+}
+
+/// The text an element holds, and the index after the tag that closes it.
+fn held(chars: &[char], from: usize, name: &str) -> Option<(String, usize)> {
+    let rest: String = chars[from..].iter().collect();
+    let close = format!("</{name}>");
+    let at = rest.to_ascii_lowercase().find(&close)?;
+    let inner = &rest[..at];
+    let next = from + inner.chars().count() + close.chars().count();
+    Some((inner.to_string(), next))
+}
+
+/// The name a tag opens with, in the one case names are compared in.
+fn tag_name(tag: &str) -> Option<String> {
+    let name: String = tag
+        .trim_start_matches(['<', '/'])
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+    (!name.is_empty()).then(|| name.to_ascii_lowercase())
+}
+
+/// What a tag says an attribute is, however the value was quoted. The name is
+/// matched only where a space stands in front of it, so `data-src` is not read
+/// as `src`.
+fn attr(tag: &str, name: &str) -> Option<String> {
+    // Only ASCII changes case, so the offsets found in the one hold in the
+    // other however the alt text is written.
+    let lower = tag.to_ascii_lowercase();
+    let key = format!("{name}=");
+    let mut from = 1;
+    while let Some(at) = lower.get(from..)?.find(&key) {
+        let at = from + at;
+        let spaced = lower[..at].chars().last().is_some_and(char::is_whitespace);
+        from = at + key.len();
+        if !spaced {
+            continue;
+        }
+        let value = &tag[from..];
+        return Some(
+            match value.chars().next() {
+                Some(quote @ ('"' | '\'')) => value[1..].split(quote).next().unwrap_or_default(),
+                _ => value
+                    .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+                    .next()
+                    .unwrap_or_default(),
+            }
+            .to_string(),
+        );
+    }
+    None
+}
+
+/// The level and the text of `<h1>…</h1>` written on one line, if that is
+/// what the line is. Only a heading closed on its own line counts: one left
+/// open holds whatever follows, which is more than a title.
+fn html_heading(line: &str) -> Option<(u8, &str)> {
+    let lower = line.to_ascii_lowercase();
+    let level = (1..=6u8).find(|n| {
+        lower
+            .strip_prefix(&format!("<h{n}"))
+            .is_some_and(|rest| rest.starts_with('>') || rest.starts_with(char::is_whitespace))
+    })?;
+    let opened = line.find('>')?;
+    let closed = lower.rfind(&format!("</h{level}>"))?;
+    (closed > opened).then(|| (level, line[opened + 1..closed].trim()))
 }
 
 /// Whether a tag asks for what it holds to be centred.
@@ -501,23 +699,64 @@ fn centers(line: &str) -> bool {
 /// it early; a tag never closed holds the rest of the document, which is what
 /// a browser does with it too.
 fn take_until_close(lines: &[&str], open: usize) -> (String, usize) {
-    let mut depth = 0usize;
-    for (k, line) in lines.iter().enumerate().skip(open) {
+    // A tag closed on the line it opened holds what stands between the two —
+    // the picture a header is built round, as often as not.
+    let mut depth = nesting(lines[open]);
+    if depth <= 0 {
+        let line = lines[open];
+        let held = match (line.find('>'), line.rfind("</")) {
+            (Some(opened), Some(closed)) if closed > opened => &line[opened + 1..closed],
+            _ => "",
+        };
+        return (held.to_string(), open + 1);
+    }
+    for (k, line) in lines.iter().enumerate().skip(open + 1) {
         let trimmed = line.trim();
         if !is_html_only(trimmed) {
             continue;
         }
-        // A tag that closes itself — `<img …/>`, `<br>` — opens nothing.
-        if trimmed.starts_with("</") {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return (lines[open + 1..k].join("\n"), k + 1);
-            }
-        } else if !trimmed.ends_with("/>") && !trimmed.starts_with("<!") {
-            depth += 1;
+        depth += nesting(trimmed);
+        if depth <= 0 {
+            return (lines[open + 1..k].join("\n"), k + 1);
         }
     }
     (lines[open + 1..].join("\n"), lines.len())
+}
+
+/// How far a line of raw HTML opens or closes, tag by tag. A tag that holds
+/// nothing opens nothing: `<img src="logo.png">` is written without the slash
+/// a browser does not ask for, and counted as a level it left the `</div>`
+/// under it closing the picture instead of the block — which centred the rest
+/// of the README.
+fn nesting(line: &str) -> isize {
+    let chars: Vec<char> = line.chars().collect();
+    let mut depth = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(end) = tag_end(&chars, i) else {
+            i += 1;
+            continue;
+        };
+        let tag: String = chars[i..end].iter().collect();
+        depth += if tag.starts_with("</") {
+            -1
+        } else if tag.starts_with("<!") || tag.ends_with("/>") || holds_nothing(&tag) {
+            0
+        } else {
+            1
+        };
+        i = end;
+    }
+    depth
+}
+
+/// Whether a tag is one of those that hold nothing at all.
+fn holds_nothing(tag: &str) -> bool {
+    const VOID: &[&str] = &[
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+        "source", "track", "wbr",
+    ];
+    tag_name(tag).is_some_and(|name| VOID.contains(&name.as_str()))
 }
 
 /// What stands inside `**…**` or `*…*`, read again so a link or a snippet of
@@ -570,18 +809,176 @@ fn matching(chars: &[char], start: usize, open: char, close: char) -> Option<usi
 }
 
 /// Where the tag opening at `start` ends, if what stands there is one: a `<`,
-/// a name or a closing slash, and a `>` reached without another `<` on the
-/// way.
+/// a name HTML actually has, and a `>` reached without another `<` on the way.
+/// The name is checked against a list rather than taken for anything that
+/// reads like one, because `<https://example.com>` is a link a reader wrote
+/// and the `<String>` in `Vec<String>` is half of a type — dropping either as
+/// markup loses a word of the README.
 fn tag_end(chars: &[char], start: usize) -> Option<usize> {
-    let after = *chars.get(start + 1)?;
-    if !(after.is_ascii_alphabetic() || after == '/' || after == '!') {
+    if chars.get(start) != Some(&'<') {
         return None;
     }
-    chars[start + 1..]
+    // A comment or a doctype is markup whatever stands inside it.
+    if chars.get(start + 1) == Some(&'!') {
+        return chars[start + 1..]
+            .iter()
+            .position(|c| *c == '>')
+            .map(|k| start + k + 2);
+    }
+    let mut i = start + 1;
+    if chars.get(i) == Some(&'/') {
+        i += 1;
+    }
+    let name: String = chars[i..]
+        .iter()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if !names_a_tag(&name) {
+        return None;
+    }
+    i += name.chars().count();
+    // What follows the name closes the tag or opens an attribute; a name run
+    // straight into anything else was never a tag.
+    match chars.get(i) {
+        Some('>' | '/') => {}
+        Some(c) if c.is_whitespace() => {}
+        _ => return None,
+    }
+    chars[i..]
         .iter()
         .take_while(|c| **c != '<')
         .position(|c| *c == '>')
-        .map(|k| start + k + 2)
+        .map(|k| i + k + 1)
+}
+
+/// Whether a name is HTML's. Tag names are written in one case throughout, so
+/// the camel case of a type — `Vec<Data>` — names no tag however much
+/// `data` is one.
+fn names_a_tag(name: &str) -> bool {
+    const TAGS: &[&str] = &[
+        "a",
+        "abbr",
+        "address",
+        "animate",
+        "article",
+        "aside",
+        "audio",
+        "b",
+        "base",
+        "bdi",
+        "bdo",
+        "big",
+        "blockquote",
+        "br",
+        "button",
+        "canvas",
+        "caption",
+        "center",
+        "circle",
+        "cite",
+        "clippath",
+        "code",
+        "col",
+        "colgroup",
+        "dd",
+        "defs",
+        "del",
+        "desc",
+        "details",
+        "dfn",
+        "div",
+        "dl",
+        "dt",
+        "ellipse",
+        "em",
+        "embed",
+        "figcaption",
+        "figure",
+        "font",
+        "footer",
+        "form",
+        "g",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hr",
+        "html",
+        "i",
+        "iframe",
+        "img",
+        "input",
+        "ins",
+        "kbd",
+        "label",
+        "legend",
+        "li",
+        "line",
+        "lineargradient",
+        "link",
+        "main",
+        "mark",
+        "marquee",
+        "mask",
+        "meta",
+        "nav",
+        "nobr",
+        "noscript",
+        "ol",
+        "optgroup",
+        "option",
+        "p",
+        "param",
+        "path",
+        "picture",
+        "polygon",
+        "polyline",
+        "pre",
+        "q",
+        "rect",
+        "s",
+        "samp",
+        "script",
+        "section",
+        "select",
+        "small",
+        "source",
+        "span",
+        "stop",
+        "strike",
+        "strong",
+        "style",
+        "sub",
+        "summary",
+        "sup",
+        "svg",
+        "symbol",
+        "table",
+        "tbody",
+        "td",
+        "text",
+        "textarea",
+        "tfoot",
+        "th",
+        "thead",
+        "title",
+        "tr",
+        "tspan",
+        "tt",
+        "u",
+        "ul",
+        "use",
+        "var",
+        "video",
+        "wbr",
+    ];
+    let one_case = !name.chars().any(|c| c.is_ascii_uppercase())
+        || !name.chars().any(|c| c.is_ascii_lowercase());
+    one_case && TAGS.iter().any(|tag| tag.eq_ignore_ascii_case(name))
 }
 
 /// Whether a line is raw HTML and nothing else, tag after tag.
@@ -807,6 +1204,187 @@ mod tests {
             parse("<div>\n\n# Title\n\n</div>"),
             vec![Block::Heading(1, vec![Span::Text("Title".into())])]
         );
+    }
+
+    #[test]
+    fn a_picture_inside_the_centring_tag_does_not_swallow_the_readme() {
+        // The shape every README opens with: a logo written without the
+        // closing slash, and a heading that stands outside the block.
+        let doc = "<div align=\"center\">\n<img src=\"logo.png\" width=\"120\">\n</div>\n\n# Title\n\nBody.\n";
+        assert_eq!(
+            parse(doc),
+            vec![
+                // The logo is named after its file, having been given no name
+                // of its own, and what follows the block is not centred.
+                Block::Center(Box::new(Block::Paragraph(vec![Span::Image(
+                    "logo.png".into(),
+                    "logo.png".into()
+                )]))),
+                Block::Heading(1, vec![Span::Text("Title".into())]),
+                Block::Paragraph(vec![Span::Text("Body.".into())]),
+            ]
+        );
+        // The same written on one line closes itself just as surely.
+        let doc = "<div align=\"center\"><img src=\"logo.png\" alt=\"Logo\"></div>\n\n# Title\n";
+        assert_eq!(
+            parse(doc),
+            vec![
+                Block::Center(Box::new(Block::Paragraph(vec![Span::Image(
+                    "Logo".into(),
+                    "logo.png".into()
+                )]))),
+                Block::Heading(1, vec![Span::Text("Title".into())]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_heading_written_as_html_is_a_heading() {
+        let doc = "<div align=\"center\">\n<h1>Yara Code</h1>\n<p>Tagline.</p>\n</div>\n";
+        assert_eq!(
+            parse(doc),
+            vec![
+                Block::Center(Box::new(Block::Heading(
+                    1,
+                    vec![Span::Text("Yara Code".into())]
+                ))),
+                Block::Center(Box::new(Block::Paragraph(vec![Span::Text(
+                    "Tagline.".into()
+                )]))),
+            ]
+        );
+        // The markup inside one is read as markup, and a level is kept.
+        assert_eq!(
+            parse("<h3>A <b>tagged</b> `bit`</h3>"),
+            vec![Block::Heading(
+                3,
+                vec![
+                    Span::Text("A ".into()),
+                    Span::Bold("tagged".into()),
+                    Span::Text(" ".into()),
+                    Span::Code("bit".into())
+                ]
+            )]
+        );
+        // The same header written without a block around it.
+        let doc = "<h1 align=\"center\">Yara Code</h1>\n<p align=\"center\">A tagline.</p>\n";
+        assert_eq!(
+            parse(doc),
+            vec![
+                Block::Center(Box::new(Block::Heading(
+                    1,
+                    vec![Span::Text("Yara Code".into())]
+                ))),
+                Block::Center(Box::new(Block::Paragraph(vec![Span::Text(
+                    "A tagline.".into()
+                )]))),
+            ]
+        );
+        // A line that only starts like one is not a heading.
+        assert!(matches!(&parse("<h1>Open")[0], Block::Paragraph(_)));
+        assert!(matches!(&parse("<html>x</html>")[0], Block::Paragraph(_)));
+    }
+
+    #[test]
+    fn a_centring_tag_inside_another_is_centred_once() {
+        let doc = "<div align=\"center\">\n<div align=\"center\">\n\nText\n\n</div>\n</div>\n";
+        assert_eq!(
+            parse(doc),
+            vec![Block::Center(Box::new(Block::Paragraph(vec![Span::Text(
+                "Text".into()
+            )])))]
+        );
+    }
+
+    #[test]
+    fn html_that_names_a_picture_or_a_link_is_painted_as_one() {
+        // The badge row half a README is written with: a link round a picture,
+        // on a line with nothing else on it.
+        let doc = "<p align=\"center\">\n  <a href=\"https://x/ci\"><img src=\"https://x/b.svg\" alt=\"CI\"></a>\n</p>\n";
+        assert_eq!(
+            parse(doc),
+            vec![Block::Center(Box::new(Block::Paragraph(vec![Span::Link(
+                "CI".into(),
+                "https://x/ci".into()
+            )])))]
+        );
+        // A picture standing in a line of prose, and one written the long way.
+        assert_eq!(
+            spans("Before <img src='a/shot.png' alt=\"A shot\"/> after"),
+            vec![
+                Span::Text("Before ".into()),
+                Span::Image("A shot".into(), "a/shot.png".into()),
+                Span::Text(" after".into()),
+            ]
+        );
+        // An attribute is not read out of the middle of another's name.
+        assert_eq!(
+            spans("<img data-src=\"no.png\" src=\"yes.png\" alt=\"Yes\">"),
+            vec![Span::Image("Yes".into(), "yes.png".into())]
+        );
+    }
+
+    #[test]
+    fn emphasis_written_as_html_is_emphasis() {
+        assert_eq!(
+            spans("A <strong>bold</strong> and <em>italic</em> and <code>code</code> line"),
+            vec![
+                Span::Text("A ".into()),
+                Span::Bold("bold".into()),
+                Span::Text(" and ".into()),
+                Span::Italic("italic".into()),
+                Span::Text(" and ".into()),
+                Span::Code("code".into()),
+                Span::Text(" line".into()),
+            ]
+        );
+        // A tag left open is markup that says nothing, and goes as it always
+        // did.
+        assert_eq!(
+            spans("A <b>bold line"),
+            vec![Span::Text("A bold line".into())]
+        );
+    }
+
+    #[test]
+    fn what_only_looks_like_a_tag_is_left_where_it_stands() {
+        // An autolink is the link it names, not markup for a browser.
+        assert_eq!(
+            spans("See <https://example.com> for docs."),
+            vec![
+                Span::Text("See ".into()),
+                Span::Link("https://example.com".into(), "https://example.com".into()),
+                Span::Text(" for docs.".into()),
+            ]
+        );
+        assert_eq!(
+            parse("<https://example.com>\n"),
+            vec![Block::Paragraph(vec![Span::Link(
+                "https://example.com".into(),
+                "https://example.com".into()
+            )])]
+        );
+        // An address is followed as mail, written plainly or with the scheme.
+        let mail = Span::Link("hi@example.com".into(), "mailto:hi@example.com".into());
+        assert_eq!(spans("<hi@example.com>"), vec![mail.clone()]);
+        assert_eq!(spans("<mailto:hi@example.com>"), vec![mail]);
+        // Neither a bare word in brackets nor a type is a link.
+        assert_eq!(
+            spans("<not a link>"),
+            vec![Span::Text("<not a link>".into())]
+        );
+        assert_eq!(spans("<nothing>"), vec![Span::Text("<nothing>".into())]);
+        // A type is not a paragraph with a `<data>` in it.
+        assert_eq!(
+            plain(&spans("A Vec<String> holds items.")),
+            "A Vec<String> holds items."
+        );
+        assert_eq!(
+            plain(&spans("Option<Data> is fine.")),
+            "Option<Data> is fine."
+        );
+        // A tag HTML does have still goes.
+        assert_eq!(plain(&spans("One<br>two")), "Onetwo");
     }
 
     #[test]

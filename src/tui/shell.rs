@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::core::command::{Key, Mods};
 use crate::core::pty::{Pty, Selection, Terminals};
 
 pub struct Shell {
@@ -119,84 +120,41 @@ impl Shell {
         self.scroll(if up { rows as isize } else { -(rows as isize) });
     }
 
-    /// Forwards a key press to the shell as the bytes a terminal would send.
+    /// Forwards a key press to the shell as the bytes a terminal would send,
+    /// which is [`crate::core::keyboard`]'s job: what the program in front has
+    /// asked to be told about a press decides how it is spelled.
     pub fn send_key(&mut self, key: KeyEvent) {
         let Some(pty) = self.sessions.active_mut() else {
             return;
         };
-        let mut bytes: Vec<u8> = Vec::new();
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        match key.code {
-            KeyCode::Char(c) => {
-                if ctrl {
-                    // Control characters: Ctrl+A is 0x01, and so on.
-                    let lower = c.to_ascii_lowercase();
-                    if lower.is_ascii_lowercase() {
-                        bytes.push(lower as u8 - b'a' + 1);
-                    } else {
-                        match c {
-                            ' ' => bytes.push(0),
-                            '[' => bytes.push(0x1b),
-                            '\\' => bytes.push(0x1c),
-                            ']' => bytes.push(0x1d),
-                            _ => {}
-                        }
-                    }
-                } else {
-                    if alt {
-                        bytes.push(0x1b);
-                    }
-                    let mut buf = [0u8; 4];
-                    bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-                }
-            }
-            // Shift+Enter is the newline an agent's prompt asks for, and
-            // ESC then Return is what a terminal set up for one sends. Telling
-            // it from a plain Return needs the kitty protocol, which
-            // [`crate::tui::run`] asks the host terminal for.
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                bytes.extend_from_slice(b"\x1b\r")
-            }
-            KeyCode::Enter => bytes.push(b'\r'),
-            KeyCode::Tab => bytes.push(b'\t'),
-            KeyCode::BackTab => bytes.extend_from_slice(b"\x1b[Z"),
-            KeyCode::Backspace => bytes.push(0x7f),
-            KeyCode::Esc => bytes.push(0x1b),
-            KeyCode::Up => bytes.extend_from_slice(b"\x1b[A"),
-            KeyCode::Down => bytes.extend_from_slice(b"\x1b[B"),
-            KeyCode::Right => bytes.extend_from_slice(b"\x1b[C"),
-            KeyCode::Left => bytes.extend_from_slice(b"\x1b[D"),
-            KeyCode::Home => bytes.extend_from_slice(b"\x1b[H"),
-            KeyCode::End => bytes.extend_from_slice(b"\x1b[F"),
-            KeyCode::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
-            KeyCode::PageDown => bytes.extend_from_slice(b"\x1b[6~"),
-            KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),
-            KeyCode::Insert => bytes.extend_from_slice(b"\x1b[2~"),
-            KeyCode::F(n) if (1..=4).contains(&n) => {
-                bytes.extend_from_slice(&[0x1b, b'O', b'P' + (n - 1)]);
-            }
-            KeyCode::F(n) => {
-                let code = match n {
-                    5 => 15,
-                    6 => 17,
-                    7 => 18,
-                    8 => 19,
-                    9 => 20,
-                    10 => 21,
-                    11 => 23,
-                    12 => 24,
-                    _ => return,
-                };
-                bytes.extend_from_slice(format!("\x1b[{code}~").as_bytes());
-            }
+        let mods = Mods {
+            cmd: key.modifiers.contains(KeyModifiers::SUPER),
+            ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+            alt: key.modifiers.contains(KeyModifiers::ALT),
+            shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        };
+        let named = |name: &str| Key::Named(name.to_string());
+        let key = match key.code {
+            KeyCode::Char(c) => Key::Char(c),
+            KeyCode::Enter => named("enter"),
+            KeyCode::Tab => named("tab"),
+            KeyCode::BackTab => named("backtab"),
+            KeyCode::Backspace => named("backspace"),
+            KeyCode::Esc => named("esc"),
+            KeyCode::Up => named("up"),
+            KeyCode::Down => named("down"),
+            KeyCode::Right => named("right"),
+            KeyCode::Left => named("left"),
+            KeyCode::Home => named("home"),
+            KeyCode::End => named("end"),
+            KeyCode::PageUp => named("pageup"),
+            KeyCode::PageDown => named("pagedown"),
+            KeyCode::Delete => named("delete"),
+            KeyCode::Insert => named("insert"),
+            KeyCode::F(n) => named(&format!("f{n}")),
             _ => return,
-        }
-        // Any keypress returns the view to the live screen, as terminals do,
-        // and drops a selection the way typing does in the editor.
-        pty.set_scrollback(0);
-        pty.clear_selection();
-        pty.write(&bytes);
+        };
+        pty.send_key(&key, mods);
     }
 
     /// Pasted text, bracketed and with its line endings turned into returns —

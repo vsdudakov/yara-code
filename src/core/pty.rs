@@ -680,6 +680,11 @@ mod tests {
         terminals.open(dir.path(), || {});
         let pty = terminals.active_mut().expect("a shell started");
         assert!(!pty.tells_modifiers(), "nothing has asked yet");
+        // The rest is said in the shell's own words, and cmd.exe does not
+        // speak them.
+        if !cfg!(unix) {
+            return;
+        }
 
         // What a program pushes on its way in. It goes out through the shell,
         // which is the same stream a program of its own would write it on.
@@ -712,6 +717,9 @@ mod tests {
         terminals.open(dir.path(), || {});
         let pty = terminals.active_mut().expect("a shell started");
         pty.resize(24, 80);
+        if !cfg!(unix) {
+            return;
+        }
         // The answer is written back to the pty, which is the program's own
         // input; read raw and shown, it is the five bytes of `CSI ? 0 u`.
         pty.write(b"stty raw -echo; printf '\\033[?u'; head -c 5 | cat -v; stty sane\r");

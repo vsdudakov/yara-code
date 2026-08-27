@@ -56,6 +56,15 @@ numbers, up to three deep.
 
 ## Markdown preview
 
+=== "Terminal"
+
+    ![A markdown file and its preview in the terminal frontend](../assets/shots/tui-markdown.png)
+
+=== "Window"
+
+    ![The same preview in the window frontend](../assets/shots/gui-markdown.png)
+
+
 `Cmd+Shift+V` / `Ctrl+Shift+V`, or **◫ Preview** on the tab strip, renders the
 markdown file in front in a tab of its own, and follows it keystroke by
 keystroke. Both frontends draw the same document:

@@ -40,6 +40,15 @@ and the terminal panel is right there.
 
 ## Diffs
 
+=== "Terminal"
+
+    ![A side-by-side diff in the terminal frontend](../assets/shots/tui-git-diff.png)
+
+=== "Window"
+
+    ![The same diff in the window frontend](../assets/shots/gui-git-diff.png)
+
+
 Clicking a changed file opens a **side-by-side diff** as a tab of its own,
 beside the open files: what the file was on the left, what it is now on the
 right, each side with its own line numbers.

@@ -6,8 +6,28 @@ description: Three built-in themes, any VS Code color theme, and 75 syntect gram
 
 ## Themes
 
-Themes are data, not constants. Built in: **Dark+**, **Light+**, **Monokai**.
-Switch with `Cmd+Shift+T` / `Ctrl+Shift+T`, or from **View → Color Theme…**.
+Themes are data, not constants. Built in: **Dark Modern**, **Dark+**,
+**Light+** and **Monokai**, in that order — Dark Modern leads the picker, and
+an install with no `theme` in its settings starts on Dark+. Switch with
+`Cmd+Shift+T` / `Ctrl+Shift+T`, or from **View → Color Theme…**.
+
+=== "Light+"
+
+    ![Light+ in the terminal frontend](../assets/shots/tui-theme-light.png)
+
+    ![Light+ in the window frontend](../assets/shots/gui-theme-light.png)
+
+=== "Monokai"
+
+    ![Monokai in the terminal frontend](../assets/shots/tui-theme-monokai.png)
+
+    ![Monokai in the window frontend](../assets/shots/gui-theme-monokai.png)
+
+=== "Dark Modern"
+
+    ![Dark Modern in the terminal frontend](../assets/shots/tui-hero.png)
+
+    ![Dark Modern in the window frontend](../assets/shots/gui-hero.png)
 
 Any VS Code color theme works: drop its `.json` into
 

@@ -7,6 +7,15 @@ description: Yara Code — a lightweight code editor for agent-driven developmen
 **A minimal code editor with two frontends over one core — a GPU-accelerated
 window and a terminal UI that runs over SSH.**
 
+=== "Terminal"
+
+    ![The terminal frontend on a project](assets/shots/tui-hero.png)
+
+=== "Window"
+
+    ![The window frontend on the same project](assets/shots/gui-hero.png)
+
+
 Yara Code is the *same editor* twice. `ycode` draws it with characters (ratatui on
 crossterm); `ycode-gui` draws it with the GPU (egui on wgpu). Both are one Rust
 crate: the navigator, project search, git, folding, the integrated shell and
@@ -40,6 +49,22 @@ ycode-gui ~/code/project    # the same editor, in a window
   guides in both frontends.
 - **VS Code key bindings**, all rebindable in a commented `settings.json` that
   applies on save, with per-project overrides in `.ycode/settings.json`.
+
+## What it looks like
+
+Every shot below is the terminal frontend; the window draws the same panes with
+the same keys.
+
+The tour below runs in both frontends, a step at a time — the git panel, the
+diff, the file, project search, the markdown preview, and the themes.
+
+=== "Terminal"
+
+    ![The terminal frontend, in motion](assets/shots/tui-tour.gif)
+
+=== "Window"
+
+    ![The window frontend, in motion](assets/shots/gui-tour.gif)
 
 ## Where to go next
 

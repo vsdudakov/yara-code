@@ -9,6 +9,18 @@ frontend uses the same chords with `Ctrl` in place of `Cmd`, and `Ctrl+Shift`
 where the window has `Cmd+Shift`. Every command is rebindable in
 `settings.json` — the table is what you get out of the box.
 
+<kbd>F1</kbd> shows the whole table inside the editor. It is generated from the
+same bindings the editor dispatches on, so it never lists a chord you rebound.
+
+=== "Terminal"
+
+    ![The F1 overlay in the terminal frontend](../assets/shots/tui-keys.png)
+
+=== "Window"
+
+    ![The F1 overlay in the window frontend](../assets/shots/gui-keys.png)
+
+
 | Action | GUI | TUI |
 | --- | --- | --- |
 | New file / Open file | `Cmd+N` / `Cmd+O` | `Ctrl+N` / `Ctrl+O` |

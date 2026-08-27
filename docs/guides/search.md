@@ -13,6 +13,15 @@ Yara Code has two searches built from the same parts, so they look and behave al
 file; click or press <kbd>Enter</kbd> on a hit to jump to it, and the file opens
 with every match highlighted.
 
+=== "Terminal"
+
+    ![Project search in the terminal frontend](../assets/shots/tui-search.png)
+
+=== "Window"
+
+    ![Project search in the window frontend](../assets/shots/gui-search.png)
+
+
 Three fields, each with a lit heading over it: `SEARCH`, `REPLACE`, `EXCLUDE`.
 The toggles at the right of the heading row are `Aa` (match case), `ab` (whole
 word) and `.*` (regular expression) — VS Code's own.

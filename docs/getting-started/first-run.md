@@ -10,6 +10,15 @@ ycode ~/code/project       # opens that folder
 ycode-gui ~/code/project   # the same editor, in a window
 ```
 
+=== "Terminal"
+
+    ![The terminal frontend: navigator, tabs, editor, terminal panel, status bar](../assets/shots/tui-hero.png)
+
+=== "Window"
+
+    ![The window frontend, with the same panes](../assets/shots/gui-hero.png)
+
+
 ## The start page
 
 Launched without a path, Yara Code opens with **no project**. The editor shows a

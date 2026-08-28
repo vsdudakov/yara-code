@@ -59,8 +59,50 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Some(Overlay::RenameTab(text)) => {
             draw_prompt(frame, app, " RENAME TAB ", "name", text, area)
         }
+        Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, query, *row, area),
         None => {}
     }
+}
+
+/// Go to file: the query with a block cursor, then the best matches.
+fn draw_quick_open(frame: &mut Frame, app: &App, query: &str, row: usize, area: Rect) {
+    let ui = &app.theme.ui;
+    let dim = fg(ui.fg_dim);
+    frame.render_widget(Block::new().style(dim), area);
+    let hits = app.quick_open_hits(query);
+    let width = area.width.min(72);
+    let height = (hits.len().min(12) as u16 + 3).min(area.height.max(3));
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height,
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.accent))
+        .title(Line::styled(" GO TO FILE ", bold(ui.accent)))
+        .style(base(&app.theme));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("> ", dim),
+        Span::raw(query.to_string()),
+        Span::styled("█", fg(ui.cursor)),
+    ])];
+    let row = row.min(hits.len().saturating_sub(1));
+    let start = row.saturating_sub(10);
+    for (i, hit) in hits.iter().enumerate().skip(start).take(12) {
+        let mut line = Line::from(format!("  {hit}"));
+        if i == row {
+            line = line.style(Style::new().bg(color(ui.selected_bg)));
+        }
+        lines.push(line);
+    }
+    if hits.is_empty() {
+        lines.push(Line::styled("  no such file", dim));
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// A one-line question in a box: what is being asked, and what has been
@@ -145,20 +187,80 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
     let ui = &app.theme.ui;
+    let focused = app.focus == Focus::Files;
     let block = Block::bordered()
-        .border_style(fg(ui.border))
+        .border_style(fg(if focused { ui.fg_dim } else { ui.border }))
         .title(" FILES ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    if let Some(tree) = &app.tree {
+        let root = tree.root.clone();
+        let opened = app.editor.as_ref().map(|b| b.path.clone());
+        let touched = |path: &std::path::Path| {
+            path.strip_prefix(&root)
+                .ok()
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                .is_some_and(|rel| app.changes.iter().any(|c| c.path == rel))
+        };
+        let lines: Vec<Line> = tree
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let name = row
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let glyph = if row.is_dir {
+                    if tree
+                        .rows()
+                        .get(i + 1)
+                        .is_some_and(|next| next.depth > row.depth)
+                    {
+                        "▾"
+                    } else {
+                        "▸"
+                    }
+                } else {
+                    "▫"
+                };
+                let mut spans = vec![
+                    Span::raw("  ".repeat(row.depth)),
+                    Span::styled(format!("{glyph} "), fg(ui.fg_dim)),
+                ];
+                let changed = !row.is_dir && touched(&row.path);
+                spans.push(Span::styled(
+                    name,
+                    fg(if changed { ui.accent_dim } else { ui.fg }),
+                ));
+                if changed {
+                    spans.push(Span::styled(" ●", fg(ui.accent_dim)));
+                }
+                let mut line = Line::from(spans);
+                if focused && i == tree.selected {
+                    line = line.style(Style::new().bg(color(ui.selected_bg)));
+                } else if opened.as_deref() == Some(row.path.as_path()) {
+                    line = line.style(Style::new().bg(color(ui.accent_bg)));
+                }
+                line
+            })
+            .collect();
+        let scroll = tree
+            .selected
+            .saturating_sub(list.height.saturating_sub(1) as usize) as u16;
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list);
+    }
     let footer = format!(
         "{} hide · {} open",
         app.hint(Command::ToggleSidebar),
         app.hint(Command::MarkReviewed)
     );
-    if inner.height > 0 {
-        let last = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
-        frame.render_widget(Paragraph::new(Line::styled(footer, fg(ui.fg_dim))), last);
-    }
+    frame.render_widget(Paragraph::new(Line::styled(footer, fg(ui.fg_dim))), foot);
 }
 
 fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -236,6 +338,10 @@ fn cell_style(cell: &vt100::Cell, ui: &Ui, theme: &Theme) -> Style {
 }
 
 fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
+    if app.editor.is_some() {
+        draw_editor(frame, app, area);
+        return;
+    }
     let ui = &app.theme.ui;
     let dim = fg(ui.fg_dim);
     let focused = app.focus == Focus::Follow;
@@ -387,6 +493,100 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
     frame.render_widget(Paragraph::new(lines), body);
+}
+
+/// A file being edited where the follow pane was: its path, a dot while it
+/// is dirty, and the text coloured by its grammar with the caret in it.
+fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
+    let ui = &app.theme.ui;
+    let dim = fg(ui.fg_dim);
+    let focused = app.focus == Focus::Editor;
+    let Some(buffer) = &app.editor else { return };
+    let block = Block::bordered()
+        .border_style(fg(if focused { ui.accent } else { ui.border }))
+        .title(Line::styled(" EDIT ", bold(ui.accent)))
+        .title_top(
+            Line::styled(
+                format!(
+                    " {} save · {} close ",
+                    app.hint(Command::Save),
+                    app.hint(Command::Close)
+                ),
+                dim,
+            )
+            .right_aligned(),
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    let [file_row, body] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    let relative = app
+        .project
+        .as_deref()
+        .and_then(|root| buffer.path.strip_prefix(root).ok())
+        .unwrap_or(&buffer.path);
+    let language = app.syntax.language(buffer.extension());
+    let mut file = vec![
+        Span::styled(relative.display().to_string(), bold(ui.fg)),
+        Span::styled(if buffer.modified() { " ●" } else { "" }, fg(ui.accent)),
+    ];
+    shorten(
+        &mut file,
+        0,
+        (file_row.width as usize).saturating_sub(language.len() + 1),
+    );
+    let [name_area, language_area] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(language.len() as u16),
+    ])
+    .areas(file_row);
+    frame.render_widget(Paragraph::new(Line::from(file)), name_area);
+    frame.render_widget(Paragraph::new(Line::styled(language, dim)), language_area);
+
+    let (line, col) = buffer.line_col();
+    let height = body.height as usize;
+    let top = line.saturating_sub(height.saturating_sub(1));
+    let mut lines: Vec<Line> = Vec::new();
+    let mut number = 0;
+    app.syntax
+        .highlight(buffer.extension(), &buffer.text, |regions| {
+            number += 1;
+            if number <= top || lines.len() >= height {
+                return;
+            }
+            let mut spans = vec![Span::styled(format!("{number:>5}  "), dim)];
+            for region in regions {
+                let mut style = fg(region.color);
+                if region.italic {
+                    style = style.add_modifier(Modifier::ITALIC);
+                }
+                if region.bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                spans.push(Span::styled(
+                    region.text.trim_end_matches('\n').to_string(),
+                    style,
+                ));
+            }
+            lines.push(Line::from(spans));
+        });
+    // A file that ends in a newline has an empty last line the caret can
+    // stand on, which the highlighter does not emit.
+    if (buffer.text.is_empty() || buffer.text.ends_with('\n')) && lines.len() < height {
+        number += 1;
+        lines.push(Line::from(Span::styled(format!("{number:>5}  "), dim)));
+    }
+    frame.render_widget(Paragraph::new(lines), body);
+    if focused {
+        let x = body.x + 7 + col as u16;
+        let y = body.y + (line - top) as u16;
+        if x < body.right() && y < body.bottom() {
+            frame.set_cursor_position((x, y));
+        }
+    }
 }
 
 /// The file as it stands, with an accent bar beside every line the edit

@@ -4722,6 +4722,7 @@ dependencies = [
  "portable-pty",
  "serde",
  "serde_json",
+ "syntect",
  "vt100",
 ]
 

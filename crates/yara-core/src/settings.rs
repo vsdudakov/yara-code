@@ -117,6 +117,8 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::NextTab => "Ctrl+PageDown",
         Command::PrevTab => "Ctrl+PageUp",
         Command::RenameTab => "F2",
+        Command::Undo => "Ctrl+Z",
+        Command::Redo => "Ctrl+Shift+Z",
         Command::FollowLive => "F",
         Command::ScrubBack => "Left",
         Command::ScrubForward => "Right",
@@ -149,6 +151,9 @@ pub struct Settings {
     /// Where a new tab's worktree is made; empty means a `<repo>-worktrees`
     /// folder beside the repository.
     pub worktrees_dir: String,
+    /// Chords the agent keeps even though the editor binds them, because
+    /// the programs in that pane use them themselves.
+    pub agent_keys: Vec<Chord>,
     pub keys: Keys,
     /// Recently opened project folders, most recent first.
     pub recent_projects: Vec<PathBuf>,
@@ -171,6 +176,10 @@ impl Default for Settings {
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
+            agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z"]
+                .iter()
+                .filter_map(|c| c.parse().ok())
+                .collect(),
             keys: Keys::default(),
             recent_projects: Vec::new(),
             unreadable: false,
@@ -338,6 +347,11 @@ impl Settings {
   // beside the repository).
   "worktrees_dir": {worktrees_dir},
 
+  // With the agent focused, its own keys and every unbound one reach it;
+  // a bound Ctrl/Alt chord or function key is the editor's — except these,
+  // which the programs in that pane use themselves.
+  "agent_keys": {agent_keys},
+
   // Key bindings, command id to chord. Only bindings that differ from the
   // defaults need listing, for example  "keys": {{ "save": "Ctrl+D" }}.
   // Chords are Ctrl/Alt/Shift + a key: "Ctrl+Shift+F", "Ctrl+-", "Alt+Left",
@@ -360,6 +374,7 @@ impl Settings {
             refresh_ms = json(&self.refresh_ms),
             base_branch = json(&self.base_branch),
             worktrees_dir = json(&self.worktrees_dir),
+            agent_keys = json(&self.agent_keys),
             keys = json(&self.keys),
             recent_projects = json(&self.recent_projects),
             docs = crate::DOCUMENTATION,
@@ -552,6 +567,7 @@ mod tests {
             "\"refresh_ms\"",
             "\"base_branch\"",
             "\"worktrees_dir\"",
+            "\"agent_keys\"",
             "\"keys\"",
             "\"recent_projects\"",
         ] {

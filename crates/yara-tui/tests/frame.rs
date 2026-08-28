@@ -84,7 +84,7 @@ fn the_settings_place_the_agent_name_its_pane_and_the_sidebar() {
     assert!(rows[1].contains("FILES"));
     assert!(rows[1].contains("AGENT · codex"));
     assert!(rows[1].find("FOLLOW").unwrap() < rows[1].find("AGENT").unwrap());
-    assert!(rows[21].contains("^B hide · ⏎ open"));
+    assert!(rows[21].contains("^B hide · ⏎ open"), "{}", rows[21]);
 }
 
 #[test]
@@ -160,7 +160,13 @@ fn the_agent_runs_in_its_pane_takes_the_keys_and_f6_hands_them_to_follow() {
     assert!(app.follow.is_live());
     app.handle_key(key(KeyCode::F(6)));
     assert_eq!(app.focus, Focus::Agent);
-    // Ctrl+Shift+G is the editor's even with the agent focused.
+    // A bound Ctrl chord is the editor's even with the agent focused; one
+    // the agent uses itself is not.
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    assert!(
+        app.overlay.is_none() && app.note.is_none(),
+        "Ctrl+R went to cat"
+    );
     app.handle_key(KeyEvent::new(
         KeyCode::Char('g'),
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -322,7 +328,7 @@ fn the_agents_edits_reach_the_timeline_from_the_working_tree() {
     repo.file("src/main.rs", "fn main() {\n    let total = 1;\n}\n");
     app.refresh();
     let all = text(&mut app);
-    assert!(all.contains("src/main.rs +1 −1"));
+    assert!(all.contains("src/main.rs +1 −1"), "{all}");
     assert!(all.contains("    2 −     let x = 1;"));
     assert!(all.contains("    2 +     let total = 1;"));
     assert!(all.contains("◆ 1 unreviewed"));
@@ -453,4 +459,87 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     assert!(!app.should_quit);
     app.handle_key(ctrl_shift('w'));
     assert!(app.should_quit, "closing the last tab is quitting");
+}
+
+#[test]
+fn files_open_in_the_editor_type_save_and_close_back_to_follow() {
+    let repo = Repo::new("yara-frame-edit");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.refresh();
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    app.handle_key(ctrl('b'));
+    assert_eq!(app.focus, Focus::Files);
+    let all = text(&mut app);
+    assert!(all.contains("▸ src"), "{all}");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(text(&mut app).contains("▾ src"));
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.focus, Focus::Editor);
+    let all = text(&mut app);
+    assert!(all.contains(" EDIT "), "{all}");
+    assert!(all.contains("src/main.rs") && all.contains("Rust"), "{all}");
+    assert!(all.contains("    1  fn main() {"));
+    assert!(!all.contains("main.rs ●"), "clean");
+
+    // Typing goes into the file — `f` is not follow's here.
+    app.handle_key(key(KeyCode::Char('f')));
+    app.handle_key(key(KeyCode::Enter));
+    let all = text(&mut app);
+    assert!(all.contains("main.rs ●"), "dirty: {all}");
+    assert!(all.contains("    1  f"));
+    assert!(all.contains("    2  fn main() {"));
+    app.handle_key(ctrl('z'));
+    assert!(!text(&mut app).contains("main.rs ●"), "undone");
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('z'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert!(text(&mut app).contains("main.rs ●"), "redone");
+    app.handle_key(ctrl('s'));
+    let all = text(&mut app);
+    assert!(all.contains("✓ saved"), "{all}");
+    assert!(std::fs::read_to_string(repo.0.join("src/main.rs"))
+        .unwrap()
+        .starts_with("f\nfn main"));
+    // The agent's edits are told apart from the user's own: the tree tints
+    // what changed and the timeline shows the save.
+    app.refresh();
+    assert!(text(&mut app).contains("main.rs ●"), "{}", text(&mut app));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.focus, Focus::Follow);
+    assert!(text(&mut app).contains("FOLLOW · LIVE"));
+    assert_eq!(app.follow.len(), 1);
+}
+
+#[test]
+fn ctrl_p_finds_a_file_by_a_few_letters() {
+    let repo = Repo::new("yara-frame-quick");
+    repo.file("docs/guide.md", "# guide\n");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    let all = text(&mut app);
+    assert!(all.contains("GO TO FILE"), "{all}");
+    assert!(all.contains("docs/guide.md") && all.contains("src/main.rs"));
+    for c in "gd".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let all = text(&mut app);
+    assert!(all.contains("> gd█"));
+    assert!(!all.contains("src/main.rs"));
+    app.handle_key(key(KeyCode::Enter));
+    let shown = text(&mut app);
+    assert_eq!(app.focus, Focus::Editor, "{shown}");
+    assert!(shown.contains("guide.md"), "{shown}");
+    assert!(
+        app.tree
+            .as_ref()
+            .unwrap()
+            .selected_row()
+            .unwrap()
+            .path
+            .ends_with("guide.md"),
+        "revealed"
+    );
 }

@@ -2,15 +2,20 @@
 //! shows but does not itself draw. Ported from the legacy `src/core` one
 //! module at a time, each with its tests; nothing here may depend on it.
 
+pub mod buffer;
 pub mod command;
 pub mod follow;
+pub mod fuzzy;
 pub mod git;
+pub mod history;
 pub mod keyboard;
 pub mod pty;
 pub mod settings;
+pub mod syntax;
 #[cfg(test)]
 pub mod test_support;
 pub mod theme;
+pub mod tree;
 
 use std::path::PathBuf;
 

@@ -8,12 +8,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crossterm::event::{KeyCode, KeyEvent};
+use yara_core::buffer::Buffer;
 use yara_core::command::{Chord, Command, Key};
 use yara_core::follow::{EditEvent, Follow};
+use yara_core::fuzzy;
 use yara_core::git::{self, Change, Repo, Watcher};
 use yara_core::pty::Pty;
 use yara_core::settings::Settings;
+use yara_core::syntax::Syntax;
 use yara_core::theme::{self, Theme};
+use yara_core::tree::{self, Tree};
 
 use crate::keys::chord_of;
 
@@ -22,6 +26,10 @@ use crate::keys::chord_of;
 pub enum Focus {
     Agent,
     Follow,
+    Files,
+    /// A file open in place of the follow pane; only Save, Close, Undo and
+    /// Redo are the editor's from here, every other key is typing.
+    Editor,
 }
 
 /// What the FOLLOW pane's body shows of the current edit.
@@ -40,6 +48,8 @@ pub enum Overlay {
     NewTab(String),
     /// A name being typed for the current tab.
     RenameTab(String),
+    /// Go to file: what was typed, and the row the cursor is on.
+    QuickOpen(String, usize),
 }
 
 /// One agent in one worktree.
@@ -55,6 +65,10 @@ pub struct Session {
     /// timeline's current edit until the follow keys are used again.
     pub pinned: Option<EditEvent>,
     pub view: View,
+    /// The project's files, for the sidebar.
+    pub tree: Option<Tree>,
+    /// A file open for editing, in the follow pane's place.
+    pub editor: Option<Buffer>,
     /// A name the user gave the tab; otherwise it is named by its work.
     pub name: Option<String>,
     /// The pull request the branch is on, asked of `gh` in the background.
@@ -76,6 +90,7 @@ impl Session {
             });
         }
         Self {
+            tree: project.clone().map(Tree::new),
             project,
             repo,
             agent: None,
@@ -84,6 +99,7 @@ impl Session {
             follow: Follow::default(),
             pinned: None,
             view: View::Diff,
+            editor: None,
             name: None,
             pr,
         }
@@ -125,6 +141,7 @@ impl Session {
 pub struct App {
     pub settings: Settings,
     pub theme: Theme,
+    pub syntax: Syntax,
     pub sessions: Vec<Session>,
     pub active: usize,
     /// Set by an agent's reader thread when there is something new to draw.
@@ -176,6 +193,7 @@ impl App {
             active: 0,
             show_sidebar: settings.show_sidebar,
             settings,
+            syntax: Syntax::new(&theme),
             theme,
             dirty: Arc::new(AtomicBool::new(true)),
             focus: Focus::Agent,
@@ -249,6 +267,43 @@ impl App {
         self.overlay = None;
     }
 
+    /// Opens a file in the follow pane's place, the keyboard on it.
+    pub fn open_file(&mut self, path: &std::path::Path) {
+        match Buffer::open(path) {
+            Ok(buffer) => {
+                self.editor = Some(buffer);
+                self.focus = Focus::Editor;
+                if let Some(tree) = self.tree.as_mut() {
+                    tree.reveal(path);
+                }
+            }
+            Err(e) => self.note = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    fn save(&mut self) {
+        let Some(buffer) = self.editor.as_mut() else {
+            return;
+        };
+        self.note = Some(match buffer.save() {
+            Ok(()) => format!("✓ saved {}", buffer.path.display()),
+            Err(e) => format!("{}: {e}", buffer.path.display()),
+        });
+    }
+
+    /// The files the finder offers for what was typed, best first.
+    pub fn quick_open_hits(&self, query: &str) -> Vec<String> {
+        let Some(root) = &self.project else {
+            return Vec::new();
+        };
+        let files = tree::all_files(root);
+        fuzzy::rank(query, files.iter().map(String::as_str))
+            .into_iter()
+            .take(50)
+            .map(|(_, s)| s.to_string())
+            .collect()
+    }
+
     /// A new tab: a worktree of the current repository on a branch of that
     /// name, with an agent started in it.
     fn new_tab(&mut self, name: &str) {
@@ -298,6 +353,35 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::QuickOpen(mut query, row)) => {
+                match key.code {
+                    KeyCode::Up => {
+                        self.overlay = Some(Overlay::QuickOpen(query, row.saturating_sub(1)))
+                    }
+                    KeyCode::Down => self.overlay = Some(Overlay::QuickOpen(query, row + 1)),
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        if let Some((root, hit)) = self
+                            .project
+                            .clone()
+                            .zip(self.quick_open_hits(&query).get(row).cloned())
+                        {
+                            self.open_file(&root.join(hit));
+                        }
+                    }
+                    _ if closes => self.overlay = None,
+                    KeyCode::Backspace => {
+                        query.pop();
+                        self.overlay = Some(Overlay::QuickOpen(query, 0));
+                    }
+                    KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
+                        query.push(c);
+                        self.overlay = Some(Overlay::QuickOpen(query, 0));
+                    }
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::NewTab(mut text)) | Some(Overlay::RenameTab(mut text)) => {
                 let renaming = matches!(self.overlay, Some(Overlay::RenameTab(_)));
                 match key.code {
@@ -333,31 +417,123 @@ impl App {
             }
             None => {}
         }
-        // The agent keeps every key a program inside it could want — plain
-        // keys, Ctrl+letter, Escape, Tab — so its own editor and prompts
-        // work. Function keys and Ctrl+Shift / Ctrl+Alt chords mean nothing
-        // to it, and are how the editor is reached from inside.
-        if self.focus == Focus::Agent && !shell_has_no_use_for(&chord) {
-            if let Some(pty) = self.agent.as_mut() {
-                pty.send_key(&chord.key, chord.mods);
+        let command = self.settings.command(&chord);
+        // The agent keeps every plain key, Enter, Escape, Tab and the arrows,
+        // whatever the editor binds them to — they are how it is talked to —
+        // and every chord nobody bound. A bound Ctrl or Alt chord, or a
+        // function key, is the editor's, unless the settings say the agent
+        // uses it itself.
+        if self.focus == Focus::Agent {
+            let editors = command.is_some()
+                && (chord.mods.ctrl || chord.mods.alt || shell_has_no_use_for(&chord))
+                && !self.settings.agent_keys.contains(&chord);
+            if !editors {
+                if let Some(pty) = self.agent.as_mut() {
+                    pty.send_key(&chord.key, chord.mods);
+                }
+                return;
+            }
+        }
+        if self.focus == Focus::Editor {
+            let editors_own = matches!(
+                command,
+                Some(Command::Save | Command::Close | Command::Undo | Command::Redo)
+            ) || command.is_some_and(|_| shell_has_no_use_for(&chord));
+            if !editors_own {
+                self.edit_key(key, &chord);
+                return;
+            }
+        }
+        if self.focus == Focus::Files && command.is_none() {
+            let Some(tree) = self.tree.as_mut() else {
+                return;
+            };
+            match key.code {
+                KeyCode::Up => tree.move_selection(-1),
+                KeyCode::Down => tree.move_selection(1),
+                _ => {}
             }
             return;
         }
-        if let Some(command) = self.settings.command(&chord) {
+        if let Some(command) = command {
             self.execute(command);
+        }
+    }
+
+    /// A key typed into the open file.
+    fn edit_key(&mut self, key: KeyEvent, chord: &Chord) {
+        let Some(buffer) = self.editor.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
+                buffer.insert(&c.to_string())
+            }
+            KeyCode::Enter => buffer.insert("\n"),
+            KeyCode::Tab => buffer.insert("    "),
+            KeyCode::Backspace => buffer.backspace(),
+            KeyCode::Delete => buffer.delete(),
+            KeyCode::Left => buffer.left(),
+            KeyCode::Right => buffer.right(),
+            KeyCode::Up => buffer.up(),
+            KeyCode::Down => buffer.down(),
+            KeyCode::Home => buffer.home(),
+            KeyCode::End => buffer.end(),
+            _ => {}
         }
     }
 
     pub fn execute(&mut self, command: Command) {
         match command {
             Command::Quit => self.should_quit = true,
-            Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ToggleSidebar => {
+                self.show_sidebar = !self.show_sidebar;
+                self.focus = if self.show_sidebar {
+                    Focus::Files
+                } else if self.editor.is_some() {
+                    Focus::Editor
+                } else {
+                    Focus::Agent
+                };
+            }
             Command::NextPane => {
+                let has_editor = self.editor.is_some();
                 self.focus = match self.focus {
-                    Focus::Agent => Focus::Follow,
-                    Focus::Follow => Focus::Agent,
+                    Focus::Agent if self.show_sidebar => Focus::Files,
+                    Focus::Agent | Focus::Files if has_editor => Focus::Editor,
+                    Focus::Agent | Focus::Files => Focus::Follow,
+                    Focus::Follow | Focus::Editor => Focus::Agent,
                 }
             }
+            Command::Save => self.save(),
+            Command::Undo => {
+                if let Some(b) = self.editor.as_mut() {
+                    b.undo()
+                }
+            }
+            Command::Redo => {
+                if let Some(b) = self.editor.as_mut() {
+                    b.redo()
+                }
+            }
+            Command::QuickOpen => self.overlay = Some(Overlay::QuickOpen(String::new(), 0)),
+            // Enter in the files pane opens what is under the cursor.
+            Command::MarkReviewed if self.focus == Focus::Files => {
+                let Some(tree) = self.tree.as_mut() else {
+                    return;
+                };
+                match tree.selected_row() {
+                    Some(row) if row.is_dir => tree.toggle_selected(),
+                    Some(row) => {
+                        let path = row.path.clone();
+                        self.open_file(&path);
+                    }
+                    None => {}
+                }
+            }
+            Command::ScrubBack if self.focus == Focus::Files => {}
+            Command::ScrubForward if self.focus == Focus::Files => {}
+            Command::FollowLive | Command::ToggleView if self.focus == Focus::Files => {}
             Command::Changes => self.overlay = Some(Overlay::Changes(0)),
             Command::NewTab => self.overlay = Some(Overlay::NewTab(String::new())),
             Command::RenameTab => self.overlay = Some(Overlay::RenameTab(String::new())),
@@ -372,6 +548,10 @@ impl App {
             Command::NextTab => self.active = (self.active + 1) % self.sessions.len(),
             Command::PrevTab => {
                 self.active = (self.active + self.sessions.len() - 1) % self.sessions.len()
+            }
+            Command::Close if self.editor.is_some() => {
+                self.editor = None;
+                self.focus = Focus::Follow;
             }
             Command::Close => self.pinned = None,
             Command::ToggleView => {

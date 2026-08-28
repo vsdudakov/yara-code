@@ -592,9 +592,124 @@ impl Terminals {
     }
 }
 
+/// A URL found on the screen: the address, and the cells it occupies as
+/// `(row, first column, one past the last)` — several when it wrapped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub url: String,
+    pub spans: Vec<(usize, usize, usize)>,
+}
+
+/// The URL under a cell, if any, where `rows` is the screen as rows of
+/// exactly the grid's width. An agent prints the pull request it just opened
+/// and the address runs off the right edge onto the next row; a row that is
+/// full to its last column is read as continuing into the one under it, so
+/// the whole address is found and every row it crosses is reported.
+pub fn link_at(rows: &[String], row: usize, col: usize) -> Option<Link> {
+    let width = rows.get(row)?.chars().count();
+    let full = |r: usize| rows[r].chars().last().is_some_and(|c| !c.is_whitespace());
+    let mut first = row;
+    while first > 0 && full(first - 1) {
+        first -= 1;
+    }
+    let mut last = row;
+    while last + 1 < rows.len() && full(last) {
+        last += 1;
+    }
+    let joined: Vec<char> = rows[first..=last].iter().flat_map(|r| r.chars()).collect();
+    let at = (row - first) * width + col;
+
+    // Walk back to where a word starts and forward to where it ends; a URL
+    // is a word that begins with a scheme.
+    let boundary = |c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`');
+    if at >= joined.len() || boundary(joined[at]) {
+        return None;
+    }
+    let mut start = at;
+    while start > 0 && !boundary(joined[start - 1]) {
+        start -= 1;
+    }
+    let mut end = at;
+    while end < joined.len() && !boundary(joined[end]) {
+        end += 1;
+    }
+    let word: String = joined[start..end].iter().collect();
+    let scheme = word.find("http://").or_else(|| word.find("https://"))?;
+    // A closing bracket or full stop at the end belongs to the sentence
+    // around the address, not to it — unless a bracket is open inside it.
+    let mut url = &word[scheme..];
+    loop {
+        let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '\'', '"']);
+        let trimmed = match trimmed.chars().last() {
+            Some(')') if trimmed.matches('(').count() < trimmed.matches(')').count() => {
+                &trimmed[..trimmed.len() - 1]
+            }
+            Some(']') if trimmed.matches('[').count() < trimmed.matches(']').count() => {
+                &trimmed[..trimmed.len() - 1]
+            }
+            _ => trimmed,
+        };
+        if trimmed.len() == url.len() {
+            break;
+        }
+        url = trimmed;
+    }
+    let start = start + word[..scheme].chars().count();
+    let end = start + url.chars().count();
+    if !(start..end).contains(&at) {
+        return None;
+    }
+    let mut spans = Vec::new();
+    for r in first..=last {
+        let row_start = (r - first) * width;
+        let row_end = row_start + width;
+        let from = start.max(row_start);
+        let to = end.min(row_end);
+        if from < to {
+            spans.push((r, from - row_start, to - row_start));
+        }
+    }
+    Some(Link {
+        url: url.to_string(),
+        spans,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn screen(rows: &[&str], width: usize) -> Vec<String> {
+        rows.iter().map(|r| format!("{r:<width$}")).collect()
+    }
+
+    #[test]
+    fn a_url_is_found_under_any_of_its_cells() {
+        let rows = screen(&["see https://example.com/a?b=1. now", "next"], 40);
+        let link = link_at(&rows, 0, 10).unwrap();
+        assert_eq!(link.url, "https://example.com/a?b=1");
+        assert_eq!(link.spans, vec![(0, 4, 29)]);
+        assert_eq!(link_at(&rows, 0, 28).unwrap().url, link.url);
+        assert!(link_at(&rows, 0, 29).is_none(), "the full stop is prose");
+        assert!(link_at(&rows, 0, 1).is_none());
+        assert!(link_at(&rows, 1, 0).is_none());
+    }
+
+    #[test]
+    fn a_url_that_wraps_is_read_across_the_rows() {
+        let rows = screen(&["PR: https://github.com/o/r/pu", "ll/42 is open", ""], 29);
+        let link = link_at(&rows, 1, 2).unwrap();
+        assert_eq!(link.url, "https://github.com/o/r/pull/42");
+        assert_eq!(link.spans, vec![(0, 4, 29), (1, 0, 5)]);
+        assert_eq!(link_at(&rows, 0, 6).unwrap(), link);
+    }
+
+    #[test]
+    fn brackets_around_a_url_are_not_part_of_it() {
+        let rows = screen(&["(https://x.io/a_(b)) <https://y.io>"], 40);
+        assert_eq!(link_at(&rows, 0, 5).unwrap().url, "https://x.io/a_(b)");
+        assert_eq!(link_at(&rows, 0, 24).unwrap().url, "https://y.io");
+    }
 
     /// Two shells in a scratch directory. Spawning a real PTY is the point:
     /// the tab bookkeeping only means anything over live sessions.

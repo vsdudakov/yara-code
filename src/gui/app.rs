@@ -565,8 +565,9 @@ impl App {
     }
 
     /// The start page: what fills the editor while nothing is open — the
-    /// name, the folder in play, and the keys that are actually bound.
-    fn start_page(&self, ui: &mut egui::Ui, theme: &Theme) -> Option<Command> {
+    /// name, the folder in play, and the keys that are actually bound. It
+    /// reads as a reference card, not a menu: nothing on it is clickable.
+    fn start_page(&self, ui: &mut egui::Ui, theme: &Theme) {
         let chord = |command| self.settings.gui_chord(command).map(|c| c.to_string());
         let project = match self.project.root() {
             Some(root) => Project::name_of(root),
@@ -588,7 +589,7 @@ impl App {
 
         struct Group {
             name: String,
-            rows: Vec<(String, &'static str, Command)>,
+            rows: Vec<(String, &'static str)>,
             chords: f32,
             width: f32,
         }
@@ -597,20 +598,20 @@ impl App {
         let groups: Vec<Group> = START_PAGE
             .iter()
             .filter_map(|(name, commands)| {
-                let rows: Vec<(String, &'static str, Command)> = commands
+                let rows: Vec<(String, &'static str)> = commands
                     .iter()
-                    .filter_map(|command| Some((chord(*command)?, command.label(), *command)))
+                    .filter_map(|command| Some((chord(*command)?, command.label())))
                     .collect();
                 if rows.is_empty() {
                     return None;
                 }
                 let chords = rows
                     .iter()
-                    .map(|(chord, _, _)| width_of(chord, &chord_font))
+                    .map(|(chord, _)| width_of(chord, &chord_font))
                     .fold(0.0, f32::max);
                 let labels = rows
                     .iter()
-                    .map(|(_, label, _)| width_of(label, &label_font))
+                    .map(|(_, label)| width_of(label, &label_font))
                     .fold(0.0, f32::max);
                 Some(Group {
                     name: name.to_uppercase(),
@@ -621,9 +622,8 @@ impl App {
             })
             .collect();
         if groups.is_empty() {
-            return None;
+            return;
         }
-        let mut clicked = None;
         let block =
             groups.iter().map(|g| g.width).sum::<f32>() + COLUMN_GAP * (groups.len() - 1) as f32;
         let tallest = groups.iter().map(|g| g.rows.len()).max().unwrap_or(0);
@@ -636,7 +636,7 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.add_space(top);
             ui.label(
-                egui::RichText::new("YARA CODE")
+                egui::RichText::new("YCODE")
                     .color(color(theme.ui.accent_light))
                     .size(30.0)
                     .strong(),
@@ -664,10 +664,8 @@ impl App {
                                 .size(10.0)
                                 .strong(),
                         );
-                        for (key, label, command) in &group.rows {
-                            // Each row is the action it names: a click runs
-                            // it, so the page is a menu, not a manual.
-                            let row = ui.horizontal(|ui| {
+                        for (key, label) in &group.rows {
+                            ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 ui.label(
                                     egui::RichText::new(key)
@@ -678,24 +676,12 @@ impl App {
                                 // pad each chord out to the widest one.
                                 let used = width_of(key, &chord_font);
                                 ui.add_space(group.chords - used + KEY_GAP);
-                                let hovered = ui.rect_contains_pointer(ui.max_rect());
                                 ui.label(
                                     egui::RichText::new(*label)
-                                        .color(color(if hovered {
-                                            theme.ui.fg
-                                        } else {
-                                            theme.ui.fg_faint
-                                        }))
+                                        .color(color(theme.ui.fg_faint))
                                         .font(label_font.clone()),
                                 );
                             });
-                            let response = row.response.interact(egui::Sense::click());
-                            if response.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            if response.clicked() {
-                                clicked = Some(*command);
-                            }
                         }
                     },
                 );
@@ -704,7 +690,6 @@ impl App {
                 }
             }
         });
-        clicked
     }
 
     // ----- native dialogs --------------------------------------------------
@@ -2756,10 +2741,7 @@ impl App {
                 self.find_bar(ui, &theme);
                 if self.editor.buffers.is_empty() {
                     ui.add_space(8.0);
-                    if let Some(command) = self.start_page(ui, &theme) {
-                        let ctx = ui.ctx().clone();
-                        self.execute(&ctx, command);
-                    }
+                    self.start_page(ui, &theme);
                 } else {
                     self.editor.ui(
                         ui,

@@ -101,9 +101,26 @@ pub struct Diff {
     pub rows: Vec<diff::Row>,
     /// First row drawn.
     pub scroll: usize,
+    /// The change the review is on: what the arrows step from, and what
+    /// the view is centred on when they do.
+    pub focus: usize,
+    /// The rows coloured by the file's grammar, one entry per row; empty
+    /// until `recolour` has run, and the rows then read in plain text.
+    pub styled: Vec<(Vec<diff::Styled>, Vec<diff::Styled>)>,
     /// How much of the width the old version gets, as a share — the seam is
     /// dragged, and a share survives the pane being resized around it.
     pub split: f32,
+}
+
+impl Diff {
+    /// Colours the rows the way the editor would colour the file.
+    pub fn recolour(&mut self, syntax: &crate::core::syntax::Syntax) {
+        let extension = Path::new(&self.path)
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.styled = diff::highlight(syntax, &extension, &self.rows);
+    }
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -414,8 +431,6 @@ pub const TAB_SCROLL_STEP: u16 = 12;
 
 #[derive(Default, Clone)]
 pub struct Layout {
-    /// The start page's rows, each the command it names.
-    pub start_rows: Vec<(Rect, Command)>,
     pub sidebar: Rect,
     pub sidebar_header: Rect,
     pub tree: Rect,
@@ -1894,18 +1909,6 @@ impl App {
         if !hits(self.layout.shell, x, y) {
             self.shell.clear_selection();
         }
-        if self.prompt.is_none() && self.buffers.is_empty() {
-            if let Some((_, command)) = self
-                .layout
-                .start_rows
-                .iter()
-                .find(|(rect, _)| hits(*rect, x, y))
-            {
-                self.execute(*command);
-                return;
-            }
-        }
-
         // Prompt list selection.
         if self.prompt.is_some() && hits(self.layout.prompt_list, x, y) {
             let row = (y - self.layout.prompt_list.y) as usize;
@@ -3085,6 +3088,7 @@ impl App {
             self.theme_index = index;
             self.syntax.set_theme(&self.themes[index]);
             self.mark_dirty();
+            self.recolour_diffs();
         }
         self.icons = icons::detect();
         self.status = match error {
@@ -3675,12 +3679,16 @@ impl App {
         };
         match core_git::diff(&dir, &change) {
             Ok(rows) => {
-                let diff = Diff {
+                let focus = diff::first_change(&rows).unwrap_or(0);
+                let mut diff = Diff {
                     split: 0.5,
                     path: change.path.clone(),
+                    scroll: diff::top_for(focus, self.layout.editor.height as usize),
+                    focus,
                     rows,
-                    scroll: 0,
+                    styled: Vec::new(),
                 };
+                diff.recolour(&self.syntax);
                 match self.diffs.iter().position(|d| d.path == diff.path) {
                     Some(i) => {
                         self.diffs[i] = diff;
@@ -3786,6 +3794,13 @@ impl App {
         }
     }
 
+    /// A theme brings its own colours: every open diff is coloured again.
+    fn recolour_diffs(&mut self) {
+        for diff in &mut self.diffs {
+            diff.recolour(&self.syntax);
+        }
+    }
+
     /// Moves the diff on to the next run of changed rows, or back to the one
     /// before it, stopping at the ends. Reviewing a diff is going change to
     /// change, so it is what the arrow keys and the header's own arrows do.
@@ -3797,11 +3812,12 @@ impl App {
             return;
         };
         let last = diff.rows.len().saturating_sub(1);
-        diff.scroll = if forward {
-            diff_of::next_change(&diff.rows, diff.scroll).unwrap_or(last)
+        diff.focus = if forward {
+            diff_of::next_change(&diff.rows, diff.focus).unwrap_or(last)
         } else {
-            diff_of::previous_change(&diff.rows, diff.scroll).unwrap_or(0)
+            diff_of::previous_change(&diff.rows, diff.focus).unwrap_or(0)
         };
+        diff.scroll = diff_of::top_for(diff.focus, self.layout.editor.height as usize);
     }
 
     fn diff_key(&mut self, key: KeyEvent) {
@@ -4179,6 +4195,7 @@ impl App {
                 self.theme_index = self.prompt_selected.min(self.themes.len() - 1);
                 self.syntax.set_theme(&self.themes[self.theme_index]);
                 self.mark_dirty();
+                self.recolour_diffs();
                 self.settings.theme = self.themes[self.theme_index].name.clone();
                 let _ = self.settings.save();
                 self.status = format!("theme: {}", self.themes[self.theme_index].name);
@@ -4281,6 +4298,8 @@ mod tests {
             path: "Cargo.toml".into(),
             rows: Vec::new(),
             scroll: 0,
+            focus: 0,
+            styled: Vec::new(),
             split: 0.5,
         });
         app.active_diff = Some(0);
@@ -4302,27 +4321,34 @@ mod tests {
             path: "counts.txt".into(),
             rows: diff::from_unified(unified),
             scroll: 0,
+            focus: 0,
+            styled: Vec::new(),
             split: 0.5,
         });
         app.active_diff = Some(0);
-        // Forward to the first change, then to the second.
+        // Forward to the first change, then to the second. The view is
+        // centred on each: the top row is half a pane above the change.
+        app.layout.editor.height = 4;
         app.step_change(true);
-        let first = app.active_diff().expect("the diff").scroll;
+        let first = app.active_diff().expect("the diff").focus;
         assert_eq!(app.diffs[0].rows[first].kind, diff::Kind::Changed);
+        assert_eq!(app.diffs[0].scroll, first.saturating_sub(2));
         app.step_change(true);
-        let second = app.active_diff().expect("the diff").scroll;
+        let second = app.active_diff().expect("the diff").focus;
+        assert_eq!(app.diffs[0].scroll, second - 2);
         assert!(second > first);
         assert_eq!(app.diffs[0].rows[second].kind, diff::Kind::Changed);
         // And back, to the one before it.
         app.step_change(false);
-        assert_eq!(app.active_diff().expect("the diff").scroll, first);
+        assert_eq!(app.active_diff().expect("the diff").focus, first);
         // The ends hold: past the last change is the last change, and past the
         // first is the top of the file.
         app.step_change(true);
         app.step_change(true);
-        assert_eq!(app.active_diff().expect("the diff").scroll, second);
+        assert_eq!(app.active_diff().expect("the diff").focus, second);
         app.step_change(false);
         app.step_change(false);
+        assert_eq!(app.active_diff().expect("the diff").focus, 0);
         assert_eq!(app.active_diff().expect("the diff").scroll, 0);
     }
 

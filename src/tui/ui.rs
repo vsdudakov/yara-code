@@ -156,10 +156,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         reset_git_rects(app);
     }
     draw_tab_strip(frame, app, tab_row);
-    // The start page's rows only exist while the start page is what's in
-    // front; a diff or preview opened over an empty editor must not leave
-    // them live for a click to land on.
-    app.layout.start_rows.clear();
     if app.active_preview().is_some() {
         draw_preview(frame, app, editor_area);
     } else if app.active_diff().is_some() {
@@ -795,7 +791,6 @@ fn draw_tree(frame: &mut Frame, app: &mut App, area: Rect) {
 /// folder in play, and the keys that are actually bound, in the same groups the
 /// window shows. Groups are packed into as many columns as the pane affords.
 fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
-    app.layout.start_rows.clear();
     let theme = app.theme().clone();
     frame.render_widget(
         Block::default().style(on(theme.ui.fg, theme.ui.editor_bg)),
@@ -807,18 +802,18 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
     let chord = |command| app.settings.tui_chord(command).map(|c| c.to_string());
 
     // One block per group: its heading, then a line per bound key.
-    let mut blocks: Vec<Vec<(String, String, Option<Command>)>> = Vec::new();
+    let mut blocks: Vec<Vec<(String, String)>> = Vec::new();
     for (name, commands) in START_PAGE {
-        let mut rows: Vec<(String, String, Option<Command>)> = Vec::new();
+        let mut rows: Vec<(String, String)> = Vec::new();
         for command in *commands {
             if let Some(chord) = chord(*command) {
-                rows.push((chord, command.label().to_string(), Some(*command)));
+                rows.push((chord, command.label().to_string()));
             }
         }
         if rows.is_empty() {
             continue;
         }
-        rows.insert(0, (String::new(), name.to_uppercase(), None));
+        rows.insert(0, (String::new(), name.to_uppercase()));
         blocks.push(rows);
     }
     if blocks.is_empty() {
@@ -828,13 +823,13 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
     let chord_width = blocks
         .iter()
         .flatten()
-        .map(|(chord, _, _)| chord.chars().count())
+        .map(|(chord, _)| chord.chars().count())
         .max()
         .unwrap_or(0);
     let column_width = blocks
         .iter()
         .flatten()
-        .map(|(chord, label, _)| {
+        .map(|(chord, label)| {
             if chord.is_empty() {
                 label.chars().count()
             } else {
@@ -862,25 +857,21 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
     let plain = on(theme.ui.fg_faint, theme.ui.editor_bg);
 
     // Each column is a list of styled cells; columns are then zipped into rows.
-    let mouse = app.mouse;
-    let mut grid: Vec<Vec<(Vec<Span>, Option<Command>)>> = Vec::new();
+    let mut grid: Vec<Vec<Vec<Span>>> = Vec::new();
     for chunk in blocks.chunks(per_column) {
-        let mut cells: Vec<(Vec<Span>, Option<Command>)> = Vec::new();
+        let mut cells: Vec<Vec<Span>> = Vec::new();
         for (i, rows) in chunk.iter().enumerate() {
             if i > 0 {
-                cells.push((Vec::new(), None));
+                cells.push(Vec::new());
             }
-            for (chord, label, command) in rows {
+            for (chord, label) in rows {
                 if chord.is_empty() {
-                    cells.push((vec![Span::styled(label.clone(), group)], None));
+                    cells.push(vec![Span::styled(label.clone(), group)]);
                 } else {
-                    cells.push((
-                        vec![
-                            Span::styled(format!("{chord:<chord_width$}  "), key),
-                            Span::styled(label.clone(), plain),
-                        ],
-                        *command,
-                    ));
+                    cells.push(vec![
+                        Span::styled(format!("{chord:<chord_width$}  "), key),
+                        Span::styled(label.clone(), plain),
+                    ]);
                 }
             }
         }
@@ -908,7 +899,7 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
     if head_room > body_height + 4 {
         lines.push(Line::from(vec![
             Span::styled(left.clone(), plain),
-            Span::styled("YARA CODE", title),
+            Span::styled("YCODE", title),
         ]));
         for (text, style) in header {
             lines.push(Line::from(vec![
@@ -917,33 +908,11 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
             ]));
         }
     }
-    let header_rows = lines.len();
     for row in 0..body_height {
         let mut spans = vec![Span::styled(left.clone(), plain)];
         for (i, column) in grid.iter().enumerate() {
-            let (mut cell, command) = column.get(row).cloned().unwrap_or_default();
+            let cell = column.get(row).cloned().unwrap_or_default();
             let used: usize = cell.iter().map(|s| s.content.chars().count()).sum();
-            // Each row is the action it names: a click runs it, so the page
-            // is a menu, not a manual. Where it lands is only known once the
-            // block's top is, so the rect is filled in below.
-            if let Some(command) = command {
-                let x = area.x + (left.chars().count() + i * (column_width + GAP)) as u16;
-                let rect = Rect {
-                    x,
-                    y: (header_rows + row) as u16,
-                    width: used as u16,
-                    height: 1,
-                };
-                app.layout.start_rows.push((rect, command));
-                let hovered = mouse.is_some_and(|(mx, my)| {
-                    my == rect.y && mx >= rect.x && mx < rect.x + rect.width
-                });
-                if hovered {
-                    if let Some(last) = cell.last_mut() {
-                        *last = Span::styled(last.content.to_string(), key);
-                    }
-                }
-            }
             spans.extend(cell);
             let tail = if i + 1 == grid.len() {
                 0
@@ -956,9 +925,6 @@ fn draw_start_page(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     // Sit a little above center, the way the window's start page does.
     let top = (area.height as usize).saturating_sub(lines.len()) / 3;
-    for (rect, _) in &mut app.layout.start_rows {
-        rect.y += area.y + top as u16;
-    }
     let mut out: Vec<Line> = vec![Line::from(""); top];
     out.extend(lines);
     frame.render_widget(Paragraph::new(out), area);
@@ -1542,32 +1508,61 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
     let lines: Vec<Line> = diff
         .rows
         .iter()
+        .enumerate()
         .skip(diff.scroll)
         .take(area.height as usize)
-        .map(|row| {
-            let side = |cell: Option<&diff::Side>, tint: Option<(u8, u8, u8)>, width: u16| {
+        .map(|(index, row)| {
+            let styled = diff.styled.get(index);
+            let side = |cell: Option<&diff::Side>,
+                        runs: Option<&[diff::Styled]>,
+                        tint: Option<(u8, u8, u8)>,
+                        width: u16| {
                 let text_width = (width as usize).saturating_sub(number_width + 2);
                 let bg = match tint {
                     Some(rgb) => wash(rgb, theme.ui.editor_bg),
                     None => theme.ui.editor_bg,
                 };
-                match cell {
-                    Some(cell) => vec![
-                        Span::styled(
-                            format!("{:>width$} ", cell.line, width = number_width),
-                            on(tint.unwrap_or(theme.ui.line_number), bg),
-                        ),
-                        Span::styled(
-                            pad(&clip(&cell.text, text_width), text_width + 1),
-                            on(theme.ui.fg, bg),
-                        ),
-                    ],
+                let Some(cell) = cell else {
                     // The blank half beside an added or removed line.
-                    None => vec![Span::styled(
+                    return vec![Span::styled(
                         pad("", number_width + text_width + 2),
                         on(theme.ui.fg_faint, theme.ui.sidebar_bg),
-                    )],
+                    )];
+                };
+                let mut spans = vec![Span::styled(
+                    format!("{:>width$} ", cell.line, width = number_width),
+                    on(tint.unwrap_or(theme.ui.line_number), bg),
+                )];
+                // The line in the grammar's colours, as the editor shows it,
+                // cut at the seam; plain until it has been coloured.
+                let mut used = 0usize;
+                match runs {
+                    Some(runs) => {
+                        for run in runs {
+                            let room = text_width.saturating_sub(used);
+                            if room == 0 {
+                                break;
+                            }
+                            let text = clip(&run.text, room);
+                            used += text.chars().count();
+                            let mut style = on(run.color, bg);
+                            if run.italic {
+                                style = style.add_modifier(Modifier::ITALIC);
+                            }
+                            spans.push(Span::styled(text, style));
+                        }
+                    }
+                    None => {
+                        let text = clip(&cell.text, text_width);
+                        used = text.chars().count();
+                        spans.push(Span::styled(text, on(theme.ui.fg, bg)));
+                    }
                 }
+                spans.push(Span::styled(
+                    pad("", text_width + 1 - used.min(text_width)),
+                    on(theme.ui.fg, bg),
+                ));
+                spans
             };
             let (left_tint, right_tint) = match row.kind {
                 diff::Kind::Same => (None, None),
@@ -1575,9 +1570,19 @@ fn draw_diff(frame: &mut Frame, app: &mut App, whole: Rect) {
                 diff::Kind::Added => (None, Some(added)),
                 diff::Kind::Removed => (Some(removed), None),
             };
-            let mut spans = side(row.left.as_ref(), left_tint, left_width);
+            let mut spans = side(
+                row.left.as_ref(),
+                styled.map(|(left, _)| left.as_slice()),
+                left_tint,
+                left_width,
+            );
             spans.push(Span::styled("│", seam_style));
-            spans.extend(side(row.right.as_ref(), right_tint, right_width));
+            spans.extend(side(
+                row.right.as_ref(),
+                styled.map(|(_, right)| right.as_slice()),
+                right_tint,
+                right_width,
+            ));
             Line::from(spans)
         })
         .collect();

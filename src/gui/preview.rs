@@ -410,7 +410,7 @@ fn flow_chart(ui: &mut egui::Ui, theme: &Theme, flow: &chart::Flow) {
         for (i, pair) in bend.windows(2).enumerate() {
             let last = i + 2 == bend.len();
             if last {
-                painter.arrow(pair[0], pair[1] - pair[0], line);
+                arrow(&painter, pair[0], pair[1], line);
             } else if wire.dashed {
                 dashes(&painter, pair[0], pair[1], line);
             } else {
@@ -468,6 +468,27 @@ fn flow_chart(ui: &mut egui::Ui, theme: &Theme, flow: &chart::Flow) {
             color(theme.ui.fg),
         );
     }
+}
+
+/// A wire's last leg, ending in a head. egui's own arrow grows its head with
+/// the shaft — a quarter of its length — so a long wire wore a head the size
+/// of a box. This one is the size of the terminal's `▼`, whatever the length.
+fn arrow(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, stroke: egui::Stroke) {
+    let span = to - from;
+    let length = span.length();
+    if length <= 0.0 {
+        return;
+    }
+    let dir = span / length;
+    let head = 6.0_f32.min(length);
+    let normal = egui::vec2(-dir.y, dir.x);
+    let base = to - dir * head;
+    painter.line_segment([from, base], stroke);
+    painter.add(egui::Shape::convex_polygon(
+        vec![to, base + normal * head * 0.45, base - normal * head * 0.45],
+        stroke.color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// A dotted arrow, drawn as the broken line the terminal writes with `╌`.

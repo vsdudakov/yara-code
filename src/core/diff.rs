@@ -208,6 +208,76 @@ pub fn previous_change(rows: &[Row], from: usize) -> Option<usize> {
     Some(start)
 }
 
+/// The first changed row — where a review starts. `None` for a diff of
+/// nothing, which git does report for a file whose mode alone changed.
+pub fn first_change(rows: &[Row]) -> Option<usize> {
+    rows.iter().position(|r| r.kind != Kind::Same)
+}
+
+/// The row to put at the top so that `row` sits in the middle of a view
+/// `height` rows tall. A change is read with its surroundings, so both
+/// frontends land on it centred rather than pinned to the top edge.
+pub fn top_for(row: usize, height: usize) -> usize {
+    row.saturating_sub(height / 2)
+}
+
+/// One coloured run of a diff line, as the editor would colour it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Styled {
+    pub color: (u8, u8, u8),
+    pub italic: bool,
+    pub text: String,
+}
+
+/// The rows coloured by the file's grammar: for each row, the runs of its
+/// old line and of its new one. Each side is highlighted as the whole text
+/// it is, so a comment opened on one line still colours the next, the way
+/// it does in the editor.
+pub fn highlight(
+    syntax: &crate::core::syntax::Syntax,
+    extension: &str,
+    rows: &[Row],
+) -> Vec<(Vec<Styled>, Vec<Styled>)> {
+    let side = |pick: fn(&Row) -> Option<&Side>| -> Vec<Vec<Styled>> {
+        let text: String = rows
+            .iter()
+            .filter_map(pick)
+            .map(|side| format!("{}\n", side.text))
+            .collect();
+        let mut lines = Vec::new();
+        syntax.highlight_lines(extension, &text, |regions| {
+            lines.push(
+                regions
+                    .into_iter()
+                    .map(|r| Styled {
+                        color: r.color,
+                        italic: r.italic,
+                        text: r.text.trim_end_matches('\n').to_string(),
+                    })
+                    .filter(|r| !r.text.is_empty())
+                    .collect(),
+            );
+        });
+        lines
+    };
+    let mut left = side(|row| row.left.as_ref()).into_iter();
+    let mut right = side(|row| row.right.as_ref()).into_iter();
+    rows.iter()
+        .map(|row| {
+            (
+                row.left
+                    .as_ref()
+                    .and_then(|_| left.next())
+                    .unwrap_or_default(),
+                row.right
+                    .as_ref()
+                    .and_then(|_| right.next())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 /// A file with no old version — every line is an addition.
 pub fn all_added(text: &str) -> Vec<Row> {
     text.lines()
@@ -241,6 +311,38 @@ pub fn all_removed(text: &str) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_review_starts_on_the_first_change_with_it_in_the_middle() {
+        let rows = from_unified("@@ -1,4 +1,4 @@\n one\n two\n-three\n+THREE\n four\n");
+        assert_eq!(first_change(&rows), Some(2));
+        assert_eq!(top_for(2, 1), 2);
+        assert_eq!(top_for(20, 10), 15);
+        assert_eq!(top_for(2, 10), 0, "nothing above the top to centre on");
+        assert_eq!(first_change(&from_unified("")), None);
+    }
+
+    #[test]
+    fn each_side_is_coloured_as_the_file_it_is() {
+        let syntax = crate::core::syntax::Syntax::default();
+        let rows = from_unified("@@ -1,3 +1,3 @@\n fn a() {}\n-// old\n+// new\n let x = 1;\n");
+        let styled = highlight(&syntax, "rs", &rows);
+        assert_eq!(styled.len(), rows.len());
+        let text = |runs: &[Styled]| runs.iter().map(|r| r.text.as_str()).collect::<String>();
+        assert_eq!(text(&styled[0].0), "fn a() {}");
+        assert_eq!(text(&styled[1].0), "// old");
+        assert_eq!(text(&styled[1].1), "// new");
+        assert_eq!(text(&styled[2].1), "let x = 1;");
+        // A keyword and a comment are not the same colour.
+        let keyword = styled[0].0.first().map(|r| r.color);
+        let comment = styled[1].1.first().map(|r| r.color);
+        assert!(keyword.is_some() && comment.is_some() && keyword != comment);
+        // An empty line has no runs at all.
+        let added = all_added("a\n\nb\n");
+        let styled = highlight(&syntax, "txt", &added);
+        assert!(styled[0].0.is_empty() && styled[1].1.is_empty());
+        assert_eq!(text(&styled[2].1), "b");
+    }
 
     #[test]
     fn the_arrows_move_from_one_change_to_the_next() {

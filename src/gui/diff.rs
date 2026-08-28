@@ -1,8 +1,9 @@
 //! Side-by-side diff of one changed file: what it was on the left, what it is
 //! now on the right, changed lines tinted in the theme's own red and green.
 
-use crate::core::diff::{next_change, previous_change, Kind, Row};
+use crate::core::diff::{first_change, next_change, previous_change, top_for, Kind, Row, Styled};
 use crate::core::theme::Theme;
+use crate::gui::highlight;
 use crate::gui::theme::{ansi_color, code_font, color, icons};
 
 pub struct DiffView {
@@ -13,8 +14,20 @@ pub struct DiffView {
     /// Row the arrows asked to put at the top, until the next frame draws it.
     jump_to: Option<usize>,
     /// Row at the top of the view as it was last drawn, which is where the
-    /// arrows count the next change from.
+    /// keys that move by a line or a page count from.
     top_row: usize,
+    /// The change the review is on: what the arrows step from, and what the
+    /// view is centred on when they do.
+    focus: usize,
+    /// Which way the header's arrows asked to step this frame; answered once
+    /// the page's height is known, so the change can be centred on it.
+    step: Option<bool>,
+    /// A view not yet drawn opens on its first change, centred.
+    opening: bool,
+    /// The rows coloured by the file's grammar, and the theme they were
+    /// coloured under — a new theme colours them again.
+    styled: Vec<(Vec<Styled>, Vec<Styled>)>,
+    styled_theme: String,
     /// How much of the width the old version gets, as a share: the seam
     /// between the two sides is dragged, and a share survives the window
     /// being resized around it.
@@ -23,23 +36,22 @@ pub struct DiffView {
 
 impl DiffView {
     pub fn new(path: String, rows: Result<Vec<Row>, String>) -> Self {
-        match rows {
-            Ok(rows) => Self {
-                path,
-                rows,
-                error: None,
-                jump_to: None,
-                top_row: 0,
-                split: 0.5,
-            },
-            Err(message) => Self {
-                path,
-                rows: Vec::new(),
-                error: Some(message),
-                jump_to: None,
-                top_row: 0,
-                split: 0.5,
-            },
+        let (rows, error) = match rows {
+            Ok(rows) => (rows, None),
+            Err(message) => (Vec::new(), Some(message)),
+        };
+        Self {
+            path,
+            focus: first_change(&rows).unwrap_or(0),
+            rows,
+            error,
+            jump_to: None,
+            top_row: 0,
+            step: None,
+            opening: true,
+            styled: Vec::new(),
+            styled_theme: String::new(),
+            split: 0.5,
         }
     }
 
@@ -85,15 +97,13 @@ impl DiffView {
                             .on_hover_text("Next Change")
                             .clicked()
                         {
-                            self.jump_to =
-                                Some(next_change(&self.rows, self.top_row).unwrap_or(last_row));
+                            self.step = Some(true);
                         }
                         if arrow_button(ui, theme, Arrow::Up)
                             .on_hover_text("Previous Change")
                             .clicked()
                         {
-                            self.jump_to =
-                                Some(previous_change(&self.rows, self.top_row).unwrap_or(0));
+                            self.step = Some(false);
                         }
                     });
                 });
@@ -118,6 +128,17 @@ impl DiffView {
             return event;
         }
 
+        if self.styled_theme != theme.name {
+            let extension = std::path::Path::new(&self.path)
+                .extension()
+                .map(|e| e.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.styled = highlight::with_syntax(|syntax| {
+                crate::core::diff::highlight(syntax, &extension, &self.rows)
+            });
+            self.styled_theme = theme.name.clone();
+        }
+
         let font = code_font(ui);
         let (char_w, row_h) = ui.fonts(|f| (f.glyph_width(&font, ' '), f.row_height(&font)));
         let gutter = char_w * 6.0;
@@ -134,8 +155,8 @@ impl DiffView {
         // frontend: the arrows walk the changes, Shift moves a line at a time,
         // and Page and Home/End cover the rest. Only while nothing on the page
         // — the terminal, a name being typed — is taking the keyboard.
+        let page = ((ui.available_height() / pitch) as usize).max(1);
         if ui.memory(|m| m.focused().is_none()) {
-            let page = ((ui.available_height() / pitch) as usize).max(1);
             let keys = ui.input(|i| {
                 (
                     i.modifiers.shift,
@@ -153,14 +174,31 @@ impl DiffView {
             self.jump_to = match () {
                 _ if down && shift => Some((self.top_row + 1).min(last_row)),
                 _ if up && shift => Some(self.top_row.saturating_sub(1)),
-                _ if down => Some(next_change(&self.rows, self.top_row).unwrap_or(last_row)),
-                _ if up => Some(previous_change(&self.rows, self.top_row).unwrap_or(0)),
                 _ if page_down => Some((self.top_row + page).min(last_row)),
                 _ if page_up => Some(self.top_row.saturating_sub(page)),
                 _ if home => Some(0),
                 _ if end => Some(last_row),
                 _ => self.jump_to,
             };
+            if down && !shift {
+                self.step = Some(true);
+            } else if up && !shift {
+                self.step = Some(false);
+            }
+        }
+        // A step lands on the next run of changed rows and centres it, so
+        // the change is read with what is around it; a view just opened
+        // does the same with its first change.
+        if let Some(forward) = self.step.take() {
+            self.focus = if forward {
+                next_change(&self.rows, self.focus).unwrap_or(last_row)
+            } else {
+                previous_change(&self.rows, self.focus).unwrap_or(0)
+            };
+            self.jump_to = Some(top_for(self.focus, page));
+        }
+        if std::mem::take(&mut self.opening) {
+            self.jump_to = Some(top_for(self.focus, page));
         }
         let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
         // An arrow moves the view by setting where it starts; every other
@@ -175,7 +213,14 @@ impl DiffView {
             let width = ui.available_width();
             let half =
                 (width * split).clamp(80.0_f32.min(width / 2.0), (width - 80.0).max(width / 2.0));
-            for row in &self.rows[range] {
+            for (index, row) in self
+                .rows
+                .iter()
+                .enumerate()
+                .take(range.end)
+                .skip(range.start)
+            {
+                let styled = self.styled.get(index);
                 seam_x.get_or_insert(ui.cursor().min.x + half);
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::hover());
@@ -186,6 +231,7 @@ impl DiffView {
                 let side = |x: f32,
                             w: f32,
                             line: Option<&crate::core::diff::Side>,
+                            runs: Option<&[Styled]>,
                             tint: Option<egui::Color32>| {
                     let area =
                         egui::Rect::from_min_size(egui::pos2(x, rect.min.y), egui::vec2(w, row_h));
@@ -218,13 +264,37 @@ impl DiffView {
                             None => color(theme.ui.line_number),
                         },
                     );
-                    painter.text(
-                        egui::pos2(x + gutter, rect.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        &line.text,
-                        font.clone(),
-                        color(theme.ui.fg),
-                    );
+                    // The line in the grammar's colours, as the editor shows
+                    // it; plain until it has been coloured.
+                    let mut job = egui::text::LayoutJob::default();
+                    match runs {
+                        Some(runs) => {
+                            for run in runs {
+                                job.append(
+                                    &run.text,
+                                    0.0,
+                                    egui::text::TextFormat {
+                                        font_id: font.clone(),
+                                        color: color(run.color),
+                                        italics: run.italic,
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                        }
+                        None => job.append(
+                            &line.text,
+                            0.0,
+                            egui::text::TextFormat {
+                                font_id: font.clone(),
+                                color: color(theme.ui.fg),
+                                ..Default::default()
+                            },
+                        ),
+                    }
+                    let galley = ui.fonts(|f| f.layout_job(job));
+                    let top = rect.center().y - galley.size().y / 2.0;
+                    painter.galley(egui::pos2(x + gutter, top), galley, color(theme.ui.fg));
                 };
                 let (left_tint, right_tint) = match row.kind {
                     Kind::Same => (None, None),
@@ -232,11 +302,18 @@ impl DiffView {
                     Kind::Added => (None, Some(added)),
                     Kind::Removed => (Some(removed), None),
                 };
-                side(rect.min.x, half, row.left.as_ref(), left_tint);
+                side(
+                    rect.min.x,
+                    half,
+                    row.left.as_ref(),
+                    styled.map(|(left, _)| left.as_slice()),
+                    left_tint,
+                );
                 side(
                     rect.min.x + half,
                     width - half,
                     row.right.as_ref(),
+                    styled.map(|(_, right)| right.as_slice()),
                     right_tint,
                 );
                 // The seam between the two versions.

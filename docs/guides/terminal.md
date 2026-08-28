@@ -52,6 +52,13 @@ highlight, so the next <kbd>Ctrl+C</kbd> is the shell's interrupt again. The
 pointer stays the panel's own even while a full-screen program is reading the
 wheel.
 
+An **address** the shell printed — the pull request an agent just opened — is
+a link: in the window, hold <kbd>Cmd</kbd> (<kbd>Ctrl</kbd> elsewhere) and it
+is underlined under the pointer, and a click opens it in the browser, even
+when it wrapped onto the next row. In the terminal frontend that is the host
+terminal's job, which knows whether there is a browser on this side of the
+connection at all — over SSH there is not.
+
 <kbd>Cmd+V</kbd> / <kbd>Ctrl+V</kbd> pastes into the shell. An **image** on the
 clipboard has nowhere to go in a grid of characters, so it is written to a file
 and the path is pasted instead — which is what a program running in the shell

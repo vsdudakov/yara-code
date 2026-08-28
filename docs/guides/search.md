@@ -43,6 +43,10 @@ target, *.lock, **/node_modules, src/generated
 - `**` spans directories;
 - naming a directory excludes everything under it.
 
+The box starts out holding `.*`, which keeps every file and folder whose name
+begins with a dot — `.git`, `.venv`, an agent's own state — out of the results.
+It is a pattern like any other: delete it to search them.
+
 Excluded directories are never walked. `.git`, `node_modules`, `target`,
 `dist`, `build`, `.venv`, binaries and files over 1 MB are always skipped.
 

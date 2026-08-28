@@ -65,7 +65,6 @@ impl Field {
     }
 }
 
-#[derive(Default)]
 pub struct Search {
     pub query: String,
     pub replace: String,
@@ -81,6 +80,31 @@ pub struct Search {
     pub error: Option<String>,
     pub focus_pending: bool,
     ran: Option<Key>,
+}
+
+/// What the exclude box holds until someone edits it: anything whose name
+/// starts with a dot. The hidden folders a project carries — `.git`, `.venv`,
+/// an agent's own state — are almost never what a search is after, and a
+/// pattern in the box, rather than a rule behind it, can be deleted.
+pub const DEFAULT_EXCLUDE: &str = ".*";
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            replace: String::new(),
+            exclude: DEFAULT_EXCLUDE.to_string(),
+            regex: false,
+            case_sensitive: false,
+            whole_word: false,
+            field: FieldState::default(),
+            results: Vec::new(),
+            truncated: false,
+            error: None,
+            focus_pending: false,
+            ran: None,
+        }
+    }
 }
 
 /// The focused input, defaulting to the query.

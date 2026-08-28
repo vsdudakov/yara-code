@@ -25,7 +25,8 @@ Launched without a path, Yara Code opens with **no project**. The editor shows a
 start page: the name, the folder in play (or "no folder in the project"), and
 the key bindings actually in effect, grouped — Project, Edit, Panels, More.
 Because it is built from your `settings.json`, it never shows a chord you
-rebound.
+rebound. It is a reference card, not a menu: the keys it lists are the way to
+do what it names.
 
 Two ways to put a folder in:
 
@@ -45,7 +46,7 @@ typing the path instead.
 
 Both frontends draw the same thing:
 
-- A **top bar** with the Yara Code label and the File, View and Help menus. On
+- A **top bar** with the YCODE label and the File, View and Help menus. On
   macOS those menus are in the system menu bar instead, where a Mac keeps them,
   and the window has no strip of its own — Settings and Quit move to the
   **Yara Code** menu beside them, as they do in every Mac application.

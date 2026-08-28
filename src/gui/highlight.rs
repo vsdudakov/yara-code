@@ -20,6 +20,12 @@ pub fn set_theme(theme: &Theme) {
     syntax().lock().unwrap().set_theme(theme);
 }
 
+/// Lends the grammar set to something that colours text of its own — the
+/// diff view — without a second copy of the grammars.
+pub fn with_syntax<R>(f: impl FnOnce(&Syntax) -> R) -> R {
+    f(&syntax().lock().unwrap())
+}
+
 #[derive(Default)]
 struct Highlighter;
 

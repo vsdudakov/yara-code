@@ -55,7 +55,8 @@ so a window resized around it keeps the proportion.
 
 Clicking a changed file opens a **side-by-side diff** as a tab of its own,
 beside the open files: what the file was on the left, what it is now on the
-right, each side with its own line numbers.
+right, each side with its own line numbers and coloured by the file's grammar,
+the way the editor colours it.
 
 - Replacements stand on one row — the old line facing the new one.
 - Added lines leave the left half blank, removed lines the right half.
@@ -64,8 +65,10 @@ right, each side with its own line numbers.
 
 The header carries the path, `+N −M`, a pair of arrows, an **Open File** button
 and a close mark. Reviewing a diff is going change to change: the arrows — and
-<kbd>↑</kbd> / <kbd>↓</kbd> in both frontends — jump to the top of the next run
-of changed lines rather than moving a line at a time. <kbd>Shift</kbd> with an
+<kbd>↑</kbd> / <kbd>↓</kbd> in both frontends — jump to the next run of changed
+lines rather than moving a line at a time, and land with the change in the
+middle of the view so it is read with what is around it. A diff opens on its
+first change the same way. <kbd>Shift</kbd> with an
 arrow moves by one line, <kbd>PageUp</kbd> / <kbd>PageDown</kbd> by a screen and
 <kbd>Home</kbd> / <kbd>End</kbd> to the ends, again in both. In the terminal
 frontend <kbd>Esc</kbd> closes the diff and <kbd>Enter</kbd> opens the file it

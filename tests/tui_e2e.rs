@@ -224,7 +224,7 @@ fn with_no_folder_the_start_page_offers_the_keys() {
     // Tall enough for the start page to draw its title as well as its keys.
     let harness = Harness::with_size(None, 120, 44);
     let screen = harness.screen();
-    assert!(screen.contains("YARA CODE"), "{screen}");
+    assert!(screen.contains("YCODE"), "{screen}");
     // The navigator says there is nothing open, and says how to change that.
     assert!(screen.contains("No folder in the project"), "{screen}");
     assert!(screen.contains("open recent") && screen.contains("open a folder"));

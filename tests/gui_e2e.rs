@@ -259,7 +259,7 @@ impl Harness {
 #[test]
 fn with_no_folder_the_window_shows_the_start_page() {
     let harness = Harness::open(None);
-    assert!(harness.shows("YARA CODE"), "{}", harness.screen());
+    assert!(harness.shows("YCODE"), "{}", harness.screen());
     assert!(
         harness.shows("no folder in the project"),
         "{}",
@@ -610,11 +610,15 @@ fn the_diff_arrows_jump_from_change_to_change() {
         .map(|(_, p)| Pos2::new(p.x + 20.0, p.y + 7.0))
         .unwrap();
     harness.click(row);
-    assert!(harness.shows("line 1"), "{}", harness.screen());
+    // A diff opens on its first change, with the change in the middle of the
+    // view rather than at its top edge: the lines before it are in sight.
+    assert!(harness.shows("the-far-change"), "{}", harness.screen());
     assert!(
-        !harness.shows("the-far-change"),
-        "the change starts out below the fold"
+        harness.shows("line 245") && harness.shows("line 255"),
+        "the change is centred: {}",
+        harness.screen()
     );
+    assert!(!harness.shows("line 1"), "{}", harness.screen());
 
     // The arrows sit left of Open File in the diff's own header: each is
     // sixteen points wide, with the theme's spacing and button padding
@@ -627,31 +631,30 @@ fn the_diff_arrows_jump_from_change_to_change() {
         .unwrap();
     let down = Pos2::new(open_file.x - 20.0, open_file.y + 7.0);
     let up = Pos2::new(open_file.x - 42.0, open_file.y + 7.0);
-    harness.click(down);
-    assert!(
-        harness.shows("the-far-change"),
-        "the down arrow jumps to the change: {}",
-        harness.screen()
-    );
     harness.click(up);
     assert!(
-        !harness.shows("the-far-change"),
-        "the up arrow comes back: {}",
+        !harness.shows("the-far-change") && harness.shows("line 1"),
+        "the up arrow goes back to the top: {}",
         harness.screen()
     );
-    assert!(harness.shows("line 1"), "{}", harness.screen());
+    harness.click(down);
+    assert!(
+        harness.shows("the-far-change") && harness.shows("line 245"),
+        "the down arrow returns to the change, centred: {}",
+        harness.screen()
+    );
 
     // The arrow keys do the same, as they do in the terminal frontend.
+    harness.press(Key::ArrowUp, Modifiers::NONE);
+    assert!(
+        !harness.shows("the-far-change") && harness.shows("line 1"),
+        "the up key goes back: {}",
+        harness.screen()
+    );
     harness.press(Key::ArrowDown, Modifiers::NONE);
     assert!(
         harness.shows("the-far-change"),
         "the down key jumps to the change: {}",
-        harness.screen()
-    );
-    harness.press(Key::ArrowUp, Modifiers::NONE);
-    assert!(
-        !harness.shows("the-far-change") && harness.shows("line 1"),
-        "the up key comes back: {}",
         harness.screen()
     );
 }

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::core::command::{Key, Mods};
-use crate::core::pty::{Pty, Terminals};
+use crate::core::pty::{link_at, Link, Pty, Terminals};
 use crate::core::theme::Theme;
 use crate::gui::file_tree::menu_item;
 use crate::gui::tabs;
@@ -215,12 +215,44 @@ impl Terminal {
                 }
             }
         }
+        // An address on the screen — the pull request an agent just opened —
+        // is a link under Cmd (Ctrl elsewhere), the way it is in the editor
+        // and in the terminal the other frontend runs in: hovering underlines
+        // it, a click opens it in the browser. Without the modifier a click
+        // is a click, and starts a selection as it always did.
+        let link_held = ui.input(|i| i.modifiers.command);
+        let link: Option<Link> = if link_held && response.hovered() {
+            ui.input(|i| i.pointer.hover_pos()).and_then(|at| {
+                let (row, col) = cell_at(at, rect, cell_w, cell_h, rows, cols);
+                pty.with_screen(|screen| {
+                    let lines: Vec<String> = (0..rows)
+                        .map(|r| {
+                            (0..cols)
+                                .map(|c| match screen.cell(r, c) {
+                                    Some(cell) if !cell.contents().is_empty() => cell.contents(),
+                                    _ => " ".to_string(),
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    link_at(&lines, row as usize, col as usize)
+                })
+            })
+        } else {
+            None
+        };
+        if let Some(link) = &link {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                crate::core::open_url(&link.url);
+            }
+        }
         // The mouse selects text on the grid, the way it does in the terminal
         // frontend: a press starts a selection, a drag extends it, and a copy
         // takes what it covers. The pointer stays the panel's own even when a
         // program is reading the wheel — a full-screen program has no way to
         // hand text back, and selecting its output is the point.
-        if response.drag_started() || response.clicked() {
+        if link.is_none() && (response.drag_started() || response.clicked()) {
             // Where the button went down, not where the pointer had reached by
             // the time egui called it a drag: a selection starts under the
             // press, as it does everywhere else.
@@ -365,6 +397,20 @@ impl Terminal {
                     }
                 }
                 flush(&mut run, &mut run_fmt, run_start);
+            }
+
+            if let Some(link) = &link {
+                let stroke = egui::Stroke::new(1.0_f32, color(theme.ui.terminal_fg));
+                for (row, from, to) in &link.spans {
+                    let y = origin.y + (*row as f32 + 1.0) * cell_h - 1.5;
+                    painter.line_segment(
+                        [
+                            egui::pos2(origin.x + *from as f32 * cell_w, y),
+                            egui::pos2(origin.x + *to as f32 * cell_w, y),
+                        ],
+                        stroke,
+                    );
+                }
             }
 
             if !screen.hide_cursor() {

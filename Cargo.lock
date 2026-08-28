@@ -4716,6 +4716,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "yara-core"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "vt100",
+]
+
+[[package]]
+name = "yara-tui"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "vt100",
+ "yara-core",
+]
+
+[[package]]
 name = "yoke"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

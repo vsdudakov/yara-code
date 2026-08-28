@@ -111,3 +111,18 @@ assets = [
 
 [profile.release]
 lto = "thin"
+
+# The v1 rewrite. Everything under crates/ is new code; this package — src/,
+# tests/, examples/ — is the legacy editor, kept building and untouched until
+# the new frontend reaches parity, then deleted in one commit. `make lint`
+# checks that no crate under crates/ reaches back into it.
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
+yara-core = { path = "crates/yara-core" }
+ratatui = "0.29"
+crossterm = "0.28"
+portable-pty = "0.8"
+vt100 = "0.15"

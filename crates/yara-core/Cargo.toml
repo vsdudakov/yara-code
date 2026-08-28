@@ -1,0 +1,13 @@
+[package]
+name = "yara-core"
+version = "1.0.0-alpha.1"
+edition = "2021"
+description = "Yara Code's frontend-independent logic: buffers, git, diffs, the follow loop"
+license = "MIT"
+repository = "https://github.com/vsdudakov/yara-code"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = { workspace = true }
+vt100 = { workspace = true }

@@ -1,0 +1,22 @@
+[package]
+name = "yara-tui"
+version = "1.0.0-alpha.1"
+edition = "2021"
+description = "Yara Code's terminal frontend: the agent pane on the left, the follow pane on the right"
+license = "MIT"
+repository = "https://github.com/vsdudakov/yara-code"
+
+[lib]
+path = "src/lib.rs"
+
+# Named `ycode-next` while the legacy `ycode` still builds beside it; takes
+# the plain name in the commit that deletes src/.
+[[bin]]
+name = "ycode-next"
+path = "src/main.rs"
+
+[dependencies]
+yara-core = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+vt100 = { workspace = true }

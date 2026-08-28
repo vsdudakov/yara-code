@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use crossterm::event::{KeyCode, KeyEvent};
 use yara_core::buffer::Buffer;
-use yara_core::command::{Chord, Command, Key};
+use yara_core::command::{self, Chord, Command, Key, FILE_MENU, HELP_MENU};
 use yara_core::follow::{EditEvent, Follow};
 use yara_core::fuzzy;
 use yara_core::git::{self, Change, Repo, Watcher};
 use yara_core::pty::Pty;
+use yara_core::search::{self, Hit};
 use yara_core::settings::Settings;
 use yara_core::syntax::Syntax;
 use yara_core::theme::{self, Theme};
@@ -50,7 +51,20 @@ pub enum Overlay {
     RenameTab(String),
     /// Go to file: what was typed, and the row the cursor is on.
     QuickOpen(String, usize),
+    /// The command palette: what was typed, and the row the cursor is on.
+    Palette(String, usize),
+    /// Project search: the query, the row, and what the query found.
+    Search(String, usize, Vec<Hit>, usize),
+    /// Every command and its chord, scrolled to a row.
+    Keys(usize),
+    /// A menu — File is 0, Help is 1 — with the row the cursor is on.
+    Menu(usize, usize),
+    /// Recent projects, with the row the cursor is on.
+    Recent(usize),
 }
+
+/// The menus in the order the header shows them.
+pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HELP_MENU)];
 
 /// One agent in one worktree.
 pub struct Session {
@@ -149,6 +163,8 @@ pub struct App {
     pub focus: Focus,
     pub show_sidebar: bool,
     pub overlay: Option<Overlay>,
+    /// The RECENT row the start page's cursor is on.
+    pub start_row: usize,
     /// What the status bar says about the last thing that happened.
     pub note: Option<String>,
     pub should_quit: bool,
@@ -198,8 +214,45 @@ impl App {
             dirty: Arc::new(AtomicBool::new(true)),
             focus: Focus::Agent,
             overlay: None,
+            start_row: 0,
             note: None,
             should_quit: false,
+        }
+    }
+
+    /// Opens a project: in this tab when it has none, else in a new one. The
+    /// folder joins the recent list, which is saved so the start page
+    /// remembers it.
+    pub fn open_project(&mut self, path: PathBuf) {
+        let path = path.canonicalize().unwrap_or(path);
+        let session = Session::new(Some(path.clone()), &self.settings);
+        if self.project.is_none() {
+            self.sessions[self.active] = session;
+        } else {
+            self.sessions.push(session);
+            self.active = self.sessions.len() - 1;
+        }
+        self.settings.push_recent(&path);
+        let _ = self.settings.save();
+        self.start_agent();
+        self.refresh();
+        self.focus = Focus::Agent;
+    }
+
+    /// The commands the palette offers for what was typed, best first.
+    pub fn palette_hits(&self, query: &str) -> Vec<Command> {
+        let commands: Vec<Command> = command::palette().collect();
+        let labels: Vec<&str> = commands.iter().map(|c| c.label()).collect();
+        fuzzy::rank(query, labels.iter().copied())
+            .into_iter()
+            .map(|(i, _)| commands[i])
+            .collect()
+    }
+
+    fn search(&self, query: &str) -> (Vec<Hit>, usize) {
+        match &self.project {
+            Some(root) => search::search(root, query, &self.settings.search_exclude, 500),
+            None => (Vec::new(), 0),
         }
     }
 
@@ -353,6 +406,135 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::Palette(mut query, row)) => {
+                match key.code {
+                    KeyCode::Up => {
+                        self.overlay = Some(Overlay::Palette(query, row.saturating_sub(1)))
+                    }
+                    KeyCode::Down => self.overlay = Some(Overlay::Palette(query, row + 1)),
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        if let Some(command) = self.palette_hits(&query).get(row).copied() {
+                            self.execute(command);
+                        }
+                    }
+                    _ if closes => self.overlay = None,
+                    KeyCode::Backspace => {
+                        query.pop();
+                        self.overlay = Some(Overlay::Palette(query, 0));
+                    }
+                    KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
+                        query.push(c);
+                        self.overlay = Some(Overlay::Palette(query, 0));
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Some(Overlay::Search(mut query, row, hits, files)) => {
+                match key.code {
+                    KeyCode::Up => {
+                        self.overlay =
+                            Some(Overlay::Search(query, row.saturating_sub(1), hits, files))
+                    }
+                    KeyCode::Down => {
+                        let last = hits.len().saturating_sub(1);
+                        self.overlay =
+                            Some(Overlay::Search(query, (row + 1).min(last), hits, files))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        if let Some((root, hit)) = self.project.clone().zip(hits.get(row)) {
+                            self.open_file(&root.join(&hit.path));
+                            if let Some(buffer) = self.editor.as_mut() {
+                                for _ in 1..hit.line {
+                                    buffer.down();
+                                }
+                            }
+                        }
+                    }
+                    _ if closes => self.overlay = None,
+                    KeyCode::Backspace | KeyCode::Char(_) => {
+                        match key.code {
+                            KeyCode::Backspace => {
+                                query.pop();
+                            }
+                            KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
+                                query.push(c)
+                            }
+                            _ => return,
+                        }
+                        let (hits, files) = self.search(&query);
+                        self.overlay = Some(Overlay::Search(query, 0, hits, files));
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            Some(Overlay::Keys(scroll)) => {
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::Keys(scroll.saturating_sub(1))),
+                    KeyCode::Down => {
+                        self.overlay = Some(Overlay::Keys((scroll + 1).min(command::ALL.len() - 1)))
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
+            Some(Overlay::Menu(menu, row)) => {
+                let entries = MENUS[menu].1;
+                let step = |from: usize, delta: isize| -> usize {
+                    // Separators are skipped over, and the ends stop.
+                    let mut at = from as isize;
+                    loop {
+                        at += delta;
+                        match entries.get(at as usize) {
+                            None => return from,
+                            Some(Some(_)) => return at as usize,
+                            Some(None) => {}
+                        }
+                    }
+                };
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::Menu(menu, step(row, -1))),
+                    KeyCode::Down => self.overlay = Some(Overlay::Menu(menu, step(row, 1))),
+                    KeyCode::Left => {
+                        self.overlay =
+                            Some(Overlay::Menu((menu + MENUS.len() - 1) % MENUS.len(), 0))
+                    }
+                    KeyCode::Right => {
+                        self.overlay = Some(Overlay::Menu((menu + 1) % MENUS.len(), 0))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        if let Some(Some(command)) = entries.get(row) {
+                            self.execute(*command);
+                        }
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
+            Some(Overlay::Recent(row)) => {
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::Recent(row.saturating_sub(1))),
+                    KeyCode::Down => {
+                        let last = self.settings.recent_projects.len().saturating_sub(1);
+                        self.overlay = Some(Overlay::Recent((row + 1).min(last)))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        if let Some(path) = self.settings.recent_projects.get(row).cloned() {
+                            self.open_project(path);
+                        }
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::QuickOpen(mut query, row)) => {
                 match key.code {
                     KeyCode::Up => {
@@ -418,6 +600,22 @@ impl App {
             None => {}
         }
         let command = self.settings.command(&chord);
+        // The start page: the RECENT list is what the arrows and Enter are
+        // about; everything else is a command.
+        if self.project.is_none() && command.is_none_or(|c| c == Command::MarkReviewed) {
+            let last = self.settings.recent_projects.len().saturating_sub(1);
+            match key.code {
+                KeyCode::Up => self.start_row = self.start_row.saturating_sub(1),
+                KeyCode::Down => self.start_row = (self.start_row + 1).min(last),
+                KeyCode::Enter => {
+                    if let Some(path) = self.settings.recent_projects.get(self.start_row).cloned() {
+                        self.open_project(path);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         // The agent keeps every plain key, Enter, Escape, Tab and the arrows,
         // whatever the editor binds them to — they are how it is talked to —
         // and every chord nobody bound. A bound Ctrl or Alt chord, or a
@@ -517,6 +715,19 @@ impl App {
                 }
             }
             Command::QuickOpen => self.overlay = Some(Overlay::QuickOpen(String::new(), 0)),
+            Command::CommandPalette => self.overlay = Some(Overlay::Palette(String::new(), 0)),
+            Command::SearchProject => {
+                self.overlay = Some(Overlay::Search(String::new(), 0, Vec::new(), 0))
+            }
+            Command::Help => self.overlay = Some(Overlay::Keys(0)),
+            Command::FileMenu => self.overlay = Some(Overlay::Menu(0, 0)),
+            Command::HelpMenu => self.overlay = Some(Overlay::Menu(1, 0)),
+            Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
+            Command::Documentation => {
+                if !yara_core::open_url(yara_core::DOCUMENTATION) {
+                    self.note = Some(format!("no browser to open {}", yara_core::DOCUMENTATION));
+                }
+            }
             // Enter in the files pane opens what is under the cursor.
             Command::MarkReviewed if self.focus == Focus::Files => {
                 let Some(tree) = self.tree.as_mut() else {

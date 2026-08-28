@@ -151,6 +151,8 @@ pub struct Settings {
     /// Where a new tab's worktree is made; empty means a `<repo>-worktrees`
     /// folder beside the repository.
     pub worktrees_dir: String,
+    /// What project search leaves out, in VS Code's glob spelling.
+    pub search_exclude: Vec<String>,
     /// Chords the agent keeps even though the editor binds them, because
     /// the programs in that pane use them themselves.
     pub agent_keys: Vec<Chord>,
@@ -176,6 +178,7 @@ impl Default for Settings {
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
+            search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
             agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z"]
                 .iter()
                 .filter_map(|c| c.parse().ok())
@@ -347,6 +350,10 @@ impl Settings {
   // beside the repository).
   "worktrees_dir": {worktrees_dir},
 
+  // What Search Project leaves out: a bare name matches a folder anywhere,
+  // "*.lock" a file, "src/**/gen" a path.
+  "search_exclude": {search_exclude},
+
   // With the agent focused, its own keys and every unbound one reach it;
   // a bound Ctrl/Alt chord or function key is the editor's — except these,
   // which the programs in that pane use themselves.
@@ -375,6 +382,7 @@ impl Settings {
             base_branch = json(&self.base_branch),
             worktrees_dir = json(&self.worktrees_dir),
             agent_keys = json(&self.agent_keys),
+            search_exclude = json(&self.search_exclude),
             keys = json(&self.keys),
             recent_projects = json(&self.recent_projects),
             docs = crate::DOCUMENTATION,
@@ -568,6 +576,7 @@ mod tests {
             "\"base_branch\"",
             "\"worktrees_dir\"",
             "\"agent_keys\"",
+            "\"search_exclude\"",
             "\"keys\"",
             "\"recent_projects\"",
         ] {

@@ -7,9 +7,11 @@ pub mod command;
 pub mod follow;
 pub mod fuzzy;
 pub mod git;
+pub mod glob;
 pub mod history;
 pub mod keyboard;
 pub mod pty;
+pub mod search;
 pub mod settings;
 pub mod syntax;
 #[cfg(test)]
@@ -51,6 +53,25 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// The documentation site, opened from Help → Documentation.
 pub const DOCUMENTATION: &str = "https://vsdudakov.github.io/yara-code/";
+
+/// Hands a URL to the desktop's own browser; false when there is nothing to
+/// hand it to — a headless machine, say — so the caller can say so.
+pub fn open_url(url: &str) -> bool {
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("open", &[])
+    } else if cfg!(windows) {
+        ("cmd", &["/C", "start", ""])
+    } else {
+        ("xdg-open", &[])
+    };
+    std::process::Command::new(program)
+        .args(args)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
 
 #[cfg(test)]
 mod tests {

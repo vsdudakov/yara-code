@@ -210,7 +210,10 @@ pub fn file_diff(repo: &Repo, path: &str) -> Result<String, String> {
 /// ones a reviewer expects. Git exits 1 when the texts differ, which is not
 /// a failure here.
 pub fn unified(old: &str, new: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("ycode-diff-{}", std::process::id()));
+    // A folder of its own per call: two diffs at once must not share one.
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("ycode-diff-{}-{n}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let (a, b) = (dir.join("a"), dir.join("b"));
     if std::fs::write(&a, old).is_err() || std::fs::write(&b, new).is_err() {

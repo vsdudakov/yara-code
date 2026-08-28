@@ -7,7 +7,7 @@ use ratatui::Terminal;
 use yara_core::follow::EditEvent;
 use yara_core::settings::{Settings, Side};
 use yara_core::theme::Theme;
-use yara_tui::app::{App, Focus};
+use yara_tui::app::{App, Focus, Overlay};
 use yara_tui::ui;
 
 fn frame(app: &mut App) -> Vec<String> {
@@ -29,9 +29,16 @@ fn text(app: &mut App) -> String {
 
 /// An app with the keyboard on the follow pane, which most tests drive.
 fn following(settings: Settings) -> App {
-    let mut app = App::with_settings(None, settings, Theme::default());
+    let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
     app.focus = Focus::Follow;
     app
+}
+
+/// A folder that is a project but not a repository: the panes without git.
+fn scratch() -> std::path::PathBuf {
+    let path = std::env::temp_dir().join("yara-frame-scratch");
+    let _ = std::fs::create_dir_all(&path);
+    path
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -79,7 +86,7 @@ fn the_settings_place_the_agent_name_its_pane_and_the_sidebar() {
         sidebar_width: 20,
         ..Settings::default()
     };
-    let mut app = App::with_settings(None, settings, Theme::default());
+    let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
     let rows = frame(&mut app);
     assert!(rows[1].contains("FILES"));
     assert!(rows[1].contains("AGENT · codex"));
@@ -112,7 +119,7 @@ fn the_agent_runs_in_its_pane_takes_the_keys_and_f6_hands_them_to_follow() {
         agent: "cat".into(),
         ..Settings::default()
     };
-    let mut app = App::with_settings(None, settings, Theme::default());
+    let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
     app.start_agent();
     assert!(app.agent_running());
     let rows = frame(&mut app);
@@ -180,7 +187,7 @@ fn an_agent_that_cannot_start_is_a_note_not_a_crash() {
         agent: "".into(),
         ..Settings::default()
     };
-    let mut app = App::with_settings(None, settings, Theme::default());
+    let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
     app.start_agent();
     assert!(app.agent.is_none());
     assert!(text(&mut app).contains("no agent command"));
@@ -264,8 +271,8 @@ fn ctrl_b_shows_the_files_and_ctrl_q_asks_to_quit() {
 #[test]
 fn a_command_not_built_yet_says_so_in_the_status_bar() {
     let mut app = following(Settings::default());
-    app.handle_key(key(KeyCode::F(1)));
-    assert!(text(&mut app).contains("Key Bindings is not here yet"));
+    app.execute(yara_core::command::Command::CheckForUpdates);
+    assert!(text(&mut app).contains("Check for Updates… is not here yet"));
 }
 
 /// A project that is a repository with one commit on `main`, removed with
@@ -541,5 +548,127 @@ fn ctrl_p_finds_a_file_by_a_few_letters() {
             .path
             .ends_with("guide.md"),
         "revealed"
+    );
+}
+
+#[test]
+fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
+    let repo = Repo::new("yara-frame-overlays");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    let ctrl_shift = |c| {
+        KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        )
+    };
+
+    // The palette runs a command found by a few letters.
+    app.handle_key(ctrl_shift('p'));
+    let overlay = format!("{:?}", app.overlay);
+    let all = text(&mut app);
+    assert!(
+        all.contains("COMMAND PALETTE") && all.contains("type a command…"),
+        "{overlay}\n{all}"
+    );
+    for c in "togf".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let all = text(&mut app);
+    assert!(all.contains(" Toggle Files") && all.contains("^B"), "{all}");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.show_sidebar && app.overlay.is_none());
+
+    // Search lists path:line text and opens the hit on its line.
+    app.handle_key(ctrl_shift('f'));
+    for c in "let".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    let all = text(&mut app);
+    assert!(all.contains("SEARCH PROJECT"), "{all}");
+    assert!(all.contains(" src/main.rs:2  let x = 1;"), "{all}");
+    assert!(all.contains("1 matches in 1 files · exclude: target, node_modules, .*"));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.focus, Focus::Editor);
+    assert_eq!(app.editor.as_ref().unwrap().line_col().0, 1);
+    app.handle_key(key(KeyCode::Esc));
+
+    // F1 lists every command with a dotted leader to its chord.
+    app.handle_key(key(KeyCode::F(1)));
+    let all = text(&mut app);
+    assert!(all.contains("KEY BINDINGS"), "{all}");
+    assert!(all.contains(" Save ") && all.contains("· Ctrl+S"), "{all}");
+    app.handle_key(key(KeyCode::Esc));
+
+    // F10 drops the File menu under its word; Right moves to Help.
+    app.handle_key(key(KeyCode::F(10)));
+    let rows = frame(&mut app);
+    assert!(rows[1].contains("┌ File "), "{}", rows[1]);
+    assert!(
+        rows[2].contains("New File") && rows[2].contains("^N"),
+        "{}",
+        rows[2]
+    );
+    app.handle_key(key(KeyCode::Right));
+    let all = text(&mut app);
+    assert!(
+        all.contains("┌ Help ") && all.contains("Documentation"),
+        "{all}"
+    );
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(
+        matches!(app.overlay, Some(Overlay::Keys(_))),
+        "Help → Key Bindings"
+    );
+    app.handle_key(key(KeyCode::Esc));
+
+    // Ctrl+R lists recent projects.
+    app.settings.push_recent(&repo.0);
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    let all = text(&mut app);
+    assert!(
+        all.contains("OPEN RECENT") && all.contains("yara-frame-overlays"),
+        "{all}"
+    );
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none());
+}
+
+#[test]
+fn the_start_page_lists_recent_projects_and_enter_opens_one() {
+    let repo = Repo::new("yara-frame-start");
+    let mut settings = Settings::default();
+    settings.push_recent(&repo.0);
+    settings.push_recent(std::path::Path::new("/somewhere/else"));
+    let mut app = App::with_settings(None, settings, Theme::default());
+    let all = text(&mut app);
+    assert!(
+        all.contains("the terminal editor for the agent loop"),
+        "{all}"
+    );
+    assert!(all.contains("RECENT"));
+    assert!(
+        all.contains("▸ /somewhere/else") && all.contains("⏎"),
+        "{all}"
+    );
+    assert!(all.contains("⏎ open project · ^P go to file · F1 keys"));
+    assert!(!all.contains("FOLLOW"), "no panes without a project");
+
+    let lock = std::env::temp_dir().join(format!("yara-frame-start-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &lock);
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&lock);
+    assert_eq!(app.project.as_deref(), Some(repo.0.as_path()));
+    assert_eq!(
+        app.settings.recent_projects[0], repo.0,
+        "moved to the front"
+    );
+    let all = text(&mut app);
+    assert!(
+        all.contains("FOLLOW · LIVE") && all.contains("⎇ main"),
+        "{all}"
     );
 }

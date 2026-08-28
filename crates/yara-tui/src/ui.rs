@@ -15,7 +15,7 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, Focus, Overlay, View};
+use crate::app::{App, Focus, Overlay, View, MENUS};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -28,6 +28,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     draw_header(frame, app, header);
+    if app.project.is_none() {
+        draw_start(frame, app, body);
+        draw_status(frame, app, status);
+        draw_overlay(frame, app, area);
+        return;
+    }
 
     let sidebar = Constraint::Length(if app.show_sidebar {
         app.settings.sidebar_width
@@ -51,6 +57,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_agent(frame, app, agent);
     draw_follow(frame, app, follow);
     draw_status(frame, app, status);
+    draw_overlay(frame, app, area);
+}
+
+fn draw_overlay(frame: &mut Frame, app: &App, area: Rect) {
     match &app.overlay {
         Some(Overlay::Changes(row)) => draw_changes(frame, app, *row, area),
         Some(Overlay::NewTab(text)) => {
@@ -60,8 +70,325 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_prompt(frame, app, " RENAME TAB ", "name", text, area)
         }
         Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, query, *row, area),
+        Some(Overlay::Palette(query, row)) => draw_palette(frame, app, query, *row, area),
+        Some(Overlay::Search(query, row, hits, files)) => {
+            draw_search(frame, app, query, *row, hits, *files, area)
+        }
+        Some(Overlay::Keys(scroll)) => draw_keys(frame, app, *scroll, area),
+        Some(Overlay::Menu(menu, row)) => draw_menu(frame, app, *menu, *row, area),
+        Some(Overlay::Recent(row)) => draw_recent(frame, app, *row, area),
         None => {}
     }
+}
+
+/// A box in the middle of the screen over a dimmed frame, `height` rows
+/// tall inside; what every overlay is drawn in.
+fn overlay_box(
+    frame: &mut Frame,
+    app: &App,
+    title: &str,
+    width: u16,
+    height: u16,
+    area: Rect,
+) -> Rect {
+    let ui = &app.theme.ui;
+    frame.render_widget(Block::new().style(fg(ui.fg_dim)), area);
+    let width = width.min(area.width);
+    let height = (height + 2).min(area.height.max(2));
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + area.height.saturating_sub(height) / 3,
+        width,
+        height,
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.accent))
+        .title(Line::styled(format!(" {title} "), bold(ui.accent)))
+        .style(base(&app.theme));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    inner
+}
+
+/// A query line with a block cursor after it.
+fn query_line<'a>(app: &App, prompt: &'a str, query: &'a str, placeholder: &'a str) -> Line<'a> {
+    let ui = &app.theme.ui;
+    let mut spans = vec![Span::styled(prompt, fg(ui.fg_dim)), Span::raw(query)];
+    spans.push(Span::styled("█", fg(ui.cursor)));
+    if query.is_empty() {
+        spans.push(Span::styled(placeholder, fg(ui.fg_dim)));
+    }
+    Line::from(spans)
+}
+
+/// The rows of a list with the cursor's row lit, scrolled so it shows.
+fn list_lines<'a>(app: &App, rows: Vec<Line<'a>>, row: usize, height: usize) -> Vec<Line<'a>> {
+    let start = row.saturating_sub(height.saturating_sub(1));
+    rows.into_iter()
+        .enumerate()
+        .skip(start)
+        .take(height)
+        .map(|(i, line)| {
+            if i == row {
+                line.style(Style::new().bg(color(app.theme.ui.selected_bg)))
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+fn draw_palette(frame: &mut Frame, app: &App, query: &str, row: usize, area: Rect) {
+    let ui = &app.theme.ui;
+    let hits = app.palette_hits(query);
+    let inner = overlay_box(
+        frame,
+        app,
+        "COMMAND PALETTE",
+        64,
+        hits.len().min(14) as u16 + 1,
+        area,
+    );
+    let width = inner.width as usize;
+    let rows: Vec<Line> = hits
+        .iter()
+        .map(|command| {
+            let chord = app.hint(*command);
+            let label = command.label();
+            let pad = width.saturating_sub(label.chars().count() + chord.chars().count() + 2);
+            Line::from(vec![
+                Span::raw(format!(" {label}{}", " ".repeat(pad))),
+                Span::styled(chord, fg(ui.fg_dim)),
+            ])
+        })
+        .collect();
+    let mut lines = vec![query_line(app, "> ", query, "type a command…")];
+    lines.extend(list_lines(
+        app,
+        rows,
+        row.min(hits.len().saturating_sub(1)),
+        inner.height as usize - 1,
+    ));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_search(
+    frame: &mut Frame,
+    app: &App,
+    query: &str,
+    row: usize,
+    hits: &[yara_core::search::Hit],
+    files: usize,
+    area: Rect,
+) {
+    let ui = &app.theme.ui;
+    let inner = overlay_box(
+        frame,
+        app,
+        "SEARCH PROJECT",
+        80,
+        hits.len().min(14) as u16 + 2,
+        area,
+    );
+    let rows: Vec<Line> = hits
+        .iter()
+        .map(|hit| {
+            Line::from(vec![
+                Span::styled(format!(" {}:{}  ", hit.path, hit.line), fg(ui.fg_dim)),
+                Span::raw(hit.text.clone()),
+            ])
+        })
+        .collect();
+    let mut lines = vec![query_line(app, "> ", query, "search…")];
+    lines.extend(list_lines(app, rows, row, inner.height as usize - 2));
+    let footer = format!(
+        "{} matches in {} files · exclude: {}",
+        hits.len(),
+        files,
+        app.settings.search_exclude.join(", ")
+    );
+    let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    frame.render_widget(Paragraph::new(lines), list);
+    frame.render_widget(Paragraph::new(Line::styled(footer, fg(ui.fg_dim))), foot);
+}
+
+fn draw_keys(frame: &mut Frame, app: &App, scroll: usize, area: Rect) {
+    let ui = &app.theme.ui;
+    let all = yara_core::command::ALL;
+    let inner = overlay_box(frame, app, "KEY BINDINGS", 60, all.len() as u16, area);
+    let width = inner.width as usize;
+    let lines: Vec<Line> = all
+        .iter()
+        .skip(scroll)
+        .take(inner.height as usize)
+        .map(|command| {
+            let chord = app
+                .settings
+                .chord(*command)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "—".into());
+            let label = command.label();
+            let dots = width.saturating_sub(label.chars().count() + chord.chars().count() + 3);
+            Line::from(vec![
+                Span::raw(format!(" {label} ")),
+                Span::styled("·".repeat(dots), fg(ui.border)),
+                Span::styled(format!(" {chord}"), fg(ui.fg_dim)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A menu dropped down from its word in the header.
+fn draw_menu(frame: &mut Frame, app: &App, menu: usize, row: usize, area: Rect) {
+    let ui = &app.theme.ui;
+    let (name, entries) = MENUS[menu];
+    // Where the word sits in the header: after " YARA  ", each word two
+    // spaces apart.
+    let x = area.x
+        + 7
+        + MENUS
+            .iter()
+            .take(menu)
+            .map(|(n, _)| n.len() as u16 + 2)
+            .sum::<u16>();
+    let width = 36u16.min(area.width.saturating_sub(x));
+    let rect = Rect::new(
+        x,
+        area.y + 1,
+        width,
+        (entries.len() as u16 + 2).min(area.height - 1),
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.accent))
+        .title(Line::styled(format!(" {name} "), bold(ui.accent)))
+        .style(base(&app.theme));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let lines: Vec<Line> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| match entry {
+            None => Line::styled("─".repeat(inner.width as usize), fg(ui.border)),
+            Some(command) => {
+                let chord = app.hint(*command);
+                let label = command.label();
+                let pad = (inner.width as usize)
+                    .saturating_sub(label.chars().count() + chord.chars().count() + 2);
+                let line = Line::from(vec![
+                    Span::raw(format!(" {label}{}", " ".repeat(pad))),
+                    Span::styled(chord, fg(ui.fg_dim)),
+                ]);
+                if i == row {
+                    line.style(Style::new().bg(color(ui.selected_bg)))
+                } else {
+                    line
+                }
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_recent(frame: &mut Frame, app: &App, row: usize, area: Rect) {
+    let recent = &app.settings.recent_projects;
+    let inner = overlay_box(
+        frame,
+        app,
+        "OPEN RECENT",
+        72,
+        recent.len().max(1) as u16,
+        area,
+    );
+    let rows: Vec<Line> = recent
+        .iter()
+        .map(|p| {
+            let mut spans = [Span::raw(" "), Span::raw(p.display().to_string())];
+            shorten(&mut spans, 1, inner.width as usize);
+            Line::from(spans.to_vec())
+        })
+        .collect();
+    let lines = if rows.is_empty() {
+        vec![Line::styled(" nothing opened yet", fg(app.theme.ui.fg_dim))]
+    } else {
+        list_lines(app, rows, row, inner.height as usize)
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The start page: the logotype, the tagline, RECENT and the key hints.
+fn draw_start(frame: &mut Frame, app: &App, area: Rect) {
+    let ui = &app.theme.ui;
+    let dim = fg(ui.fg_dim);
+    const LOGO: [&str; 5] = [
+        "██╗   ██╗ █████╗ ██████╗  █████╗ ",
+        "╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗",
+        " ╚████╔╝ ███████║██████╔╝███████║",
+        "  ╚██╔╝  ██╔══██║██╔══██╗██╔══██║",
+        "   ██║   ██║  ██║██║  ██║██║  ██║",
+    ];
+    let recent = &app.settings.recent_projects;
+    let box_height = recent.len().max(1) as u16 + 2;
+    let height = LOGO.len() as u16 + 2 + box_height + 2;
+    let width = 60u16.min(area.width);
+    let top = area.y + area.height.saturating_sub(height) / 2;
+    let left = area.x + (area.width - width) / 2;
+    let mut lines: Vec<Line> = LOGO
+        .iter()
+        .map(|l| Line::styled(*l, fg(ui.accent)).centered())
+        .collect();
+    lines.push(Line::styled("the terminal editor for the agent loop", dim).centered());
+    lines.push(Line::raw(""));
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect::new(left, top, width, LOGO.len() as u16 + 2),
+    );
+
+    let rect = Rect::new(
+        left,
+        top + LOGO.len() as u16 + 2,
+        width,
+        box_height.min(area.height),
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.border))
+        .title(" RECENT ");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let rows: Vec<Line> = recent
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut spans = [Span::raw(p.display().to_string())];
+            shorten(&mut spans, 0, (inner.width as usize).saturating_sub(5));
+            let name = spans[0].content.to_string();
+            if i == app.start_row {
+                let pad = (inner.width as usize).saturating_sub(name.chars().count() + 5);
+                Line::from(vec![Span::raw(format!("▸ {name}{}⏎ ", " ".repeat(pad)))])
+                    .style(on(ui.bg, ui.accent_dim))
+            } else {
+                Line::styled(format!("  {name}"), dim)
+            }
+        })
+        .collect();
+    let lines = if rows.is_empty() {
+        vec![Line::styled("  open a folder: ycode <path>", dim)]
+    } else {
+        rows
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+    let hints = format!(
+        "{} open project · {} go to file · {} keys",
+        app.hint(Command::MarkReviewed),
+        app.hint(Command::QuickOpen),
+        app.hint(Command::Help)
+    );
+    frame.render_widget(
+        Paragraph::new(Line::styled(hints, dim).centered()),
+        Rect::new(left, rect.bottom() + 1, width, 1),
+    );
 }
 
 /// Go to file: the query with a block cursor, then the best matches.
@@ -143,11 +470,19 @@ fn draw_prompt(frame: &mut Frame, app: &App, title: &str, what: &str, text: &str
 
 fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
-    let mut left = vec![
-        Span::styled(" YARA ", bold(ui.accent)),
-        Span::raw(" File  Help "),
-    ];
+    let mut left = vec![Span::styled(" YARA ", bold(ui.accent))];
+    for (i, (name, _)) in MENUS.iter().enumerate() {
+        let open = matches!(app.overlay, Some(Overlay::Menu(m, _)) if m == i);
+        left.push(Span::raw(" "));
+        left.push(if open {
+            Span::styled(*name, on(ui.bg, ui.accent))
+        } else {
+            Span::raw(*name)
+        });
+        left.push(Span::raw(" "));
+    }
     left.push(Span::styled(" │ ", fg(ui.fg_dim)));
+    let path_index = left.len();
     left.push(Span::styled(
         app.project
             .as_ref()
@@ -178,7 +513,7 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     shorten(
         &mut left,
-        3,
+        path_index,
         (area.width as usize).saturating_sub(right.width() + 1),
     );
     frame.render_widget(Paragraph::new(Line::from(left)), area);

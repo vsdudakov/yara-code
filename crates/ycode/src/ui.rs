@@ -15,7 +15,7 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, Focus, Hits, Overlay, View, MENUS};
+use crate::app::{App, Focus, Hits, Overlay, View, MENUS, TAB_MENU};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -150,6 +150,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::Usage) => draw_usage(frame, app, area),
         Some(Overlay::Themes(row)) => draw_themes(frame, app, row, area),
         Some(Overlay::CloseFile { .. }) => draw_close_file(frame, app, area),
+        Some(Overlay::TabMenu(tab, row)) => draw_tab_menu(frame, app, tab, row, area),
         Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
         Some(Overlay::NewTab(text)) => {
             draw_prompt(frame, app, " NEW WORKSPACE ", "workspace name", &text, area)
@@ -476,6 +477,33 @@ fn draw_usage(frame: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
     }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The menu a right click drops under a tab.
+fn draw_tab_menu(frame: &mut Frame, app: &mut App, tab: usize, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
+    let x = app.hits.tabs.get(tab).map_or(area.x, |(r, _)| r.x);
+    let width = 22u16.min(area.width.saturating_sub(x));
+    let rect = Rect::new(
+        x,
+        area.y + 1,
+        width,
+        (TAB_MENU.len() as u16 + 2).min(area.height - 1),
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.accent))
+        .style(base(&app.theme));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let rows: Vec<Line> = TAB_MENU
+        .iter()
+        .map(|item| Line::raw(format!(" {item}")))
+        .collect();
+    let lines = list_lines(app, rows, row, inner.height as usize);
+    app.hits.overlay = rect;
+    row_hits(app, inner, 0, TAB_MENU.len());
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

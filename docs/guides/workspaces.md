@@ -5,8 +5,9 @@ description: Workspaces in Yara Code — one agent per task in its own git workt
 # Workspaces
 
 A workspace is one agent in one git worktree, with its own timeline and its
-own CHANGES. The tabs in the header are the workspaces; the first is the
-folder you opened.
+own CHANGES. The tabs in the header are the workspaces: the folder you
+opened, then every worktree the repository already has — their agents start
+when you first switch to them.
 
 ![Naming a new workspace](../assets/shots/new-tab.svg)
 
@@ -22,7 +23,9 @@ it.
 | --- | --- |
 | New workspace | ++f7++ |
 | Next / previous | ++ctrl+pgdn++ / ++ctrl+pgup++, or click the tab |
-| Rename | ++f2++, or a double click on the tab |
+| Rename | ++f2++, or a right click on the tab |
+| Delete the worktree | a right click on the tab — the folder goes, the branch stays |
+| Reorder | drag a tab along the strip |
 | Close | ++ctrl+w++ — the agent stops; the worktree stays for git |
 
 The first workspace, the one without a name of its own, is called by its

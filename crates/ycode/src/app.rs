@@ -73,6 +73,8 @@ pub enum Overlay {
     Usage,
     /// The themes, with the row the cursor is on.
     Themes(usize),
+    /// The menu a right click on a tab drops: which tab, and the row.
+    TabMenu(usize, usize),
     /// The file being edited has unsaved changes and is about to close:
     /// save it, drop it, or stay. `quit` when the whole editor is closing.
     CloseFile { quit: bool },
@@ -126,6 +128,9 @@ pub struct Updates {
     /// The tag installed this session, waiting for a restart.
     pub installed: Option<String>,
 }
+
+/// What a right click on a tab offers, in order.
+pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete worktree", "Close"];
 
 /// The menus in the order the header shows them.
 pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HELP_MENU)];
@@ -244,9 +249,11 @@ pub struct App {
     pub resizing: Option<Seam>,
     /// Where the mouse is, for what lights up under it.
     pub hover: Option<(u16, u16)>,
-    /// The last tab clicked and when, so a second click soon after is a
-    /// double click that renames it.
-    last_tab_click: Option<(usize, std::time::Instant)>,
+    /// The tab being dragged along the strip, if one is.
+    pub dragging_tab: Option<usize>,
+    /// Agents start on their own in workspaces switched to — what the
+    /// command does, and what tests do not want.
+    pub autostart: bool,
     pub last_frame: Vec<String>,
     /// An OSC 52 escape waiting to be written to the terminal — a copy made
     /// where no clipboard tool answered.
@@ -294,7 +301,36 @@ impl App {
         let mut app = Self::with_settings(project, settings, theme);
         app.themes = theme::load_all();
         app.note = complaint;
+        app.autostart = true;
         app
+    }
+
+    /// Starts the active workspace's agent if it has none yet — a workspace
+    /// opened from an existing worktree waits until it is looked at.
+    pub fn ensure_agent(&mut self) {
+        if self.autostart && self.agent.is_none() && self.project.is_some() {
+            self.start_agent();
+        }
+    }
+
+    /// A tab per worktree the repository already has, after the folder
+    /// opened; each is named by its folder until it is renamed.
+    fn add_worktree_sessions(&mut self) {
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        let here = self.project.clone();
+        for path in git::worktrees(&repo) {
+            if here.as_deref() == Some(path.as_path())
+                || self
+                    .sessions
+                    .iter()
+                    .any(|s| s.project.as_deref() == Some(path.as_path()))
+            {
+                continue;
+            }
+            self.sessions.push(Session::new(Some(path), &self.settings));
+        }
     }
 
     /// Asks the agents what they have used, off the drawing thread.
@@ -515,10 +551,33 @@ impl App {
                 self.resize_to(x);
                 return;
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging_tab.is_some() => {
+                // The tab travels along the strip: over another tab, it
+                // takes that tab's place.
+                let from = self.dragging_tab.unwrap();
+                let over = self
+                    .hits
+                    .tabs
+                    .iter()
+                    .find(|(r, _)| hit(*r, x, y))
+                    .map(|(_, i)| *i);
+                if let Some(to) = over.filter(|to| *to != from) {
+                    let session = self.sessions.remove(from);
+                    self.sessions.insert(to, session);
+                    self.active = to;
+                    self.dragging_tab = Some(to);
+                    self.dirty.store(true, Ordering::Relaxed);
+                }
+                return;
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((_, end)) = self.selection.as_mut() {
                     *end = (x, y);
                 }
+                return;
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.dragging_tab.is_some() => {
+                self.dragging_tab = None;
                 return;
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing.is_some() => {
@@ -538,6 +597,16 @@ impl App {
                 // A press starts a selection; it becomes one when dragged.
                 self.selection = Some(((x, y), (x, y)));
                 None
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let tab = self
+                    .hits
+                    .tabs
+                    .iter()
+                    .find(|(r, _)| hit(*r, x, y))
+                    .map(|(_, i)| *i);
+                self.overlay = tab.map(|tab| Overlay::TabMenu(tab, 0));
+                return;
             }
             _ => return,
         };
@@ -579,6 +648,10 @@ impl App {
                         self.set_theme(row);
                         None
                     }
+                    Some(Overlay::TabMenu(tab, _)) => {
+                        self.tab_menu_pick(tab, row);
+                        return;
+                    }
                     Some(Overlay::QuickOpen(q, _)) => Some(Overlay::QuickOpen(q, row)),
                     Some(Overlay::Palette(q, _)) => Some(Overlay::Palette(q, row)),
                     Some(Overlay::Search(q, _, h, f)) => Some(Overlay::Search(q, row, h, f)),
@@ -592,15 +665,9 @@ impl App {
         if let Some(menu) = find(&self.hits.menus) {
             self.overlay = Some(Overlay::Menu(menu, 0));
         } else if let Some(tab) = find(&self.hits.tabs) {
-            let now = std::time::Instant::now();
-            let again = self
-                .last_tab_click
-                .is_some_and(|(t, at)| t == tab && now.duration_since(at).as_millis() < 400);
             self.active = tab;
-            self.last_tab_click = Some((tab, now));
-            if again {
-                self.execute(Command::RenameTab);
-            }
+            self.dragging_tab = Some(tab);
+            self.ensure_agent();
         } else if hit(self.hits.plus, x, y) {
             self.execute(Command::NewTab);
         } else if hit(self.hits.usage, x, y) {
@@ -670,7 +737,7 @@ impl App {
         // The path as the user typed it — `.`, most often — is not the name
         // the header should show.
         let project = project.map(|p| p.canonicalize().unwrap_or(p));
-        Self {
+        let mut app = Self {
             sessions: vec![Session::new(project, &settings)],
             active: 0,
             show_sidebar: settings.show_sidebar,
@@ -685,7 +752,8 @@ impl App {
             selection: None,
             resizing: None,
             hover: None,
-            last_tab_click: None,
+            autostart: false,
+            dragging_tab: None,
             last_frame: Vec::new(),
             osc52: None,
             caret_on: true,
@@ -695,7 +763,9 @@ impl App {
             themes: theme::builtin(),
             note: None,
             should_quit: false,
-        }
+        };
+        app.add_worktree_sessions();
+        app
     }
 
     /// Opens a project: in this tab when it has none, else in a new one. The
@@ -713,6 +783,7 @@ impl App {
         self.settings.push_recent(&path);
         let _ = self.settings.save();
         self.start_agent();
+        self.add_worktree_sessions();
         self.refresh();
         self.focus = Focus::Agent;
     }
@@ -832,6 +903,37 @@ impl App {
                 }
             }
             Err(e) => self.note = Some(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// One of the tab menu's rows, chosen for `tab`.
+    fn tab_menu_pick(&mut self, tab: usize, row: usize) {
+        self.overlay = None;
+        self.active = tab.min(self.sessions.len() - 1);
+        match TAB_MENU[row.min(TAB_MENU.len() - 1)] {
+            "Rename…" => self.execute(Command::RenameTab),
+            "Delete worktree" => self.delete_worktree(),
+            _ => self.execute(Command::CloseTab),
+        }
+    }
+
+    /// Removes the active workspace's worktree from disk and its tab. The
+    /// main working copy is not a worktree to remove.
+    fn delete_worktree(&mut self) {
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        if repo.worktree.is_none() {
+            self.note = Some("this is the repository itself, not a worktree".into());
+            return;
+        }
+        self.agent = None;
+        match git::worktree_remove(&repo, &repo.root) {
+            Ok(()) => {
+                self.note = Some(format!("removed {}", repo.root.display()));
+                self.execute(Command::CloseTab);
+            }
+            Err(e) => self.note = Some(e),
         }
     }
 
@@ -1096,6 +1198,21 @@ impl App {
             Some(Overlay::Usage) => {
                 if closes {
                     self.overlay = None;
+                }
+                return;
+            }
+            Some(Overlay::TabMenu(tab, row)) => {
+                match key.code {
+                    KeyCode::Up => {
+                        self.overlay = Some(Overlay::TabMenu(tab, row.saturating_sub(1)))
+                    }
+                    KeyCode::Down => {
+                        self.overlay =
+                            Some(Overlay::TabMenu(tab, (row + 1).min(TAB_MENU.len() - 1)))
+                    }
+                    KeyCode::Enter => self.tab_menu_pick(tab, row),
+                    _ if closes => self.overlay = None,
+                    _ => {}
                 }
                 return;
             }
@@ -1473,9 +1590,13 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            Command::NextTab => self.active = (self.active + 1) % self.sessions.len(),
+            Command::NextTab => {
+                self.active = (self.active + 1) % self.sessions.len();
+                self.ensure_agent();
+            }
             Command::PrevTab => {
-                self.active = (self.active + self.sessions.len() - 1) % self.sessions.len()
+                self.active = (self.active + self.sessions.len() - 1) % self.sessions.len();
+                self.ensure_agent();
             }
             Command::Close if self.editor.is_some() => {
                 if self.may_close(false) {

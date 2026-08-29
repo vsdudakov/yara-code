@@ -1118,26 +1118,67 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
 }
 
 #[test]
-fn a_double_click_on_a_tab_asks_for_its_name() {
+fn a_project_opens_with_a_tab_per_worktree_and_a_right_click_on_a_tab_drops_its_menu() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    let mut app = following(Settings::default());
-    frame(&mut app);
-    let (tab, _) = app.hits.tabs[0];
-    let click = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
+    let repo = Repo::new("yara-frame-worktrees");
+    let trees = repo.0.join("trees");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "review",
+        trees.join("review").to_str().unwrap(),
+    ]);
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    assert_eq!(app.sessions.len(), 2, "the repository and its worktree");
+    let rows = frame(&mut app);
+    assert!(rows[0].contains(" main   review  [+]"), "{}", rows[0]);
+    assert!(
+        app.sessions[1].agent.is_none(),
+        "no agent until it is looked at"
+    );
+
+    let (tab, _) = app.hits.tabs[1];
+    let right = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
         column: tab.x + 1,
         row: tab.y,
         modifiers: KeyModifiers::NONE,
     };
-    app.handle_mouse(click);
-    assert!(app.overlay.is_none(), "one click only switches");
-    app.handle_mouse(click);
+    app.handle_mouse(right);
+    let all = text(&mut app);
+    assert!(
+        all.contains("Rename…") && all.contains("Delete worktree") && all.contains("Close"),
+        "{all}"
+    );
+    app.handle_key(key(KeyCode::Enter));
     assert!(matches!(app.overlay, Some(Overlay::RenameTab(_))));
-    for c in "review".chars() {
+    for c in "pr 7".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Enter));
-    assert!(frame(&mut app)[0].contains(" review  [+]"));
+    assert!(frame(&mut app)[0].contains(" main   pr 7  [+]"));
+
+    app.handle_mouse(right);
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.sessions.len(), 1, "the worktree's tab is gone");
+    assert!(!trees.join("review").exists(), "and so is the worktree");
+    // The repository itself is not a worktree to delete.
+    frame(&mut app);
+    let (tab, _) = app.hits.tabs[0];
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: tab.x + 1,
+        row: tab.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.sessions.len(), 1);
+    assert!(app.note.as_deref().unwrap().contains("not a worktree"));
 }
 
 #[test]
@@ -1171,4 +1212,52 @@ fn closing_a_dirty_file_asks_first_and_so_does_quitting() {
     assert!(std::fs::read_to_string(repo.0.join("src/main.rs"))
         .unwrap()
         .starts_with("qfn main"));
+}
+
+#[test]
+fn a_tab_dragged_over_another_takes_its_place() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-drag-tab");
+    let trees = repo.0.join("trees");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "second",
+        trees.join("second").to_str().unwrap(),
+    ]);
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    assert!(frame(&mut app)[0].contains(" main   second  [+]"));
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let (first, _) = app.hits.tabs[0];
+    let (second, _) = app.hits.tabs[1];
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        first.x + 1,
+        first.y,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        second.x + 1,
+        second.y,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Up(MouseButton::Left),
+        second.x + 1,
+        second.y,
+    ));
+    assert!(
+        frame(&mut app)[0].contains(" second   main  [+]"),
+        "{}",
+        frame(&mut app)[0]
+    );
+    assert_eq!(app.active, 1, "the dragged tab stays active");
+    assert!(app.dragging_tab.is_none());
 }

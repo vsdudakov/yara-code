@@ -122,6 +122,30 @@ pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, Stri
     Ok(path.canonicalize().unwrap_or(path))
 }
 
+/// The linked worktrees of the repository — every working copy but the
+/// main one — as folders.
+pub fn worktrees(repo: &Repo) -> Vec<PathBuf> {
+    let list = git(&repo.root, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+    list.split("\n\n")
+        .skip(1)
+        .filter_map(|entry| entry.lines().find_map(|l| l.strip_prefix("worktree ")))
+        .map(|p| {
+            PathBuf::from(p)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(p))
+        })
+        .collect()
+}
+
+/// Removes a linked worktree, folder and all; its branch stays.
+pub fn worktree_remove(repo: &Repo, path: &Path) -> Result<(), String> {
+    git(
+        &repo.root,
+        &["worktree", "remove", "--force", &path.to_string_lossy()],
+    )
+    .map(|_| ())
+}
+
 /// The pull request the branch is on, as `#number title`, through the `gh`
 /// CLI when it is installed and logged in; nothing otherwise. Slow, so it
 /// is asked off the drawing thread.
@@ -400,6 +424,12 @@ mod tests {
         git(dir.path(), &["branch", "-q", "older"]).unwrap();
         let older = worktree_add(&repo, &trees, "older").unwrap();
         assert_eq!(open(&older, "main").unwrap().branch, "older");
+        let mut listed = worktrees(&repo);
+        listed.sort();
+        assert_eq!(listed, [older.clone(), path.clone()]);
+        worktree_remove(&repo, &older).unwrap();
+        assert_eq!(worktrees(&repo), [path]);
+        assert!(!older.exists());
     }
 
     #[test]

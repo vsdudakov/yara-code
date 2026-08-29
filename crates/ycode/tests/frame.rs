@@ -872,6 +872,7 @@ fn the_wheel_scrolls_the_diff_and_moves_the_editor_caret() {
     assert_eq!(app.scroll, 0, "a follow key starts at the top again");
 
     app.open_file(&repo.0.join("src/main.rs"));
+    frame(&mut app);
     for _ in 0..2 {
         app.handle_mouse(wheel(
             MouseEventKind::ScrollDown,
@@ -879,7 +880,76 @@ fn the_wheel_scrolls_the_diff_and_moves_the_editor_caret() {
             follow.y + 3,
         ));
     }
-    assert_eq!(app.editor.as_ref().unwrap().line_col().0, 6);
+    let all = text(&mut app);
+    assert!(
+        all.contains("    7  line 7") && !all.contains("    1  line 1"),
+        "{all}"
+    );
+    assert_eq!(
+        app.editor.as_ref().unwrap().line_col().0,
+        0,
+        "the caret stays"
+    );
     app.handle_mouse(wheel(MouseEventKind::ScrollUp, follow.x + 3, follow.y + 3));
-    assert_eq!(app.editor.as_ref().unwrap().line_col().0, 3);
+    assert!(text(&mut app).contains("    4  line 4"));
+    // Typing brings the view back to the caret.
+    app.handle_key(key(KeyCode::Char('x')));
+    assert!(text(&mut app).contains("    1  xline 1"));
+}
+
+#[test]
+fn a_file_opened_from_the_tree_by_mouse_scrolls_both_ways_and_a_click_keeps_it_open() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-wheel-tree");
+    let body: String = (1..=80).map(|i| format!("line {i}\n")).collect();
+    repo.file("src/main.rs", &body);
+    let mut app = App::with_settings(
+        Some(repo.0.clone()),
+        Settings {
+            show_sidebar: true,
+            ..Settings::default()
+        },
+        Theme::default(),
+    );
+    app.refresh();
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    frame(&mut app);
+    let (row, _) = app.hits.file_rows[0];
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        row.x + 3,
+        row.y,
+    ));
+    frame(&mut app);
+    let (row, _) = app.hits.file_rows[1];
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        row.x + 3,
+        row.y,
+    ));
+    assert!(app.editor.is_some());
+    frame(&mut app);
+    let follow = app.hits.follow;
+    for _ in 0..60 {
+        app.handle_mouse(ev(MouseEventKind::ScrollDown, follow.x + 5, follow.y + 5));
+    }
+    let all = text(&mut app);
+    assert!(all.contains("line 80"), "{all}");
+    for _ in 0..10 {
+        app.handle_mouse(ev(MouseEventKind::ScrollUp, follow.x + 5, follow.y + 5));
+    }
+    let all = text(&mut app);
+    assert!(!all.contains("line 80"), "scrolled back up: {all}");
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        follow.x + 5,
+        follow.y + 5,
+    ));
+    assert!(app.editor.is_some(), "a click in the editor keeps it open");
+    assert_eq!(app.focus, Focus::Editor);
 }

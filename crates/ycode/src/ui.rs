@@ -1017,7 +1017,19 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let (line, col) = buffer.line_col();
     let height = body.height as usize;
-    let top = line.saturating_sub(height.saturating_sub(1));
+    let total = buffer.text.lines().count()
+        + usize::from(buffer.text.ends_with('\n') || buffer.text.is_empty());
+    // The view scrolls by the wheel, and follows the caret only when the
+    // caret moved — so reading a file does not drag the caret about.
+    let mut top = (app.scroll as usize).min(total.saturating_sub(height));
+    if app.caret_moved {
+        if line < top {
+            top = line;
+        } else if line >= top + height {
+            top = line + 1 - height;
+        }
+    }
+    let new_scroll = top as u16;
     let mut lines: Vec<Line> = Vec::new();
     let mut number = 0;
     app.syntax
@@ -1049,13 +1061,15 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(Span::styled(format!("{number:>5}  "), dim)));
     }
     frame.render_widget(Paragraph::new(lines), body);
-    if focused {
+    if focused && line >= top {
         let x = body.x + 7 + col as u16;
         let y = body.y + (line - top) as u16;
         if x < body.right() && y < body.bottom() {
             frame.set_cursor_position((x, y));
         }
     }
+    app.scroll = new_scroll;
+    app.caret_moved = false;
 }
 
 /// The file as it stands, with an accent bar beside every line the edit

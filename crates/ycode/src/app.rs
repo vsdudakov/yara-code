@@ -124,8 +124,11 @@ pub struct Session {
     /// timeline's current edit until the follow keys are used again.
     pub pinned: Option<EditEvent>,
     pub view: View,
-    /// How far the follow pane's body is scrolled, in rows.
+    /// How far the follow pane's body — or the file being edited — is
+    /// scrolled, in rows.
     pub scroll: u16,
+    /// The caret moved since the last frame, so the view must show it.
+    pub caret_moved: bool,
     /// The project's files, for the sidebar.
     pub tree: Option<Tree>,
     /// A file open for editing, in the follow pane's place.
@@ -161,6 +164,7 @@ impl Session {
             pinned: None,
             view: View::Diff,
             scroll: 0,
+            caret_moved: true,
             editor: None,
             name: None,
             pr,
@@ -367,18 +371,10 @@ impl App {
                     );
                 }
             }
-            None if hit(self.hits.follow, x, y) => match self.editor.as_mut() {
-                Some(buffer) => {
-                    for _ in 0..3 {
-                        if up {
-                            buffer.up()
-                        } else {
-                            buffer.down()
-                        }
-                    }
-                }
-                None => self.scroll = step(self.scroll as usize) as u16,
-            },
+            None if hit(self.hits.follow, x, y) => {
+                self.scroll = step(self.scroll as usize) as u16;
+                self.caret_moved = false;
+            }
             None if hit(self.hits.files, x, y) => {
                 if let Some(tree) = self.tree.as_mut() {
                     tree.move_selection(if up { -3 } else { 3 });
@@ -626,9 +622,20 @@ impl App {
 
     /// Opens a file in the follow pane's place, the keyboard on it.
     pub fn open_file(&mut self, path: &std::path::Path) {
+        // The file already open, and untouched, stays where it was scrolled.
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|b| b.path == path && !b.modified())
+        {
+            self.focus = Focus::Editor;
+            return;
+        }
         match Buffer::open(path) {
             Ok(buffer) => {
                 self.editor = Some(buffer);
+                self.scroll = 0;
+                self.caret_moved = true;
                 self.focus = Focus::Editor;
                 if let Some(tree) = self.tree.as_mut() {
                     tree.reveal(path);
@@ -1086,11 +1093,13 @@ impl App {
             }
             Command::Save => self.save(),
             Command::Undo => {
+                self.caret_moved = true;
                 if let Some(b) = self.editor.as_mut() {
                     b.undo()
                 }
             }
             Command::Redo => {
+                self.caret_moved = true;
                 if let Some(b) = self.editor.as_mut() {
                     b.redo()
                 }

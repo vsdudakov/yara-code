@@ -18,6 +18,8 @@ pub mod syntax;
 pub mod test_support;
 pub mod theme;
 pub mod tree;
+pub mod update;
+pub mod usage;
 
 use std::path::PathBuf;
 

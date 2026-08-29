@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use yara_core::buffer::Buffer;
 use yara_core::command::{self, Chord, Command, Key, FILE_MENU, HELP_MENU};
 use yara_core::follow::{EditEvent, Follow};
@@ -19,6 +20,8 @@ use yara_core::settings::Settings;
 use yara_core::syntax::Syntax;
 use yara_core::theme::{self, Theme};
 use yara_core::tree::{self, Tree};
+use yara_core::update::{self, Checker, Installer, Progress, Release};
+use yara_core::usage::{Poller, Usage};
 
 use crate::keys::chord_of;
 
@@ -61,6 +64,43 @@ pub enum Overlay {
     Menu(usize, usize),
     /// Recent projects, with the row the cursor is on.
     Recent(usize),
+    /// What each agent has used of its plan.
+    Usage,
+    /// The themes, with the row the cursor is on.
+    Themes(usize),
+}
+
+/// Where things were drawn, so a click can be told what it landed on.
+#[derive(Default)]
+pub struct Hits {
+    pub menus: Vec<(Rect, usize)>,
+    pub tabs: Vec<(Rect, usize)>,
+    pub plus: Rect,
+    pub usage: Rect,
+    pub files: Rect,
+    pub file_rows: Vec<(Rect, usize)>,
+    pub agent: Rect,
+    pub follow: Rect,
+    pub live: Rect,
+    pub ticks: Vec<(Rect, usize)>,
+    pub counter: Rect,
+    pub overlay: Rect,
+    pub rows: Vec<(Rect, usize)>,
+}
+
+fn hit(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
+}
+
+/// Where the editor stands with its own releases.
+#[derive(Default)]
+pub struct Updates {
+    checker: Checker,
+    installer: Installer,
+    /// A newer release, once the check found one.
+    pub available: Option<Release>,
+    /// The tag installed this session, waiting for a restart.
+    pub installed: Option<String>,
 }
 
 /// The menus in the order the header shows them.
@@ -165,6 +205,12 @@ pub struct App {
     pub overlay: Option<Overlay>,
     /// The RECENT row the start page's cursor is on.
     pub start_row: usize,
+    pub hits: Hits,
+    pub updates: Updates,
+    usage_poller: Poller,
+    /// The agents' figures and how many seconds old they are.
+    pub usage: Option<(Vec<Usage>, u64)>,
+    pub themes: Vec<Theme>,
     /// What the status bar says about the last thing that happened.
     pub note: Option<String>,
     pub should_quit: bool,
@@ -199,8 +245,184 @@ impl App {
             .cloned()
             .unwrap_or_default();
         let mut app = Self::with_settings(project, settings, theme);
+        app.themes = theme::load_all();
         app.note = complaint;
         app
+    }
+
+    /// Asks the agents what they have used, off the drawing thread.
+    pub fn poll_usage(&mut self) {
+        if self.settings.usage_commands.is_empty() {
+            return;
+        }
+        let dirty = self.dirty.clone();
+        self.usage_poller
+            .start(self.settings.usage_commands.clone(), move || {
+                dirty.store(true, Ordering::Relaxed)
+            });
+    }
+
+    /// The header's chip: the first agent's figure, when there is one.
+    pub fn usage_chip(&self) -> Option<String> {
+        let (usage, _) = self.usage.as_ref()?;
+        let first = usage.first()?;
+        Some(format!("◐ {} {}%", first.agent, first.percent))
+    }
+
+    /// Takes in what the background threads have finished: the usage poll,
+    /// the update check, the install.
+    pub fn collect(&mut self) {
+        if let Some(latest) = self.usage_poller.latest() {
+            self.usage = Some(latest);
+        }
+        match self.updates.checker.take() {
+            Some(Ok(release)) if release.is_newer() => {
+                self.updates.available = Some(release.clone());
+                if update::can_install() {
+                    let dirty = self.dirty.clone();
+                    self.updates
+                        .installer
+                        .start(&release, move || dirty.store(true, Ordering::Relaxed));
+                } else {
+                    self.note = Some(format!(
+                        "{} is out — {}",
+                        release.tag,
+                        update::how_to_update()
+                    ));
+                }
+            }
+            Some(Ok(_)) => self.note = Some(format!("v{} is the latest", update::CURRENT)),
+            Some(Err(e)) => self.note = Some(format!("update check failed: {e}")),
+            None => {}
+        }
+        if let Some(progress) = self.updates.installer.poll() {
+            let tag = self.updates.installer.tag().to_string();
+            if let Progress::Done(_) = &progress {
+                self.updates.installed = Some(tag.clone());
+                self.note = Some(format!("↓ {tag} downloaded — restart to apply"));
+            } else {
+                self.note = Some(progress.line(&tag));
+            }
+        }
+    }
+
+    /// The version chip in the status bar: what runs, with an arrow when
+    /// something newer exists and a tick once it is installed.
+    pub fn version_chip(&self) -> String {
+        match (&self.updates.installed, &self.updates.available) {
+            (Some(tag), _) => format!("{tag} ✓"),
+            (None, Some(_)) => format!("v{} ↑", update::CURRENT),
+            (None, None) => format!("v{}", update::CURRENT),
+        }
+    }
+
+    fn set_theme(&mut self, index: usize) {
+        let Some(theme) = self.themes.get(index).cloned() else {
+            return;
+        };
+        self.settings.theme = theme.name.clone();
+        self.syntax.set_theme(&theme);
+        self.theme = theme;
+        let _ = self.settings.save();
+    }
+
+    /// A click. Overlays take the click if it lands in their box and close
+    /// on the backdrop; otherwise the chrome answers to it.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return;
+        }
+        let (x, y) = (mouse.column, mouse.row);
+        if self.overlay.is_some() {
+            if !hit(self.hits.overlay, x, y) {
+                self.overlay = None;
+                return;
+            }
+            let row = self
+                .hits
+                .rows
+                .iter()
+                .find(|(r, _)| hit(*r, x, y))
+                .map(|(_, i)| *i);
+            if let Some(row) = row {
+                self.overlay = match self.overlay.take() {
+                    Some(Overlay::Changes(_)) => {
+                        self.open_change(row);
+                        return;
+                    }
+                    Some(Overlay::Menu(menu, _)) => {
+                        self.overlay = None;
+                        if let Some(Some(command)) = MENUS[menu].1.get(row) {
+                            self.execute(*command);
+                        }
+                        return;
+                    }
+                    Some(Overlay::Recent(_)) => {
+                        if let Some(path) = self.settings.recent_projects.get(row).cloned() {
+                            self.open_project(path);
+                        }
+                        None
+                    }
+                    Some(Overlay::Themes(_)) => {
+                        self.set_theme(row);
+                        None
+                    }
+                    Some(Overlay::QuickOpen(q, _)) => Some(Overlay::QuickOpen(q, row)),
+                    Some(Overlay::Palette(q, _)) => Some(Overlay::Palette(q, row)),
+                    Some(Overlay::Search(q, _, h, f)) => Some(Overlay::Search(q, row, h, f)),
+                    other => other,
+                };
+            }
+            return;
+        }
+        let find =
+            |rects: &[(Rect, usize)]| rects.iter().find(|(r, _)| hit(*r, x, y)).map(|(_, i)| *i);
+        if let Some(menu) = find(&self.hits.menus) {
+            self.overlay = Some(Overlay::Menu(menu, 0));
+        } else if let Some(tab) = find(&self.hits.tabs) {
+            self.active = tab;
+        } else if hit(self.hits.plus, x, y) {
+            self.execute(Command::NewTab);
+        } else if hit(self.hits.usage, x, y) {
+            self.execute(Command::AgentUsage);
+        } else if hit(self.hits.live, x, y) {
+            self.execute(Command::FollowLive);
+        } else if let Some(i) = self
+            .hits
+            .ticks
+            .iter()
+            .find(|(r, _)| hit(*r, x, y))
+            .map(|(_, i)| *i)
+        {
+            self.pinned = None;
+            self.follow.jump_to(i);
+            self.focus = Focus::Follow;
+        } else if hit(self.hits.counter, x, y) {
+            self.pinned = None;
+            self.follow.jump_to_next_unreviewed();
+        } else if let Some(i) = self
+            .hits
+            .file_rows
+            .iter()
+            .find(|(r, _)| hit(*r, x, y))
+            .map(|(_, i)| *i)
+        {
+            self.focus = Focus::Files;
+            if let Some(tree) = self.tree.as_mut() {
+                tree.selected = i;
+            }
+            self.execute(Command::MarkReviewed);
+        } else if hit(self.hits.files, x, y) {
+            self.focus = Focus::Files;
+        } else if hit(self.hits.agent, x, y) {
+            self.focus = Focus::Agent;
+        } else if hit(self.hits.follow, x, y) {
+            self.focus = if self.editor.is_some() {
+                Focus::Editor
+            } else {
+                Focus::Follow
+            };
+        }
     }
 
     pub fn with_settings(project: Option<PathBuf>, settings: Settings, theme: Theme) -> Self {
@@ -215,6 +437,11 @@ impl App {
             focus: Focus::Agent,
             overlay: None,
             start_row: 0,
+            hits: Hits::default(),
+            updates: Updates::default(),
+            usage_poller: Poller::default(),
+            usage: None,
+            themes: theme::builtin(),
             note: None,
             should_quit: false,
         }
@@ -517,6 +744,27 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::Usage) => {
+                if closes {
+                    self.overlay = None;
+                }
+                return;
+            }
+            Some(Overlay::Themes(row)) => {
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::Themes(row.saturating_sub(1))),
+                    KeyCode::Down => {
+                        self.overlay = Some(Overlay::Themes((row + 1).min(self.themes.len() - 1)))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        self.set_theme(row);
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::Recent(row)) => {
                 match key.code {
                     KeyCode::Up => self.overlay = Some(Overlay::Recent(row.saturating_sub(1))),
@@ -723,6 +971,37 @@ impl App {
             Command::FileMenu => self.overlay = Some(Overlay::Menu(0, 0)),
             Command::HelpMenu => self.overlay = Some(Overlay::Menu(1, 0)),
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
+            Command::AgentUsage => {
+                self.poll_usage();
+                self.overlay = Some(Overlay::Usage);
+            }
+            Command::ThemePicker => {
+                let current = self.themes.iter().position(|t| t.name == self.theme.name);
+                self.overlay = Some(Overlay::Themes(current.unwrap_or(0)));
+            }
+            Command::CheckForUpdates | Command::InstallUpdate => {
+                let dirty = self.dirty.clone();
+                match self.updates.available.clone() {
+                    Some(release) if update::can_install() => {
+                        self.updates
+                            .installer
+                            .start(&release, move || dirty.store(true, Ordering::Relaxed));
+                    }
+                    Some(release) => {
+                        self.note = Some(format!(
+                            "{} is out — {}",
+                            release.tag,
+                            update::how_to_update()
+                        ))
+                    }
+                    None => {
+                        self.note = Some("checking for updates…".into());
+                        self.updates
+                            .checker
+                            .start(move || dirty.store(true, Ordering::Relaxed));
+                    }
+                }
+            }
             Command::Documentation => {
                 if !yara_core::open_url(yara_core::DOCUMENTATION) {
                     self.note = Some(format!("no browser to open {}", yara_core::DOCUMENTATION));

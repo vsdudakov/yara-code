@@ -105,6 +105,7 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::CommandPalette => "Ctrl+Shift+P",
         Command::SearchProject => "Ctrl+Shift+F",
         Command::AgentUsage => "Ctrl+Shift+U",
+        Command::ThemePicker => "Ctrl+Shift+T",
         Command::QuickOpen => "Ctrl+P",
         Command::FileMenu => "F10",
         Command::HelpMenu => "Shift+F1",
@@ -151,6 +152,9 @@ pub struct Settings {
     /// Where a new tab's worktree is made; empty means a `<repo>-worktrees`
     /// folder beside the repository.
     pub worktrees_dir: String,
+    /// A command per agent that prints its plan usage as JSON — see
+    /// `usage.rs` — for the AGENT USAGE panel and the header chip.
+    pub usage_commands: BTreeMap<String, String>,
     /// What project search leaves out, in VS Code's glob spelling.
     pub search_exclude: Vec<String>,
     /// Chords the agent keeps even though the editor binds them, because
@@ -178,6 +182,7 @@ impl Default for Settings {
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
+            usage_commands: BTreeMap::new(),
             search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
             agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z"]
                 .iter()
@@ -350,6 +355,12 @@ impl Settings {
   // beside the repository).
   "worktrees_dir": {worktrees_dir},
 
+  // A command per agent that prints what it has used of its plan, as JSON:
+  //   {{"plan": "Max", "percent": 62, "detail": "1.2M tokens", "reset": "in 3h"}}
+  // for example  "usage_commands": {{ "claude": "my-claude-usage" }}.
+  // Shown by Agent Usage (Ctrl+Shift+U) and the chip in the header.
+  "usage_commands": {usage_commands},
+
   // What Search Project leaves out: a bare name matches a folder anywhere,
   // "*.lock" a file, "src/**/gen" a path.
   "search_exclude": {search_exclude},
@@ -383,6 +394,7 @@ impl Settings {
             worktrees_dir = json(&self.worktrees_dir),
             agent_keys = json(&self.agent_keys),
             search_exclude = json(&self.search_exclude),
+            usage_commands = json(&self.usage_commands),
             keys = json(&self.keys),
             recent_projects = json(&self.recent_projects),
             docs = crate::DOCUMENTATION,
@@ -577,6 +589,7 @@ mod tests {
             "\"worktrees_dir\"",
             "\"agent_keys\"",
             "\"search_exclude\"",
+            "\"usage_commands\"",
             "\"keys\"",
             "\"recent_projects\"",
         ] {

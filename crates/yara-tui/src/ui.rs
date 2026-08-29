@@ -15,10 +15,11 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, Focus, Overlay, View, MENUS};
+use crate::app::{App, Focus, Hits, Overlay, View, MENUS};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    app.hits = Hits::default();
     let area = frame.area();
     frame.render_widget(Block::new().style(base(&app.theme)), area);
     let [header, body, status] = Layout::vertical([
@@ -51,6 +52,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Side::Left => (first, second),
         Side::Right => (second, first),
     };
+    app.hits.files = files;
+    app.hits.agent = agent;
+    app.hits.follow = follow;
     if app.show_sidebar {
         draw_files(frame, app, files);
     }
@@ -60,23 +64,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_overlay(frame, app, area);
 }
 
-fn draw_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    match &app.overlay {
-        Some(Overlay::Changes(row)) => draw_changes(frame, app, *row, area),
+fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
+    match app.overlay.clone() {
+        Some(Overlay::Usage) => draw_usage(frame, app, area),
+        Some(Overlay::Themes(row)) => draw_themes(frame, app, row, area),
+        Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
         Some(Overlay::NewTab(text)) => {
-            draw_prompt(frame, app, " NEW AGENT ", "branch / task name", text, area)
+            draw_prompt(frame, app, " NEW AGENT ", "branch / task name", &text, area)
         }
         Some(Overlay::RenameTab(text)) => {
-            draw_prompt(frame, app, " RENAME TAB ", "name", text, area)
+            draw_prompt(frame, app, " RENAME TAB ", "name", &text, area)
         }
-        Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, query, *row, area),
-        Some(Overlay::Palette(query, row)) => draw_palette(frame, app, query, *row, area),
+        Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, &query, row, area),
+        Some(Overlay::Palette(query, row)) => draw_palette(frame, app, &query, row, area),
         Some(Overlay::Search(query, row, hits, files)) => {
-            draw_search(frame, app, query, *row, hits, *files, area)
+            draw_search(frame, app, &query, row, &hits, files, area)
         }
-        Some(Overlay::Keys(scroll)) => draw_keys(frame, app, *scroll, area),
-        Some(Overlay::Menu(menu, row)) => draw_menu(frame, app, *menu, *row, area),
-        Some(Overlay::Recent(row)) => draw_recent(frame, app, *row, area),
+        Some(Overlay::Keys(scroll)) => draw_keys(frame, app, scroll, area),
+        Some(Overlay::Menu(menu, row)) => draw_menu(frame, app, menu, row, area),
+        Some(Overlay::Recent(row)) => draw_recent(frame, app, row, area),
         None => {}
     }
 }
@@ -85,13 +91,13 @@ fn draw_overlay(frame: &mut Frame, app: &App, area: Rect) {
 /// tall inside; what every overlay is drawn in.
 fn overlay_box(
     frame: &mut Frame,
-    app: &App,
+    app: &mut App,
     title: &str,
     width: u16,
     height: u16,
     area: Rect,
 ) -> Rect {
-    let ui = &app.theme.ui;
+    let ui = app.theme.ui.clone();
     frame.render_widget(Block::new().style(fg(ui.fg_dim)), area);
     let width = width.min(area.width);
     let height = (height + 2).min(area.height.max(2));
@@ -108,12 +114,30 @@ fn overlay_box(
     let inner = block.inner(rect);
     frame.render_widget(Clear, rect);
     frame.render_widget(block, rect);
+    app.hits.overlay = rect;
     inner
 }
 
+/// Remembers where a list's rows were drawn, from `first` on, for the mouse.
+fn row_hits(app: &mut App, area: Rect, first: usize, count: usize) {
+    app.hits.rows = (0..count.min(area.height as usize))
+        .map(|i| {
+            (
+                Rect::new(area.x, area.y + i as u16, area.width, 1),
+                first + i,
+            )
+        })
+        .collect();
+}
+
 /// A query line with a block cursor after it.
-fn query_line<'a>(app: &App, prompt: &'a str, query: &'a str, placeholder: &'a str) -> Line<'a> {
-    let ui = &app.theme.ui;
+fn query_line<'a>(
+    app: &mut App,
+    prompt: &'a str,
+    query: &'a str,
+    placeholder: &'a str,
+) -> Line<'a> {
+    let ui = app.theme.ui.clone();
     let mut spans = vec![Span::styled(prompt, fg(ui.fg_dim)), Span::raw(query)];
     spans.push(Span::styled("█", fg(ui.cursor)));
     if query.is_empty() {
@@ -123,7 +147,7 @@ fn query_line<'a>(app: &App, prompt: &'a str, query: &'a str, placeholder: &'a s
 }
 
 /// The rows of a list with the cursor's row lit, scrolled so it shows.
-fn list_lines<'a>(app: &App, rows: Vec<Line<'a>>, row: usize, height: usize) -> Vec<Line<'a>> {
+fn list_lines<'a>(app: &mut App, rows: Vec<Line<'a>>, row: usize, height: usize) -> Vec<Line<'a>> {
     let start = row.saturating_sub(height.saturating_sub(1));
     rows.into_iter()
         .enumerate()
@@ -139,8 +163,8 @@ fn list_lines<'a>(app: &App, rows: Vec<Line<'a>>, row: usize, height: usize) -> 
         .collect()
 }
 
-fn draw_palette(frame: &mut Frame, app: &App, query: &str, row: usize, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_palette(frame: &mut Frame, app: &mut App, query: &str, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
     let hits = app.palette_hits(query);
     let inner = overlay_box(
         frame,
@@ -175,14 +199,14 @@ fn draw_palette(frame: &mut Frame, app: &App, query: &str, row: usize, area: Rec
 
 fn draw_search(
     frame: &mut Frame,
-    app: &App,
+    app: &mut App,
     query: &str,
     row: usize,
     hits: &[yara_core::search::Hit],
     files: usize,
     area: Rect,
 ) {
-    let ui = &app.theme.ui;
+    let ui = app.theme.ui.clone();
     let inner = overlay_box(
         frame,
         app,
@@ -213,8 +237,8 @@ fn draw_search(
     frame.render_widget(Paragraph::new(Line::styled(footer, fg(ui.fg_dim))), foot);
 }
 
-fn draw_keys(frame: &mut Frame, app: &App, scroll: usize, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_keys(frame: &mut Frame, app: &mut App, scroll: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
     let all = yara_core::command::ALL;
     let inner = overlay_box(frame, app, "KEY BINDINGS", 60, all.len() as u16, area);
     let width = inner.width as usize;
@@ -241,8 +265,8 @@ fn draw_keys(frame: &mut Frame, app: &App, scroll: usize, area: Rect) {
 }
 
 /// A menu dropped down from its word in the header.
-fn draw_menu(frame: &mut Frame, app: &App, menu: usize, row: usize, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_menu(frame: &mut Frame, app: &mut App, menu: usize, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
     let (name, entries) = MENUS[menu];
     // Where the word sits in the header: after " YARA  ", each word two
     // spaces apart.
@@ -289,11 +313,13 @@ fn draw_menu(frame: &mut Frame, app: &App, menu: usize, row: usize, area: Rect) 
             }
         })
         .collect();
+    app.hits.overlay = rect;
+    row_hits(app, inner, 0, entries.len());
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_recent(frame: &mut Frame, app: &App, row: usize, area: Rect) {
-    let recent = &app.settings.recent_projects;
+fn draw_recent(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
+    let recent = app.settings.recent_projects.clone();
     let inner = overlay_box(
         frame,
         app,
@@ -315,12 +341,74 @@ fn draw_recent(frame: &mut Frame, app: &App, row: usize, area: Rect) {
     } else {
         list_lines(app, rows, row, inner.height as usize)
     };
+    row_hits(
+        app,
+        inner,
+        row.saturating_sub(inner.height.saturating_sub(1) as usize),
+        recent.len(),
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// What each agent has used of its plan: a bar, a percent, the detail.
+fn draw_usage(frame: &mut Frame, app: &mut App, area: Rect) {
+    let ui = app.theme.ui.clone();
+    let dim = fg(ui.fg_dim);
+    let usage = app.usage.clone();
+    let rows = usage.as_ref().map_or(1, |(u, _)| u.len().max(1));
+    let inner = overlay_box(frame, app, "AGENT USAGE", 72, rows as u16 * 2 + 1, area);
+    let mut lines: Vec<Line> = Vec::new();
+    match &usage {
+        None if app.settings.usage_commands.is_empty() => lines.push(Line::styled(
+            " no usage_commands in settings.json — see the comment there",
+            dim,
+        )),
+        None => lines.push(Line::styled(" asking the agents…", dim)),
+        Some((usage, age)) => {
+            for u in usage {
+                let filled = (u.percent as usize * 10).div_ceil(100).min(10);
+                let bar_colour = if u.percent >= 80 {
+                    ui.accent
+                } else {
+                    ui.success
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!(" {:<8}", u.agent), bold(ui.fg)),
+                    Span::styled(format!("{:<10}", u.plan), dim),
+                    Span::styled("▰".repeat(filled), fg(bar_colour)),
+                    Span::styled("▱".repeat(10 - filled), fg(ui.border)),
+                    Span::raw(format!(" {:>3}%  ", u.percent)),
+                    Span::styled(u.detail.clone(), dim),
+                ]));
+                lines.push(Line::styled(format!("          {}", u.reset), dim));
+            }
+            lines.push(Line::styled(
+                format!(" polled from each agent CLI · refreshed {age}s ago"),
+                dim,
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The themes to pick from, the current one under the cursor to begin with.
+fn draw_themes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
+    let names: Vec<String> = app.themes.iter().map(|t| t.name.clone()).collect();
+    let inner = overlay_box(frame, app, "THEME", 40, names.len() as u16, area);
+    let rows: Vec<Line> = names.iter().map(|n| Line::raw(format!(" {n}"))).collect();
+    let lines = list_lines(app, rows, row, inner.height as usize);
+    row_hits(
+        app,
+        inner,
+        row.saturating_sub(inner.height.saturating_sub(1) as usize),
+        names.len(),
+    );
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The start page: the logotype, the tagline, RECENT and the key hints.
-fn draw_start(frame: &mut Frame, app: &App, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     const LOGO: [&str; 5] = [
         "██╗   ██╗ █████╗ ██████╗  █████╗ ",
@@ -329,7 +417,7 @@ fn draw_start(frame: &mut Frame, app: &App, area: Rect) {
         "  ╚██╔╝  ██╔══██║██╔══██╗██╔══██║",
         "   ██║   ██║  ██║██║  ██║██║  ██║",
     ];
-    let recent = &app.settings.recent_projects;
+    let recent = app.settings.recent_projects.clone();
     let box_height = recent.len().max(1) as u16 + 2;
     let height = LOGO.len() as u16 + 2 + box_height + 2;
     let width = 60u16.min(area.width);
@@ -392,8 +480,8 @@ fn draw_start(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Go to file: the query with a block cursor, then the best matches.
-fn draw_quick_open(frame: &mut Frame, app: &App, query: &str, row: usize, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_quick_open(frame: &mut Frame, app: &mut App, query: &str, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     frame.render_widget(Block::new().style(dim), area);
     let hits = app.quick_open_hits(query);
@@ -434,8 +522,8 @@ fn draw_quick_open(frame: &mut Frame, app: &App, query: &str, row: usize, area: 
 
 /// A one-line question in a box: what is being asked, and what has been
 /// typed so far with a block cursor after it.
-fn draw_prompt(frame: &mut Frame, app: &App, title: &str, what: &str, text: &str, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_prompt(frame: &mut Frame, app: &mut App, title: &str, what: &str, text: &str, area: Rect) {
+    let ui = app.theme.ui.clone();
     frame.render_widget(Block::new().style(fg(ui.fg_dim)), area);
     let width = area.width.min(60);
     let rect = Rect::new(
@@ -471,6 +559,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, title: &str, what: &str, text: &str
 fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
     let mut left = vec![Span::styled(" YARA ", bold(ui.accent))];
+    let mut x = area.x + 6;
     for (i, (name, _)) in MENUS.iter().enumerate() {
         let open = matches!(app.overlay, Some(Overlay::Menu(m, _)) if m == i);
         left.push(Span::raw(" "));
@@ -480,6 +569,10 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(*name)
         });
         left.push(Span::raw(" "));
+        app.hits
+            .menus
+            .push((Rect::new(x, area.y, name.len() as u16 + 2, 1), i));
+        x += name.len() as u16 + 2;
     }
     left.push(Span::styled(" │ ", fg(ui.fg_dim)));
     let path_index = left.len();
@@ -496,6 +589,7 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     // The tabs: one agent in one worktree each, and the way to another.
     left.push(Span::styled(" │ ", fg(ui.fg_dim)));
+    let tabs_from = left.len();
     for (i, session) in app.sessions.iter().enumerate() {
         let title = format!(" {} ", session.title());
         left.push(if i == app.active {
@@ -506,22 +600,42 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         left.push(Span::raw(" "));
     }
     left.push(Span::styled("[+]", fg(ui.success)));
-    let right = if app.agent_running() {
-        Line::styled(format!("● {} — running ", app.agent_name()), fg(ui.success))
+    let mut right = vec![if app.agent_running() {
+        Span::styled(format!("● {} — running ", app.agent_name()), fg(ui.success))
     } else {
-        Line::styled(format!("○ {} — exited ", app.agent_name()), fg(ui.fg_dim))
-    };
+        Span::styled(format!("○ {} — exited ", app.agent_name()), fg(ui.fg_dim))
+    }];
+    if let Some(chip) = app.usage_chip() {
+        right.insert(0, Span::styled(format!("{chip}  "), fg(ui.fg_dim)));
+    }
+    let right = Line::from(right);
     shorten(
         &mut left,
         path_index,
         (area.width as usize).saturating_sub(right.width() + 1),
     );
+    // Where the tabs and the [+] landed, for the mouse.
+    let mut x = area.x + left[..tabs_from].iter().map(Span::width).sum::<usize>() as u16;
+    for (i, pair) in left[tabs_from..].chunks(2).enumerate() {
+        let w = pair[0].width() as u16;
+        if pair.len() == 2 {
+            app.hits.tabs.push((Rect::new(x, area.y, w, 1), i));
+        } else {
+            app.hits.plus = Rect::new(x, area.y, w, 1);
+        }
+        x += pair.iter().map(Span::width).sum::<usize>() as u16;
+    }
+    let right_x = area.right().saturating_sub(right.width() as u16);
+    if app.usage_chip().is_some() {
+        let w = right.spans[0].width() as u16;
+        app.hits.usage = Rect::new(right_x, area.y, w, 1);
+    }
     frame.render_widget(Paragraph::new(Line::from(left)), area);
     frame.render_widget(Paragraph::new(right.right_aligned()), area);
 }
 
-fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
+    let ui = app.theme.ui.clone();
     let focused = app.focus == Focus::Files;
     let block = Block::bordered()
         .border_style(fg(if focused { ui.fg_dim } else { ui.border }))
@@ -532,7 +646,7 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-    if let Some(tree) = &app.tree {
+    let file_rows = if let Some(tree) = &app.tree {
         let root = tree.root.clone();
         let opened = app.editor.as_ref().map(|b| b.path.clone());
         let touched = |path: &std::path::Path| {
@@ -587,9 +701,22 @@ fn draw_files(frame: &mut Frame, app: &App, area: Rect) {
             .collect();
         let scroll = tree
             .selected
-            .saturating_sub(list.height.saturating_sub(1) as usize) as u16;
-        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list);
-    }
+            .saturating_sub(list.height.saturating_sub(1) as usize);
+        let rows: Vec<(Rect, usize)> = (scroll
+            ..tree.rows().len().min(scroll + list.height as usize))
+            .map(|i| {
+                (
+                    Rect::new(list.x, list.y + (i - scroll) as u16, list.width, 1),
+                    i,
+                )
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
+        rows
+    } else {
+        Vec::new()
+    };
+    app.hits.file_rows = file_rows;
     let footer = format!(
         "{} hide · {} open",
         app.hint(Command::ToggleSidebar),
@@ -672,12 +799,12 @@ fn cell_style(cell: &vt100::Cell, ui: &Ui, theme: &Theme) -> Style {
     style
 }
 
-fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_follow(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.editor.is_some() {
         draw_editor(frame, app, area);
         return;
     }
-    let ui = &app.theme.ui;
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     let focused = app.focus == Focus::Follow;
     let idle = fg(if focused { ui.fg_dim } else { ui.border });
@@ -713,6 +840,10 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
     };
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // The right-hand title is a button: `[ f → live ]` or `[ Esc → timeline ]`.
+    if !app.follow.is_live() || app.pinned.is_some() {
+        app.hits.live = Rect::new(area.right().saturating_sub(18), area.y, 17, 1);
+    }
     if inner.height == 0 {
         return;
     }
@@ -723,7 +854,7 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
     ])
     .areas(inner);
 
-    let Some(edit) = app.shown() else {
+    let Some(edit) = app.shown().cloned() else {
         frame.render_widget(
             Paragraph::new(Line::styled("waiting for the agent's first edit", dim)),
             file_row,
@@ -763,7 +894,12 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
     if window.hidden_before > 0 {
         strip.push(Span::styled("‥", dim));
     }
-    for tick in &ticks[window.start..window.end] {
+    let first_x = timeline_row.x + 6 + u16::from(window.hidden_before > 0);
+    for (i, tick) in ticks[window.start..window.end].iter().enumerate() {
+        let x = first_x + i as u16;
+        app.hits
+            .ticks
+            .push((Rect::new(x, timeline_row.y, 1, 1), window.start + i));
         strip.push(match tick {
             Tick::Current => Span::styled("◉", fg(ui.accent)),
             Tick::Unreviewed => Span::styled("●", fg(ui.accent_dim)),
@@ -794,7 +930,7 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     if app.view == View::File {
-        draw_file(frame, app, edit, body);
+        draw_file(frame, app, &edit, body);
         return;
     }
     // Body: the unified diff, one hunk after another.
@@ -832,8 +968,8 @@ fn draw_follow(frame: &mut Frame, app: &App, area: Rect) {
 
 /// A file being edited where the follow pane was: its path, a dot while it
 /// is dirty, and the text coloured by its grammar with the caret in it.
-fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     let focused = app.focus == Focus::Editor;
     let Some(buffer) = &app.editor else { return };
@@ -926,8 +1062,8 @@ fn draw_editor(frame: &mut Frame, app: &App, area: Rect) {
 
 /// The file as it stands, with an accent bar beside every line the edit
 /// added. A file that is gone reads as empty.
-fn draw_file(frame: &mut Frame, app: &App, edit: &EditEvent, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     let root = app
         .repo
@@ -970,8 +1106,8 @@ fn draw_file(frame: &mut Frame, app: &App, edit: &EditEvent, area: Rect) {
 }
 
 /// The CHANGES overlay: what differs from the base branch, one row a file.
-fn draw_changes(frame: &mut Frame, app: &App, row: usize, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_changes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     frame.render_widget(Block::new().style(dim), area);
     let width = area.width.min(72);
@@ -1029,20 +1165,21 @@ fn draw_changes(frame: &mut Frame, app: &App, row: usize, area: Rect) {
         ));
     }
     let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
-    let scroll = row.saturating_sub(list.height.saturating_sub(1) as usize) as u16;
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), list);
+    let scroll = row.saturating_sub(list.height.saturating_sub(1) as usize);
+    row_hits(app, list, scroll, app.changes.len());
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
     frame.render_widget(Paragraph::new(Line::styled(footer, dim)), foot);
 }
 
 /// Lines added and removed against the base, over every changed file.
-fn totals(app: &App) -> (usize, usize) {
+fn totals(app: &mut App) -> (usize, usize) {
     app.changes
         .iter()
         .fold((0, 0), |(a, r), c| (a + c.added, r + c.removed))
 }
 
-fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let ui = &app.theme.ui;
+fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
+    let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     let (added, removed) = totals(app);
     let review = match app.follow.unreviewed_count() {
@@ -1050,27 +1187,6 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         0 => Span::styled("✓ all reviewed", fg(ui.success)),
         n => Span::styled(format!("◆ {n} unreviewed"), fg(ui.accent)),
     };
-    // The note is news; the hints give way to it until the next key.
-    let right = match &app.note {
-        Some(note) => Line::styled(format!(" {note} "), on(ui.fg, ui.selected_bg)),
-        None => {
-            let hints: Vec<String> = [
-                (Command::NextPane, "pane"),
-                (Command::Changes, "changes"),
-                (Command::ToggleSidebar, "files"),
-                (Command::CommandPalette, "palette"),
-                (Command::SearchProject, "search"),
-                (Command::Help, "keys"),
-            ]
-            .into_iter()
-            .filter_map(|(command, word)| {
-                Some(format!("{} {word}", app.settings.chord(command)?.glyphs()))
-            })
-            .collect();
-            Line::styled(format!("{} ", hints.join("  ")), dim)
-        }
-    };
-
     let branch = app.repo.as_ref().map_or("—", |r| r.branch.as_str());
     let root = app
         .repo
@@ -1085,14 +1201,59 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw("  "),
         review,
     ];
-    // The path keeps a dozen columns whatever the hints want.
+    // The path keeps a dozen columns whatever the right side wants; the
+    // hints go one by one, from the left, before anything else does.
     let others: usize = left.iter().map(Span::width).sum::<usize>() - left[1].width();
+    let least = (others + 12).min(area.width as usize);
+    // The note is news; the hints give way to it until the next key.
+    let right = match &app.note {
+        Some(note) => Line::styled(format!(" {note} "), on(ui.fg, ui.selected_bg)),
+        None => {
+            let mut hints: Vec<String> = [
+                (Command::NextPane, "pane"),
+                (Command::Changes, "changes"),
+                (Command::ToggleSidebar, "files"),
+                (Command::CommandPalette, "palette"),
+                (Command::SearchProject, "search"),
+                (Command::Help, "keys"),
+            ]
+            .into_iter()
+            .filter_map(|(command, word)| {
+                Some(format!("{} {word}", app.settings.chord(command)?.glyphs()))
+            })
+            .collect();
+            let version = format!("{} ", app.version_chip());
+            let chip = fg(
+                if app.updates.installed.is_some() || app.updates.available.is_some() {
+                    ui.success
+                } else {
+                    ui.fg_dim
+                },
+            );
+            let room = (area.width as usize).saturating_sub(least + 1);
+            while !hints.is_empty() && hints.join("  ").len() + 2 + version.len() > room {
+                hints.remove(0);
+            }
+            Line::from(vec![
+                Span::styled(format!("{}  ", hints.join("  ")), dim),
+                Span::styled(version, chip),
+            ])
+        }
+    };
     let room = (area.width as usize)
         .saturating_sub(right.width() + 1)
         .max(others + 12)
         .min(area.width as usize);
     shorten(&mut left, 1, room);
     let width: usize = left.iter().map(Span::width).sum();
+    // The counter is a button: a click goes to the next unreviewed edit.
+    let before_counter: usize = left[..left.len() - 1].iter().map(Span::width).sum();
+    app.hits.counter = Rect::new(
+        area.x + before_counter as u16,
+        area.y,
+        left[left.len() - 1].width() as u16,
+        1,
+    );
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Length(width as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(Line::from(left)), left_area);

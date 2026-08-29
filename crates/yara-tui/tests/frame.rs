@@ -68,7 +68,11 @@ fn an_empty_session_shows_both_panes_and_waits_for_an_edit() {
     let all = rows.join("\n");
     assert!(all.contains("waiting for the agent's first edit"));
     assert!(all.contains("no edits yet"));
-    assert!(rows[23].contains("F6 pane  ^⇧G changes  ^B files  ^⇧P palette  ^⇧F search  F1 keys"));
+    assert!(
+        rows[23].contains("^⇧P palette  ^⇧F search  F1 keys  v"),
+        "the hints that fit, then the version: {}",
+        rows[23]
+    );
     assert!(
         rows[0].contains(" demo  [+]"),
         "one tab, named by its folder: {}",
@@ -269,10 +273,15 @@ fn ctrl_b_shows_the_files_and_ctrl_q_asks_to_quit() {
 }
 
 #[test]
-fn a_command_not_built_yet_says_so_in_the_status_bar() {
+fn checking_for_updates_says_so_and_the_version_chip_sits_in_the_status_bar() {
     let mut app = following(Settings::default());
+    let all = text(&mut app);
+    assert!(
+        all.contains(&format!("v{} ", yara_core::update::CURRENT)),
+        "{all}"
+    );
     app.execute(yara_core::command::Command::CheckForUpdates);
-    assert!(text(&mut app).contains("Check for Updates… is not here yet"));
+    assert!(text(&mut app).contains("checking for updates…"));
 }
 
 /// A project that is a repository with one commit on `main`, removed with
@@ -671,4 +680,109 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
         all.contains("FOLLOW · LIVE") && all.contains("⎇ main"),
         "{all}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_usage_is_polled_from_the_configured_commands_and_shown_as_bars() {
+    let settings = Settings {
+        usage_commands: std::collections::BTreeMap::from([(
+            "claude".to_string(),
+            r#"echo '{"plan":"Max","percent":85,"detail":"1.2M tokens","reset":"resets in 3h"}'"#
+                .to_string(),
+        )]),
+        ..Settings::default()
+    };
+    let mut app = following(settings);
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert!(text(&mut app).contains("asking the agents…"));
+    let start = std::time::Instant::now();
+    while app.usage.is_none() && start.elapsed().as_secs() < 5 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.collect();
+    }
+    let all = text(&mut app);
+    assert!(all.contains("AGENT USAGE"), "{all}");
+    assert!(
+        all.contains(" claude  Max       ▰▰▰▰▰▰▰▰▰▱  85%  1.2M tokens"),
+        "{all}"
+    );
+    assert!(
+        all.contains("resets in 3h")
+            && all.contains("polled from each agent CLI · refreshed 0s ago")
+    );
+    app.handle_key(key(KeyCode::Esc));
+    assert!(text(&mut app).contains("◐ claude 85%"), "the header chip");
+}
+
+#[test]
+fn the_theme_picker_switches_the_theme_and_the_mouse_reaches_the_chrome() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-mouse");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('t'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    let all = text(&mut app);
+    assert!(all.contains("THEME") && all.contains(" Monokai"), "{all}");
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.theme.name, "Organic Light");
+
+    let click = |x, y| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    // A click on "File" drops the menu; one on the backdrop closes it.
+    frame(&mut app);
+    let (menu, _) = app.hits.menus[0];
+    app.handle_mouse(click(menu.x, menu.y));
+    assert!(matches!(app.overlay, Some(Overlay::Menu(0, _))));
+    frame(&mut app);
+    app.handle_mouse(click(90, 20));
+    assert!(app.overlay.is_none());
+    // A click in the agent pane moves the keyboard there; on a tick, back.
+    frame(&mut app);
+    app.handle_mouse(click(app.hits.agent.x + 2, app.hits.agent.y + 2));
+    assert_eq!(app.focus, Focus::Agent);
+    repo.file("src/main.rs", "fn main() {}\n");
+    app.refresh();
+    repo.file("README.md", "hi\n");
+    app.refresh();
+    frame(&mut app);
+    let (tick, index) = app.hits.ticks[0];
+    app.handle_mouse(click(tick.x, tick.y));
+    assert_eq!(
+        (app.focus, app.follow.cursor(), index),
+        (Focus::Follow, 0, 0)
+    );
+    assert!(!app.follow.is_live());
+    // The counter jumps to the next unreviewed edit; the live button goes live.
+    frame(&mut app);
+    let counter = app.hits.counter;
+    app.handle_mouse(click(counter.x, counter.y));
+    assert_eq!(app.follow.cursor(), 1);
+    app.follow.scrub_back();
+    frame(&mut app);
+    let live = app.hits.live;
+    app.handle_mouse(click(live.x + 2, live.y));
+    assert!(app.follow.is_live());
+    // A file row opens the file.
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    frame(&mut app);
+    let (row, _) = app.hits.file_rows[0];
+    app.handle_mouse(click(row.x + 3, row.y));
+    frame(&mut app);
+    let (row, _) = app.hits.file_rows[1];
+    app.handle_mouse(click(row.x + 3, row.y));
+    assert_eq!(app.focus, Focus::Editor);
+    assert!(app.editor.as_ref().unwrap().path.ends_with("main.rs"));
 }

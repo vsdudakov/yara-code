@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyboardEnhancementFlags,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -25,10 +25,11 @@ fn main() -> io::Result<()> {
     let mut app = App::load(std::env::args_os().nth(1).map(PathBuf::from));
     app.start_agent();
     app.refresh();
+    app.poll_usage();
 
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen)?;
+    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
     // Without the kitty keyboard protocol a terminal cannot tell Ctrl+Shift+S
     // from Ctrl+S; where it is available, ask for it.
     let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
@@ -48,7 +49,7 @@ fn main() -> io::Result<()> {
     if enhanced {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
     disable_raw_mode()?;
     result
 }
@@ -62,6 +63,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
             app.refresh();
             last_refresh = Instant::now();
         }
+        app.collect();
         if redraw || app.take_dirty() {
             terminal.draw(|frame| ui::draw(frame, app))?;
             redraw = false;
@@ -69,6 +71,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
         if event::poll(IDLE)? {
             match event::read()? {
                 Event::Key(key) => app.handle_key(key),
+                Event::Mouse(mouse) => app.handle_mouse(mouse),
                 Event::Resize(..) => {}
                 _ => continue,
             }

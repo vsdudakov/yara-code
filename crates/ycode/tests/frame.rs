@@ -821,3 +821,27 @@ fn a_new_file_is_made_where_the_files_cursor_is_and_settings_opens_its_own_file(
     assert!(shown.contains("settings.json"), "{shown}");
     assert!(app.editor.as_ref().unwrap().text.contains("\"agent\""));
 }
+
+#[cfg(unix)]
+#[test]
+fn without_a_usage_command_agent_usage_asks_the_agent_itself() {
+    let settings = Settings {
+        agent: "cat".into(),
+        usage_slash: std::collections::BTreeMap::from([("cat".to_string(), "/status".to_string())]),
+        ..Settings::default()
+    };
+    let mut app = following(settings);
+    app.start_agent();
+    app.handle_key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+    assert_eq!(app.focus, Focus::Agent);
+    let start = std::time::Instant::now();
+    let mut screen = String::new();
+    while start.elapsed().as_secs() < 5 && !screen.contains("/status") {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        screen = app.agent.as_ref().unwrap().with_screen(|s| s.contents());
+    }
+    assert!(screen.contains("/status"), "typed at the agent: {screen:?}");
+}

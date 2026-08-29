@@ -8,13 +8,15 @@ description: The AGENT USAGE panel in Yara Code, fed by a command per agent, and
 
 ![What each agent has used](../assets/shots/usage.svg)
 
-++ctrl+shift+u++ — or the `◐ claude 62%` chip in the header — shows what
-each agent has used of its plan: a ten-cell bar, red from 80%, the percent,
-the detail and when it resets, and how old the figures are.
+The agents only show their limits from inside their own session — `/usage`
+in Claude Code and Cursor's CLI, `/status` in Codex — so ++ctrl+shift+u++
+types that command at the agent and puts the keyboard there. Which command,
+per program name, is `usage_slash` in settings.
 
-Every agent reports its usage differently and none of them through a stable
-command, so the source is yours to name: a command per agent in
-`usage_commands` that prints one JSON object —
+For a panel of your own — the ten-cell bar, red from 80%, the percent, the
+detail and the reset, and the `◐ claude 62%` chip in the header — name a
+command per agent in `usage_commands` that prints one JSON object; set, it
+is what ++ctrl+shift+u++ shows instead:
 
 ```json
 "usage_commands": {

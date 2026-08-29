@@ -1046,6 +1046,24 @@ impl App {
                 Ok(path) => self.open_file(&path),
                 Err(e) => self.note = Some(e.to_string()),
             },
+            // The agents only show their limits from inside their own
+            // session, so the usual answer is to ask the agent: its slash
+            // command is typed at it. A configured usage command gets the
+            // panel instead.
+            Command::AgentUsage if self.settings.usage_commands.is_empty() => {
+                let slash = self
+                    .settings
+                    .usage_slash
+                    .get(self.agent_name())
+                    .cloned()
+                    .unwrap_or_else(|| "/usage".into());
+                if let Some(pty) = self.agent.as_mut() {
+                    pty.write(format!("{slash}\r").as_bytes());
+                    self.focus = Focus::Agent;
+                } else {
+                    self.note = Some("no agent to ask".into());
+                }
+            }
             Command::AgentUsage => {
                 self.poll_usage();
                 self.overlay = Some(Overlay::Usage);

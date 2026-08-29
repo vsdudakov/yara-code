@@ -151,8 +151,12 @@ pub struct Settings {
     /// Where a new tab's worktree is made; empty means a `<repo>-worktrees`
     /// folder beside the repository.
     pub worktrees_dir: String,
+    /// What Agent Usage types at each agent: the slash command that makes
+    /// it show its own figures, since none of them will say outside.
+    pub usage_slash: BTreeMap<String, String>,
     /// A command per agent that prints its plan usage as JSON — see
-    /// `usage.rs` — for the AGENT USAGE panel and the header chip.
+    /// `usage.rs` — for the AGENT USAGE panel and the header chip, for those
+    /// who have such a thing. Set, it is used instead of `usage_slash`.
     pub usage_commands: BTreeMap<String, String>,
     /// What project search leaves out, in VS Code's glob spelling.
     pub search_exclude: Vec<String>,
@@ -181,6 +185,14 @@ impl Default for Settings {
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
+            usage_slash: [
+                ("claude", "/usage"),
+                ("cursor-agent", "/usage"),
+                ("codex", "/status"),
+            ]
+            .into_iter()
+            .map(|(a, c)| (a.to_string(), c.to_string()))
+            .collect(),
             usage_commands: BTreeMap::new(),
             search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
             agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z"]
@@ -355,10 +367,14 @@ impl Settings {
   // beside the repository).
   "worktrees_dir": {worktrees_dir},
 
-  // A command per agent that prints what it has used of its plan, as JSON:
+  // What Agent Usage (Ctrl+Shift+U) types at each agent, by program name:
+  // the agents only show their limits from inside their own session.
+  "usage_slash": {usage_slash},
+
+  // Or, a command per agent that prints what it has used of its plan, as JSON:
   //   {{"plan": "Max", "percent": 62, "detail": "1.2M tokens", "reset": "in 3h"}}
-  // for example  "usage_commands": {{ "claude": "my-claude-usage" }}.
-  // Shown by Agent Usage (Ctrl+Shift+U) and the chip in the header.
+  // for example  "usage_commands": {{ "claude": "my-claude-usage" }}. Set, it
+  // is shown by Agent Usage instead, and as the chip in the header.
   "usage_commands": {usage_commands},
 
   // What Search Project leaves out: a bare name matches a folder anywhere,
@@ -395,6 +411,7 @@ impl Settings {
             agent_keys = json(&self.agent_keys),
             search_exclude = json(&self.search_exclude),
             usage_commands = json(&self.usage_commands),
+            usage_slash = json(&self.usage_slash),
             keys = json(&self.keys),
             recent_projects = json(&self.recent_projects),
             docs = crate::DOCUMENTATION,
@@ -590,6 +607,7 @@ mod tests {
             "\"agent_keys\"",
             "\"search_exclude\"",
             "\"usage_commands\"",
+            "\"usage_slash\"",
             "\"keys\"",
             "\"recent_projects\"",
         ] {

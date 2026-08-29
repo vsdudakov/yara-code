@@ -75,6 +75,12 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::RenameTab(text)) => {
             draw_prompt(frame, app, " RENAME TAB ", "name", &text, area)
         }
+        Some(Overlay::NewFile(text)) => {
+            draw_prompt(frame, app, " NEW FILE ", "file name", &text, area)
+        }
+        Some(Overlay::OpenFolder(text)) => {
+            draw_prompt(frame, app, " OPEN FOLDER ", "path", &text, area)
+        }
         Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, &query, row, area),
         Some(Overlay::Palette(query, row)) => draw_palette(frame, app, &query, row, area),
         Some(Overlay::Search(query, row, hits, files)) => {

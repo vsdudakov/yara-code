@@ -1,0 +1,44 @@
+[package]
+name = "ycode"
+description = "The terminal editor for the agent loop: your coding agent on the left, the diff of what it just did on the right"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ycode"
+path = "src/main.rs"
+
+[dependencies]
+yara-core = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+vt100 = { workspace = true }
+
+# Debian package, built by cargo-deb in the release workflow.
+[package.metadata.deb]
+name = "ycode"
+maintainer = "Seva D <vsdudakov@gmail.com>"
+copyright = "2026, Yara contributors"
+license-file = ["../../LICENSE", "0"]
+section = "devel"
+priority = "optional"
+assets = [
+    ["../../target/release/ycode", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/ycode/README.md", "644"],
+]
+
+# RPM package, built by cargo-generate-rpm in the release workflow.
+[package.metadata.generate-rpm]
+name = "ycode"
+summary = "The terminal editor for the agent loop"
+license = "MIT"
+assets = [
+    { source = "target/release/ycode", dest = "/usr/bin/ycode", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/ycode/README.md", mode = "644" },
+]

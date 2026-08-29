@@ -7,8 +7,8 @@ use ratatui::Terminal;
 use yara_core::follow::EditEvent;
 use yara_core::settings::{Settings, Side};
 use yara_core::theme::Theme;
-use yara_tui::app::{App, Focus, Overlay};
-use yara_tui::ui;
+use ycode::app::{App, Focus, Overlay};
+use ycode::ui;
 
 fn frame(app: &mut App) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -730,10 +730,12 @@ fn the_theme_picker_switches_the_theme_and_the_mouse_reaches_the_chrome() {
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
     ));
     let all = text(&mut app);
-    assert!(all.contains("THEME") && all.contains(" Monokai"), "{all}");
-    app.handle_key(key(KeyCode::Down));
+    assert!(
+        all.contains("THEME") && all.contains(" Dark Modern"),
+        "{all}"
+    );
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.theme.name, "Organic Light");
+    assert_eq!(app.theme.name, "Dark Modern");
 
     let click = |x, y| MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
@@ -785,4 +787,37 @@ fn the_theme_picker_switches_the_theme_and_the_mouse_reaches_the_chrome() {
     app.handle_mouse(click(row.x + 3, row.y));
     assert_eq!(app.focus, Focus::Editor);
     assert!(app.editor.as_ref().unwrap().path.ends_with("main.rs"));
+}
+
+#[test]
+fn a_new_file_is_made_where_the_files_cursor_is_and_settings_opens_its_own_file() {
+    let repo = Repo::new("yara-frame-newfile");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+    assert!(text(&mut app).contains("NEW FILE"));
+    for c in "notes.md".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(
+        repo.0.join("notes.md").exists(),
+        "{:?} {:?} {:?} {:?}",
+        app.note,
+        app.overlay,
+        app.editor.as_ref().map(|b| b.path.clone()),
+        app.project
+    );
+    assert_eq!(app.focus, Focus::Editor);
+    assert!(text(&mut app).contains("notes.md"));
+
+    let config =
+        std::env::temp_dir().join(format!("yara-frame-newfile-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    app.execute(yara_core::command::Command::Settings);
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let shown = text(&mut app);
+    let _ = std::fs::remove_dir_all(&config);
+    assert!(shown.contains("settings.json"), "{shown}");
+    assert!(app.editor.as_ref().unwrap().text.contains("\"agent\""));
 }

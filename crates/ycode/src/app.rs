@@ -52,6 +52,11 @@ pub enum Overlay {
     NewTab(String),
     /// A name being typed for the current tab.
     RenameTab(String),
+    /// A name being typed for a new file, made in the folder under the
+    /// FILES cursor.
+    NewFile(String),
+    /// A folder path being typed to open.
+    OpenFolder(String),
     /// Go to file: what was typed, and the row the cursor is on.
     QuickOpen(String, usize),
     /// The command palette: what was typed, and the row the cursor is on.
@@ -426,6 +431,9 @@ impl App {
     }
 
     pub fn with_settings(project: Option<PathBuf>, settings: Settings, theme: Theme) -> Self {
+        // The path as the user typed it — `.`, most often — is not the name
+        // the header should show.
+        let project = project.map(|p| p.canonicalize().unwrap_or(p));
         Self {
             sessions: vec![Session::new(project, &settings)],
             active: 0,
@@ -582,6 +590,52 @@ impl App {
             .take(50)
             .map(|(_, s)| s.to_string())
             .collect()
+    }
+
+    /// A new, empty file in the folder under the FILES cursor — or the
+    /// project root — opened for editing. Nothing is overwritten.
+    fn new_file(&mut self, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        // Under the FILES cursor when the sidebar is open, else at the root.
+        let cursor = self
+            .tree
+            .as_ref()
+            .filter(|_| self.show_sidebar)
+            .and_then(|t| t.selected_row());
+        let dir = match cursor {
+            Some(row) if row.is_dir => row.path.clone(),
+            Some(row) => row
+                .path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
+            None => match &self.project {
+                Some(root) => root.clone(),
+                None => {
+                    self.note = Some("open a folder first".into());
+                    return;
+                }
+            },
+        };
+        let path = dir.join(name);
+        if path.exists() {
+            self.note = Some(format!("{} already exists", path.display()));
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, "") {
+            Ok(()) => {
+                if let Some(tree) = self.tree.as_mut() {
+                    tree.rebuild();
+                }
+                self.open_file(&path);
+            }
+            Err(e) => self.note = Some(format!("{}: {e}", path.display())),
+        }
     }
 
     /// A new tab: a worktree of the current repository on a branch of that
@@ -812,34 +866,41 @@ impl App {
                 }
                 return;
             }
-            Some(Overlay::NewTab(mut text)) | Some(Overlay::RenameTab(mut text)) => {
-                let renaming = matches!(self.overlay, Some(Overlay::RenameTab(_)));
+            Some(
+                Overlay::NewTab(mut text)
+                | Overlay::RenameTab(mut text)
+                | Overlay::NewFile(mut text)
+                | Overlay::OpenFolder(mut text),
+            ) => {
+                let again = |text: String| match self.overlay.as_ref().unwrap() {
+                    Overlay::NewTab(_) => Overlay::NewTab(text),
+                    Overlay::RenameTab(_) => Overlay::RenameTab(text),
+                    Overlay::NewFile(_) => Overlay::NewFile(text),
+                    _ => Overlay::OpenFolder(text),
+                };
                 match key.code {
                     KeyCode::Enter => {
-                        self.overlay = None;
-                        if renaming {
-                            let text = text.trim();
-                            self.name = (!text.is_empty()).then(|| text.to_string());
-                        } else {
-                            self.new_tab(&text);
+                        let which = self.overlay.take().unwrap();
+                        let text = text.trim().to_string();
+                        match which {
+                            Overlay::NewTab(_) => self.new_tab(&text),
+                            Overlay::RenameTab(_) => self.name = (!text.is_empty()).then_some(text),
+                            Overlay::NewFile(_) => self.new_file(&text),
+                            _ => {
+                                if !text.is_empty() {
+                                    self.open_project(PathBuf::from(expand_home(&text)));
+                                }
+                            }
                         }
                     }
                     _ if closes => self.overlay = None,
                     KeyCode::Backspace => {
                         text.pop();
-                        self.overlay = Some(if renaming {
-                            Overlay::RenameTab(text)
-                        } else {
-                            Overlay::NewTab(text)
-                        });
+                        self.overlay = Some(again(text));
                     }
                     KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
                         text.push(c);
-                        self.overlay = Some(if renaming {
-                            Overlay::RenameTab(text)
-                        } else {
-                            Overlay::NewTab(text)
-                        });
+                        self.overlay = Some(again(text));
                     }
                     _ => {}
                 }
@@ -971,6 +1032,12 @@ impl App {
             Command::FileMenu => self.overlay = Some(Overlay::Menu(0, 0)),
             Command::HelpMenu => self.overlay = Some(Overlay::Menu(1, 0)),
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
+            Command::NewFile => self.overlay = Some(Overlay::NewFile(String::new())),
+            Command::OpenFolder => self.overlay = Some(Overlay::OpenFolder(String::new())),
+            Command::Settings => match self.settings.ensure_file() {
+                Ok(path) => self.open_file(&path),
+                Err(e) => self.note = Some(e.to_string()),
+            },
             Command::AgentUsage => {
                 self.poll_usage();
                 self.overlay = Some(Overlay::Usage);
@@ -1066,9 +1133,17 @@ impl App {
                 self.pinned = None;
                 self.follow.mark_reviewed()
             }
-            // Not built yet: the other overlays, the menus, the editor.
-            other => self.note = Some(format!("{} is not here yet", other.label())),
         }
+    }
+}
+
+/// `~` at the start of a typed path, as the shell would read it.
+fn expand_home(text: &str) -> String {
+    match text.strip_prefix('~') {
+        Some(rest) => yara_core::home_dir()
+            .map(|home| format!("{}{rest}", home.display()))
+            .unwrap_or_else(|| text.to_string()),
+        None => text.to_string(),
     }
 }
 

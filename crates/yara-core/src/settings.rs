@@ -90,7 +90,6 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Ctrl+N",
         Command::OpenFolder => "Ctrl+Shift+O",
-        Command::AddFolder => "Ctrl+Shift+A",
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
         Command::Settings => "Ctrl+,",
@@ -172,7 +171,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: "Organic Dark".into(),
+            theme: "Dark Modern".into(),
             agent: "claude".into(),
             agent_side: Side::Left,
             agent_width: 42,
@@ -328,7 +327,8 @@ impl Settings {
 // default applies. Lines starting with // are comments; the editor writes the
 // file afresh, with these comments, whenever it saves a setting.
 {{
-  // Colour theme: {themes}, or any VS Code theme JSON in themes/ beside this file.
+  // Colour theme: {themes}, or the name of any VS Code theme JSON dropped in
+  // the themes/ folder beside this file.
   "theme": {theme},
 
   // The command that runs in the AGENT pane.
@@ -449,7 +449,7 @@ mod tests {
     fn an_empty_file_still_gives_every_default() {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
-        assert_eq!(settings.theme, "Organic Dark");
+        assert_eq!(settings.theme, "Dark Modern");
         assert!(settings.chord(Command::Save).is_some());
     }
 
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn the_written_file_explains_itself_and_reads_back_whole() {
         let mut settings = Settings {
-            theme: "Monokai".into(),
+            theme: "Dark Modern".into(),
             show_sidebar: true,
             ..Default::default()
         };
@@ -618,7 +618,7 @@ mod tests {
         std::env::set_var("YARA_CONFIG_DIR", dir.path());
         assert_eq!(Settings::stamp(), None, "nothing written yet");
         let settings = Settings {
-            theme: "Light+".into(),
+            agent: "codex".into(),
             ..Default::default()
         };
         assert_eq!(settings.ensure_file().unwrap(), Settings::path().unwrap());

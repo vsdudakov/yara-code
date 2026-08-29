@@ -13,7 +13,6 @@ pub enum Command {
     // File.
     NewFile,
     OpenFolder,
-    AddFolder,
     OpenRecent,
     Save,
     Settings,
@@ -58,7 +57,6 @@ impl Command {
         match self {
             Self::NewFile => "new_file",
             Self::OpenFolder => "open_folder",
-            Self::AddFolder => "add_folder",
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
             Self::Settings => "settings",
@@ -102,7 +100,6 @@ impl Command {
         match self {
             Self::NewFile => "New File",
             Self::OpenFolder => "Open Folder…",
-            Self::AddFolder => "Add Folder to Project…",
             Self::OpenRecent => "Open Recent…",
             Self::Save => "Save",
             Self::Settings => "Settings",
@@ -141,7 +138,6 @@ impl Command {
 pub const ALL: &[Command] = &[
     Command::NewFile,
     Command::OpenFolder,
-    Command::AddFolder,
     Command::OpenRecent,
     Command::Save,
     Command::Settings,
@@ -183,7 +179,6 @@ pub const FILE_MENU: Menu = &[
     Some(Command::NewTab),
     None,
     Some(Command::OpenFolder),
-    Some(Command::AddFolder),
     Some(Command::OpenRecent),
     None,
     Some(Command::Save),
@@ -500,7 +495,6 @@ mod tests {
                 Command::NewFile,
                 Command::NewTab,
                 Command::OpenFolder,
-                Command::AddFolder,
                 Command::OpenRecent,
                 Command::Save,
                 Command::Settings,

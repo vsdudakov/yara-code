@@ -169,7 +169,7 @@ impl Syntax {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::organic_dark;
+    use crate::theme::dark_modern;
 
     fn regions(syntax: &Syntax, ext: &str, code: &str) -> Vec<(String, Rgb)> {
         let mut out = Vec::new();
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn a_keyword_takes_the_themes_keyword_colour_and_plain_text_the_foreground() {
-        let theme = organic_dark();
+        let theme = dark_modern();
         let syntax = Syntax::new(&theme);
         let keyword = theme
             .tokens
@@ -201,15 +201,13 @@ mod tests {
 
     #[test]
     fn the_theme_can_be_swapped_without_reloading() {
-        let mut syntax = Syntax::new(&organic_dark());
-        let light = crate::theme::organic_light();
-        syntax.set_theme(&light);
+        let mut syntax = Syntax::new(&dark_modern());
+        let mut other = dark_modern();
+        for rule in &mut other.tokens {
+            rule.color = (1, 2, 3);
+        }
+        syntax.set_theme(&other);
         let rust = regions(&syntax, "rs", "fn\n");
-        let keyword = light
-            .tokens
-            .iter()
-            .find(|t| t.scope.starts_with("keyword"))
-            .unwrap();
-        assert_eq!(rust[0].1, keyword.color);
+        assert_eq!(rust[0].1, (1, 2, 3));
     }
 }

@@ -1,4 +1,4 @@
-//! The `ycode-next` command: the v1 terminal frontend, opened on the folder
+//! The `ycode` command: the terminal editor, opened on the folder
 //! given on the command line or on no project at all.
 
 use std::io;
@@ -15,14 +15,26 @@ use crossterm::terminal::{
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use yara_tui::app::App;
-use yara_tui::ui;
+use ycode::app::App;
+use ycode::ui;
 
 /// How long a quiet loop waits before looking for the agent's output again.
 const IDLE: Duration = Duration::from_millis(50);
 
 fn main() -> io::Result<()> {
-    let mut app = App::load(std::env::args_os().nth(1).map(PathBuf::from));
+    let arg = std::env::args().nth(1);
+    match arg.as_deref() {
+        Some("--version" | "-V") => {
+            println!("ycode {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!("ycode [PATH]\n\nThe terminal editor for the agent loop. Opens PATH as the project, or the start page without one.");
+            return Ok(());
+        }
+        _ => {}
+    }
+    let mut app = App::load(arg.map(PathBuf::from));
     app.start_agent();
     app.refresh();
     app.poll_usage();

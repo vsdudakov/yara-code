@@ -79,7 +79,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        organic_dark()
+        dark_modern()
     }
 }
 
@@ -102,96 +102,6 @@ pub fn ansi256(theme: &Theme, idx: u8) -> Rgb {
             (g, g, g)
         }
     }
-}
-
-/// The design's own theme: a warm dark ground, terracotta and sage.
-pub fn organic_dark() -> Theme {
-    Theme {
-        name: "Organic Dark".into(),
-        dark: true,
-        ui: Ui {
-            bg: rgb(0x322B24),
-            fg: rgb(0xEBE2D3),
-            fg_dim: rgb(0x8A8074),
-            border: rgb(0x554C43),
-            accent: rgb(0xD98C5A),
-            accent_dim: rgb(0xE8A377),
-            accent_bg: rgb(0x4A3527),
-            success: rgb(0xA3B57E),
-            success_dim: rgb(0xB7C992),
-            success_bg: rgb(0x33402A),
-            selected_bg: rgb(0x5C4030),
-            match_bg: rgb(0x6A4A1E),
-            cursor: rgb(0xEBE2D3),
-        },
-        ansi: ansi_from([
-            0x322B24, 0xD46A4A, 0xA3B57E, 0xD9B36A, 0x7F9CB8, 0xB58AA8, 0x7FB3A8, 0xD9CFBF,
-            0x6A6055, 0xE8A377, 0xB7C992, 0xE8C98A, 0x9DB8D0, 0xC9A4BE, 0x9CCDC2, 0xEBE2D3,
-        ]),
-        tokens: vec![
-            TokenRule::new("comment", 0x7A7065).italic(),
-            TokenRule::new("string", 0xC9A26E),
-            TokenRule::new("constant.numeric, constant.language", 0xD9B36A),
-            TokenRule::new("keyword, storage.modifier, storage.type", 0xD98C5A),
-            TokenRule::new("keyword.control", 0xB58AA8),
-            TokenRule::new(
-                "entity.name.function, support.function, variable.function, support.macro",
-                0xA3B57E,
-            ),
-            TokenRule::new(
-                "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, \
-                 entity.name.trait, support.type, support.class",
-                0x7FB3A8,
-            ),
-            TokenRule::new("variable.parameter", 0xE8C98A),
-            TokenRule::new("entity.name.tag", 0xD98C5A),
-            TokenRule::new("entity.other.attribute-name", 0xA3B57E),
-            TokenRule::new("markup.heading", 0xD98C5A).bold(),
-            TokenRule::new("punctuation", 0xBFB5A6),
-        ],
-    }
-}
-
-pub fn organic_light() -> Theme {
-    let mut theme = organic_dark();
-    theme.name = "Organic Light".into();
-    theme.dark = false;
-    theme.ui = Ui {
-        bg: rgb(0xF6F0E6),
-        fg: rgb(0x33291F),
-        fg_dim: rgb(0x8A7E70),
-        border: rgb(0xD8CEC0),
-        accent: rgb(0xB5602E),
-        accent_dim: rgb(0xC67139),
-        accent_bg: rgb(0xF3D9C6),
-        success: rgb(0x5F7040),
-        success_dim: rgb(0x7A8A5E),
-        success_bg: rgb(0xDFE6CC),
-        selected_bg: rgb(0xEBD7C2),
-        match_bg: rgb(0xF2DFA8),
-        cursor: rgb(0x33291F),
-    };
-    theme.ansi = ansi_from([
-        0x33291F, 0xB5602E, 0x5F7040, 0x9C7A1E, 0x476A8A, 0x8A5A7E, 0x3F7F72, 0xD8CEC0, 0x8A7E70,
-        0xC67139, 0x7A8A5E, 0xB08E2A, 0x5F86A8, 0xA8789C, 0x5A9C8E, 0x33291F,
-    ]);
-    for rule in &mut theme.tokens {
-        rule.color = match rule.scope.split(',').next().unwrap_or("").trim() {
-            "comment" => rgb(0x9A8F82),
-            "string" => rgb(0x9C6A2A),
-            "constant.numeric" => rgb(0x9C7A1E),
-            "keyword" => rgb(0xB5602E),
-            "keyword.control" => rgb(0x8A5A7E),
-            "entity.name.function" => rgb(0x5F7040),
-            "entity.name.type" => rgb(0x3F7F72),
-            "variable.parameter" => rgb(0x7A5A1E),
-            "entity.name.tag" => rgb(0xB5602E),
-            "entity.other.attribute-name" => rgb(0x5F7040),
-            "markup.heading" => rgb(0xB5602E),
-            _ => rgb(0x5A5048),
-        };
-    }
-    theme
 }
 
 /// VS Code's default, "Dark Modern", with comments sat back and module
@@ -255,122 +165,15 @@ pub fn dark_modern() -> Theme {
     }
 }
 
-pub fn light_plus() -> Theme {
-    Theme {
-        name: "Light+".into(),
-        dark: false,
-        ui: Ui {
-            bg: rgb(0xFFFFFF),
-            fg: rgb(0x333333),
-            fg_dim: rgb(0x8E8E8E),
-            border: rgb(0xE7E7E7),
-            accent: rgb(0x3A6D9A),
-            accent_dim: rgb(0x33698F),
-            accent_bg: rgb(0xFFCCCC),
-            success: rgb(0x1A7F37),
-            success_dim: rgb(0x2DA44E),
-            success_bg: rgb(0xD1F0D8),
-            selected_bg: rgb(0xCCE5FF),
-            match_bg: rgb(0xF8E3A1),
-            cursor: rgb(0x000000),
-        },
-        ansi: ansi_from([
-            0x000000, 0xCD3131, 0x00BC00, 0x949800, 0x0451A5, 0xBC05BC, 0x0598BC, 0x555555,
-            0x666666, 0xCD3131, 0x14CE14, 0xB5BA00, 0x0451A5, 0xBC05BC, 0x0598BC, 0xA5A5A5,
-        ]),
-        tokens: vec![
-            TokenRule::new("comment", 0x6E8B6E),
-            TokenRule::new("string", 0xA31515),
-            TokenRule::new("string.regexp", 0x811F3F),
-            TokenRule::new("constant.numeric", 0x098658),
-            TokenRule::new(
-                "constant.language, constant.character, support.constant",
-                0x0000FF,
-            ),
-            TokenRule::new("keyword, storage.modifier, storage.type", 0x0000FF),
-            TokenRule::new("keyword.control", 0xAF00DB),
-            TokenRule::new("keyword.operator", 0x000000),
-            TokenRule::new(
-                "entity.name.function, support.function, variable.function, support.macro",
-                0x795E26,
-            ),
-            TokenRule::new(
-                "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, \
-                 entity.name.union, entity.name.trait, support.type, support.class",
-                0x267F99,
-            ),
-            TokenRule::new("variable, variable.parameter", 0x001080),
-            TokenRule::new("entity.name.tag", 0x800000),
-            TokenRule::new("entity.other.attribute-name", 0xE50000),
-            TokenRule::new("markup.heading", 0x000080).bold(),
-            TokenRule::new("punctuation", 0x000000),
-            TokenRule::new(IMPORTS, 0x267F99),
-        ],
-    }
-}
-
-pub fn monokai() -> Theme {
-    Theme {
-        name: "Monokai".into(),
-        dark: true,
-        ui: Ui {
-            bg: rgb(0x272822),
-            fg: rgb(0xF8F8F2),
-            fg_dim: rgb(0x90908A),
-            border: rgb(0x3B3C35),
-            accent: rgb(0xF92672),
-            accent_dim: rgb(0xFD5FF0),
-            accent_bg: rgb(0x4A2A38),
-            success: rgb(0xA6E22E),
-            success_dim: rgb(0xC2E37A),
-            success_bg: rgb(0x3A4A22),
-            selected_bg: rgb(0x49483E),
-            match_bg: rgb(0x6A5F1B),
-            cursor: rgb(0xF8F8F0),
-        },
-        ansi: ansi_from([
-            0x272822, 0xF92672, 0xA6E22E, 0xE6DB74, 0x66D9EF, 0xAE81FF, 0xA1EFE4, 0xF8F8F2,
-            0x75715E, 0xFD5FF0, 0xC2E37A, 0xF3EFA0, 0x9CE7F7, 0xCBA6FF, 0xC7F5EF, 0xFFFFFF,
-        ]),
-        tokens: vec![
-            TokenRule::new("comment", 0x5B584C),
-            TokenRule::new("string", 0xE6DB74),
-            TokenRule::new("constant.numeric, constant.language", 0xAE81FF),
-            TokenRule::new("keyword, keyword.control, storage.modifier", 0xF92672),
-            TokenRule::new("storage.type", 0x66D9EF).italic(),
-            TokenRule::new("keyword.operator", 0xF92672),
-            TokenRule::new(
-                "entity.name.function, support.function, variable.function, support.macro",
-                0xA6E22E,
-            ),
-            TokenRule::new(
-                "entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, \
-                 entity.name.trait, support.type, support.class",
-                0x66D9EF,
-            ),
-            TokenRule::new("variable.parameter", 0xFD971F).italic(),
-            TokenRule::new("variable", 0xF8F8F2),
-            TokenRule::new("entity.name.tag", 0xF92672),
-            TokenRule::new("entity.other.attribute-name", 0xA6E22E),
-            TokenRule::new("punctuation", 0xF8F8F2),
-            TokenRule::new(IMPORTS, 0x66D9EF),
-        ],
-    }
-}
-
 /// The module and namespace names an import names, which most grammars
 /// leave as plain identifiers.
 const IMPORTS: &str = "entity.name.namespace, entity.name.module, support.other.namespace, \
                        meta.path, variable.other.module, entity.name.import";
 
+/// The one theme that ships: VS Code's, so the editor looks like the one
+/// beside it. Any other is a VS Code theme JSON in the user's themes folder.
 pub fn builtin() -> Vec<Theme> {
-    vec![
-        organic_dark(),
-        organic_light(),
-        dark_modern(),
-        light_plus(),
-        monokai(),
-    ]
+    vec![dark_modern()]
 }
 
 /// Where user themes live: `~/.config/ycode/themes`, beside the settings.
@@ -438,11 +241,12 @@ fn parse_hex(s: &str) -> Option<Rgb> {
 
 /// Reads a VS Code colour-theme JSON: `colors` drives the chrome and the
 /// terminal palette, `tokenColors` the syntax. Anything the file omits keeps
-/// its value from the closest built-in, Dark Modern or Light+ per `type`.
+/// Dark Modern's value.
 pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let light = value.get("type").and_then(|v| v.as_str()) == Some("light");
-    let mut theme = if light { light_plus() } else { dark_modern() };
+    let mut theme = dark_modern();
+    theme.dark = !light;
     theme.name = value
         .get("name")
         .and_then(|v| v.as_str())
@@ -539,39 +343,21 @@ mod tests {
     use crate::test_support::Dir;
 
     #[test]
-    fn the_built_in_themes_are_the_ones_we_ship_and_organic_dark_leads() {
+    fn dark_modern_is_the_one_theme_that_ships() {
         let names: Vec<String> = builtin().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["Dark Modern"]);
+        assert_eq!(Theme::default().name, "Dark Modern");
+        assert!(dark_modern().dark);
         assert_eq!(
-            names,
-            [
-                "Organic Dark",
-                "Organic Light",
-                "Dark Modern",
-                "Light+",
-                "Monokai"
-            ]
+            by_name(&builtin(), "Dark Modern").unwrap().ui.bg,
+            rgb(0x1F1F1F)
         );
-        assert_eq!(Theme::default().name, "Organic Dark");
-        assert!(organic_dark().dark && !organic_light().dark);
-        assert!(dark_modern().dark && !light_plus().dark && monokai().dark);
-        assert_eq!(by_name(&builtin(), "Monokai").unwrap().name, "Monokai");
         assert!(by_name(&builtin(), "Nope").is_none());
     }
 
     #[test]
-    fn organic_light_recolours_every_token_rule() {
-        let dark = organic_dark();
-        let light = organic_light();
-        assert_eq!(dark.tokens.len(), light.tokens.len());
-        for (a, b) in dark.tokens.iter().zip(&light.tokens) {
-            assert_eq!(a.scope, b.scope);
-            assert_ne!(a.color, b.color, "{} kept its dark colour", a.scope);
-        }
-    }
-
-    #[test]
     fn the_ansi_palette_answers_for_every_index() {
-        let theme = organic_dark();
+        let theme = dark_modern();
         assert_eq!(ansi256(&theme, 1), theme.ansi[1]);
         assert_eq!(ansi256(&theme, 16), (0, 0, 0));
         assert_eq!(ansi256(&theme, 231), (255, 255, 255));
@@ -604,8 +390,8 @@ mod tests {
         assert_eq!(theme.ui.fg, (16, 16, 16));
         assert_eq!(theme.ui.success_bg, (0xE6, 0xFF, 0xEC), "alpha is dropped");
         assert_eq!(theme.ansi[1], (255, 0, 0));
-        // Untouched keys keep the Light+ value.
-        assert_eq!(theme.ui.border, light_plus().ui.border);
+        // Untouched keys keep Dark Modern's value.
+        assert_eq!(theme.ui.border, dark_modern().ui.border);
         let comment = theme.tokens.iter().find(|t| t.scope == "comment").unwrap();
         assert_eq!(comment.color, (0, 128, 0));
         assert!(comment.italic);
@@ -664,15 +450,15 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         std::env::set_var("YARA_CONFIG_DIR", dir.path());
         dir.file(
-            "themes/Monokai.json",
-            r##"{"name":"Monokai","colors":{"editor.background":"#000000"}}"##,
+            "themes/Dark Modern.json",
+            r##"{"name":"Dark Modern","colors":{"editor.background":"#000000"}}"##,
         );
         dir.file("themes/extra.json", r##"{"name":"Extra"}"##);
         dir.file("themes/notes.txt", "not a theme");
         let themes = load_all();
         std::env::remove_var("YARA_CONFIG_DIR");
-        assert_eq!(themes.len(), builtin().len() + 1);
-        assert_eq!(by_name(&themes, "Monokai").unwrap().ui.bg, (0, 0, 0));
+        assert_eq!(themes.len(), 2);
+        assert_eq!(by_name(&themes, "Dark Modern").unwrap().ui.bg, (0, 0, 0));
         assert!(by_name(&themes, "Extra").is_some());
     }
 }

@@ -101,6 +101,7 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         | Command::InstallUpdate
         | Command::SwapPanes
         | Command::HelpMenu
+        | Command::AddFolder
         | Command::Documentation => return None,
         Command::ToggleSidebar => "Ctrl+B",
         Command::Changes => "F4",
@@ -506,6 +507,7 @@ mod tests {
                     | Command::InstallUpdate
                     | Command::SwapPanes
                     | Command::HelpMenu
+                    | Command::AddFolder
                     | Command::Documentation
             );
             assert_eq!(

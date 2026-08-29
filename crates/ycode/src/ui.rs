@@ -15,7 +15,7 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, Focus, Hits, Overlay, View, MENUS, TAB_MENU};
+use crate::app::{App, ChangeRow, Focus, Folder, Hits, Overlay, View, MENUS, TAB_MENU};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -29,7 +29,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(area);
     draw_header(frame, app, header);
-    if app.project.is_none() {
+    if app.project().is_none() {
         draw_start(frame, app, body);
         draw_status(frame, app, status);
         draw_overlay(frame, app, area);
@@ -164,6 +164,14 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::OpenFolder(text)) => {
             draw_prompt(frame, app, " OPEN FOLDER ", "path", &text, area)
         }
+        Some(Overlay::AddFolder(text)) => draw_prompt(
+            frame,
+            app,
+            " ADD FOLDER ",
+            "path of another repository's worktree",
+            &text,
+            area,
+        ),
         Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, &query, row, area),
         Some(Overlay::Palette(query, row)) => draw_palette(frame, app, &query, row, area),
         Some(Overlay::Search(query, row, hits, files)) => {
@@ -764,14 +772,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
     let file_rows = if let Some(tree) = &app.tree {
-        let root = tree.root.clone();
         let opened = app.editor.as_ref().map(|b| b.path.clone());
-        let touched = |path: &std::path::Path| {
-            path.strip_prefix(&root)
-                .ok()
-                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-                .is_some_and(|rel| app.changes.iter().any(|c| c.path == rel))
-        };
         let lines: Vec<Line> = tree
             .rows()
             .iter()
@@ -782,6 +783,10 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                // A folder of the workspace heads its own rows.
+                if row.is_root {
+                    return Line::styled(format!(" {name}"), bold(ui.accent));
+                }
                 let glyph = if row.is_dir {
                     if tree
                         .rows()
@@ -799,7 +804,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("  ".repeat(row.depth)),
                     Span::styled(format!("{glyph} "), fg(ui.fg_dim)),
                 ];
-                let changed = !row.is_dir && touched(&row.path);
+                let changed = !row.is_dir && app.is_changed(&row.path);
                 spans.push(Span::styled(
                     name,
                     fg(if changed { ui.accent_dim } else { ui.fg }),
@@ -982,7 +987,7 @@ fn draw_follow(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // File row: path, its counts, the view toggle on the right.
     let mut file = vec![
-        Span::styled(edit.path.display().to_string(), bold(ui.fg)),
+        Span::styled(app.display_path(&edit.path), bold(ui.fg)),
         Span::styled(format!(" +{}", edit.added()), fg(ui.success)),
         Span::styled(format!(" −{}", edit.removed()), fg(ui.accent)),
     ];
@@ -1115,14 +1120,10 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let [file_row, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
-    let relative = app
-        .project
-        .as_deref()
-        .and_then(|root| buffer.path.strip_prefix(root).ok())
-        .unwrap_or(&buffer.path);
+    let relative = app.display_path(&buffer.path);
     let language = app.syntax.language(buffer.extension());
     let mut file = vec![
-        Span::styled(relative.display().to_string(), bold(ui.fg)),
+        Span::styled(relative, bold(ui.fg)),
         Span::styled(if buffer.modified() { " ●" } else { "" }, fg(ui.accent)),
     ];
     shorten(
@@ -1210,12 +1211,7 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
     let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
-    let root = app
-        .repo
-        .as_ref()
-        .map(|r| r.root.clone())
-        .unwrap_or_default();
-    let text = std::fs::read_to_string(root.join(&edit.path)).unwrap_or_default();
+    let text = std::fs::read_to_string(&edit.path).unwrap_or_default();
     let mut added = BTreeSet::new();
     for hunk in &edit.hunks {
         let mut new = hunk.new_start;
@@ -1254,96 +1250,86 @@ fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
-/// The CHANGES overlay: what differs from the base branch, one row a file.
+/// The CHANGES overlay: what differs from the base branch, a heading per
+/// folder when the workspace holds several, and its files under it.
 fn draw_changes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
     let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
-    frame.render_widget(Block::new().style(dim), area);
-    let width = area.width.min(72);
-    let height = (app.changes.len() as u16 + 4).clamp(4, area.height.max(4));
-    let rect = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
+    let rows = app.change_rows();
+    let files = rows
+        .iter()
+        .filter(|r| matches!(r, ChangeRow::File(..)))
+        .count();
+    let inner = overlay_box(
+        frame,
+        app,
+        "CHANGES",
+        72,
+        rows.len().max(1) as u16 + 1,
+        area,
     );
-    let block = Block::bordered()
-        .border_style(fg(ui.accent))
-        .title(Line::styled(" CHANGES ", bold(ui.accent)))
-        .style(base(&app.theme));
-    let inner = block.inner(rect);
-    frame.render_widget(Clear, rect);
-    frame.render_widget(block, rect);
-    let (added, removed) = totals(app);
-    let branch = app
-        .repo
-        .as_ref()
-        .map_or("no repository", |r| r.branch.as_str());
+    let (added, removed) = app.totals();
     let footer = format!(
-        "git status vs main · {} files · +{added} −{removed} · {} open diff · {} close",
-        app.changes.len(),
+        "vs main · {files} files · +{added} −{removed} · {} open diff · {} close",
         app.hint(Command::MarkReviewed),
         app.hint(Command::Close)
     );
     let path_width = (inner.width as usize).saturating_sub(16);
-    let mut lines: Vec<Line> = app
-        .changes
+    let mut lines: Vec<Line> = rows
         .iter()
-        .enumerate()
-        .map(|(i, change)| {
-            let letter = match change.letter {
-                'M' | 'D' => Span::styled(format!(" {} ", change.letter), fg(ui.accent)),
-                other => Span::styled(format!(" {other} "), fg(ui.success)),
-            };
-            let mut line = Line::from(vec![
-                letter,
+        .map(|entry| match entry {
+            ChangeRow::Folder(i) => {
+                let folder = &app.folders[*i];
+                let (a, r) = folder.totals();
+                Line::from(vec![
+                    Span::styled(format!(" {} ", folder.name()), bold(ui.fg)),
+                    Span::styled(format!("⎇ {}  ", folder.branch()), dim),
+                    Span::styled(format!("+{a}"), fg(ui.success)),
+                    Span::styled(format!(" −{r}"), fg(ui.accent)),
+                ])
+            }
+            ChangeRow::File(_, change) => Line::from(vec![
+                match change.letter {
+                    'M' | 'D' => Span::styled(format!(" {} ", change.letter), fg(ui.accent)),
+                    other => Span::styled(format!(" {other} "), fg(ui.success)),
+                },
                 Span::raw(format!("{:<path_width$}", change.path)),
                 Span::styled(format!("+{:<4}", change.added), fg(ui.success)),
                 Span::styled(format!("−{}", change.removed), fg(ui.accent)),
-            ]);
-            if i == row {
-                line = line.style(Style::new().bg(color(ui.selected_bg)));
-            }
-            line
+            ]),
         })
         .collect();
     if lines.is_empty() {
-        lines.push(Line::styled(
-            format!(" nothing differs from main on {branch}"),
-            dim,
-        ));
+        lines.push(Line::styled(" nothing differs from main", dim));
     }
     let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
     let scroll = row.saturating_sub(list.height.saturating_sub(1) as usize);
-    row_hits(app, list, scroll, app.changes.len());
-    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list);
+    let lines = list_lines(app, lines, row, list.height as usize);
+    row_hits(app, list, scroll, rows.len());
+    frame.render_widget(Paragraph::new(lines), list);
     frame.render_widget(Paragraph::new(Line::styled(footer, dim)), foot);
-}
-
-/// Lines added and removed against the base, over every changed file.
-fn totals(app: &mut App) -> (usize, usize) {
-    app.changes
-        .iter()
-        .fold((0, 0), |(a, r), c| (a + c.added, r + c.removed))
 }
 
 fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
-    let (added, removed) = totals(app);
+    let (added, removed) = app.totals();
     let review = match app.follow.unreviewed_count() {
         0 if app.follow.is_empty() => Span::styled("no edits yet", dim),
         0 => Span::styled("✓ all reviewed", fg(ui.success)),
         n => Span::styled(format!("◆ {n} unreviewed"), fg(ui.accent)),
     };
-    let branch = app.repo.as_ref().map_or("—", |r| r.branch.as_str());
+    let branch = app.main().map_or("—", Folder::branch).to_string();
+    let more = match app.folders.len() {
+        0 | 1 => String::new(),
+        n => format!(" +{} folders", n - 1),
+    };
     let root = app
-        .repo
-        .as_ref()
-        .map(|r| r.root.display().to_string())
+        .project()
+        .map(|p| p.display().to_string())
         .unwrap_or_default();
     let mut left = vec![
-        Span::styled(format!(" ⎇ {branch} "), fg(ui.fg)),
+        Span::styled(format!(" ⎇ {branch}{more} "), fg(ui.fg)),
         Span::styled(root.clone(), dim),
         Span::styled(format!("  +{added}"), fg(ui.success)),
         Span::styled(format!(" −{removed}"), fg(ui.accent)),

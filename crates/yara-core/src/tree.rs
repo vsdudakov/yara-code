@@ -8,10 +8,14 @@ pub struct Row {
     pub path: PathBuf,
     pub is_dir: bool,
     pub depth: usize,
+    /// A folder's own header row, drawn only when the workspace holds
+    /// several — one folder needs no heading.
+    pub is_root: bool,
 }
 
 pub struct Tree {
-    pub root: PathBuf,
+    /// The workspace's folders, the main one first.
+    pub roots: Vec<PathBuf>,
     expanded: BTreeSet<PathBuf>,
     pub selected: usize,
     rows: Vec<Row>,
@@ -66,14 +70,35 @@ pub fn all_files(root: &Path) -> Vec<String> {
 
 impl Tree {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_roots(vec![root])
+    }
+
+    pub fn with_roots(roots: Vec<PathBuf>) -> Self {
         let mut tree = Self {
-            root,
-            expanded: BTreeSet::new(),
+            // Folders past the first start open, so a folder just added is
+            // not an empty row.
+            expanded: roots.iter().skip(1).cloned().collect(),
+            roots,
             selected: 0,
             rows: Vec::new(),
         };
         tree.rebuild();
         tree
+    }
+
+    /// The main folder — where anything without a better anchor goes.
+    pub fn root(&self) -> &Path {
+        self.roots.first().map_or(Path::new("."), PathBuf::as_path)
+    }
+
+    /// Replaces the folder list, keeping what is open and where the cursor
+    /// stands.
+    pub fn set_roots(&mut self, roots: Vec<PathBuf>) {
+        for root in roots.iter().skip(1) {
+            self.expanded.insert(root.clone());
+        }
+        self.roots = roots;
+        self.rebuild();
     }
 
     pub fn rows(&self) -> &[Row] {
@@ -88,7 +113,22 @@ impl Tree {
     pub fn rebuild(&mut self) {
         let keep = self.selected_row().map(|r| r.path.clone());
         let mut rows = Vec::new();
-        collect(&self.root, 0, &self.expanded, &mut rows);
+        if self.roots.len() == 1 {
+            collect(&self.roots[0], 0, &self.expanded, &mut rows);
+        } else {
+            for root in &self.roots {
+                let open = self.expanded.contains(root);
+                rows.push(Row {
+                    path: root.clone(),
+                    is_dir: true,
+                    depth: 0,
+                    is_root: true,
+                });
+                if open {
+                    collect(root, 1, &self.expanded, &mut rows);
+                }
+            }
+        }
         self.rows = rows;
         self.selected = keep
             .and_then(|path| self.rows.iter().position(|r| r.path == path))
@@ -115,8 +155,12 @@ impl Tree {
 
     /// Unfolds every folder above `path` and puts the cursor on it.
     pub fn reveal(&mut self, path: &Path) {
+        let Some(root) = self.roots.iter().find(|r| path.starts_with(r)).cloned() else {
+            return;
+        };
+        self.expanded.insert(root.clone());
         let mut dir = path.parent();
-        while let Some(d) = dir.filter(|d| d.starts_with(&self.root) && *d != self.root) {
+        while let Some(d) = dir.filter(|d| d.starts_with(&root) && *d != root) {
             self.expanded.insert(d.to_path_buf());
             dir = d.parent();
         }
@@ -134,6 +178,7 @@ fn collect(dir: &Path, depth: usize, expanded: &BTreeSet<PathBuf>, out: &mut Vec
             path: path.clone(),
             is_dir,
             depth,
+            is_root: false,
         });
         if open {
             collect(&path, depth + 1, expanded, out);
@@ -191,6 +236,18 @@ mod tests {
         tree.reveal(&dir.path().join("src/main.rs"));
         assert_eq!(tree.selected, 2);
         assert!(tree.selected_row().unwrap().path.ends_with("main.rs"));
+    }
+
+    #[test]
+    fn several_folders_each_head_their_own_rows() {
+        let one = project("yara-tree-a");
+        let two = project("yara-tree-b");
+        let tree = Tree::with_roots(vec![one.path().to_path_buf(), two.path().to_path_buf()]);
+        let roots: Vec<&Row> = tree.rows().iter().filter(|r| r.is_root).collect();
+        assert_eq!(roots.len(), 2);
+        // Added folders start open, so they are not empty rows.
+        assert!(tree.rows().iter().any(|r| r.depth == 1));
+        assert_eq!(tree.root(), one.path());
     }
 
     #[test]

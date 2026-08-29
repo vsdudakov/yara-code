@@ -351,7 +351,12 @@ impl Watcher {
                         None => git(&repo.root, &["show", &format!("{}:{path}", repo.base)])
                             .unwrap_or_default(),
                     };
-                    (old != *text).then(|| EditEvent::from_unified(path, &unified(&old, text)))
+                    // The path an edit carries is the whole one: a workspace
+                    // holds several folders, and a name alone would not say
+                    // which.
+                    (old != *text).then(|| {
+                        EditEvent::from_unified(repo.root.join(path), &unified(&old, text))
+                    })
                 })
                 .collect(),
         };
@@ -491,11 +496,11 @@ mod tests {
         dir.file("fresh.txt", "hello\n");
         let edits = watcher.poll(&repo);
         assert_eq!(edits.len(), 2);
-        assert_eq!(edits[0].path, PathBuf::from("a.txt"));
+        assert_eq!(edits[0].path, dir.path().join("a.txt"));
         // The step just taken — one line gone — not the distance from main.
         assert_eq!((edits[0].added(), edits[0].removed()), (0, 1));
         assert_eq!(edits[0].hunks[0].lines[1].text, "two");
-        assert_eq!(edits[1].path, PathBuf::from("fresh.txt"));
+        assert_eq!(edits[1].path, dir.path().join("fresh.txt"));
         assert_eq!(edits[1].added(), 1);
         assert!(watcher.poll(&repo).is_empty(), "reported once");
 

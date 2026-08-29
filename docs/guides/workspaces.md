@@ -4,10 +4,9 @@ description: Workspaces in Yara Code — one agent per task in its own git workt
 
 # Workspaces
 
-A workspace is one agent in one git worktree, with its own timeline and its
-own CHANGES. The tabs in the header are the workspaces: the folder you
-opened, then every worktree the repository already has — their agents start
-when you first switch to them.
+A workspace is one task: an agent, and the folders the task is being done in
+— a git worktree per repository, most often — with one timeline and one
+CHANGES over them all. The tabs in the header are the workspaces.
 
 ![Naming a new workspace](../assets/shots/new-tab.svg)
 
@@ -34,3 +33,18 @@ login redirect`), else by its branch, else by its folder.
 
 Where the worktrees go is `worktrees_dir` in [settings](settings.md):
 empty means a `<repo>-worktrees` folder beside the repository.
+
+## Several repositories, one task
+
+A feature that touches a backend and a frontend is one workspace with two
+folders. `File → Add Folder to Workspace…` takes the path of the other
+repository's worktree; from then on the workspace treats them as one:
+
+- the timeline carries the edits of both, each named by its folder —
+  `frontend/src/app.js`;
+- CHANGES heads each folder with its branch and its counts;
+- the FILES tree heads each folder, and ++ctrl+p++ and project search reach
+  across both;
+- the status bar shows the main folder's branch and `+1 folders`.
+
+The first folder is the main one: the agent runs there, and it names the tab.

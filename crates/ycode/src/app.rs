@@ -57,6 +57,8 @@ pub enum Overlay {
     NewFile(String),
     /// A folder path being typed to open.
     OpenFolder(String),
+    /// A folder path being typed to add to this workspace.
+    AddFolder(String),
     /// Go to file: what was typed, and the row the cursor is on.
     QuickOpen(String, usize),
     /// The command palette: what was typed, and the row the cursor is on.
@@ -135,39 +137,22 @@ pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete worktree", "Close"];
 /// The menus in the order the header shows them.
 pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HELP_MENU)];
 
-/// One agent in one worktree.
-pub struct Session {
-    pub project: Option<PathBuf>,
+/// One folder of a workspace: a worktree of a repository, usually, and
+/// what git says about it.
+pub struct Folder {
+    pub path: PathBuf,
     pub repo: Option<Repo>,
-    pub agent: Option<Pty>,
     watcher: Watcher,
     /// What differs from the base branch, refreshed with the watcher.
     pub changes: Vec<Change>,
-    pub follow: Follow,
-    /// A file's whole diff opened from CHANGES, shown in place of the
-    /// timeline's current edit until the follow keys are used again.
-    pub pinned: Option<EditEvent>,
-    pub view: View,
-    /// How far the follow pane's body — or the file being edited — is
-    /// scrolled, in rows.
-    pub scroll: u16,
-    /// The caret moved since the last frame, so the view must show it.
-    pub caret_moved: bool,
-    /// The project's files, for the sidebar.
-    pub tree: Option<Tree>,
-    /// A file open for editing, in the follow pane's place.
-    pub editor: Option<Buffer>,
-    /// A name the user gave the tab; otherwise it is named by its work.
-    pub name: Option<String>,
     /// The pull request the branch is on, asked of `gh` in the background.
     pr: Arc<Mutex<Option<String>>>,
 }
 
-impl Session {
-    fn new(project: Option<PathBuf>, settings: &Settings) -> Self {
-        let repo = project
-            .as_deref()
-            .and_then(|dir| git::open(dir, &settings.base_branch));
+impl Folder {
+    fn new(path: PathBuf, settings: &Settings) -> Self {
+        let path = path.canonicalize().unwrap_or(path);
+        let repo = git::open(&path, &settings.base_branch);
         let pr = Arc::new(Mutex::new(None));
         if let Some(root) = repo.as_ref().map(|r| r.root.clone()) {
             let slot = pr.clone();
@@ -178,12 +163,74 @@ impl Session {
             });
         }
         Self {
-            tree: project.clone().map(Tree::new),
-            project,
+            path,
             repo,
-            agent: None,
             watcher: Watcher::default(),
             changes: Vec::new(),
+            pr,
+        }
+    }
+
+    /// The folder's own name, which is what the tree and the paths show.
+    pub fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.path.display().to_string())
+    }
+
+    pub fn branch(&self) -> &str {
+        self.repo.as_ref().map_or("—", |r| r.branch.as_str())
+    }
+
+    pub fn totals(&self) -> (usize, usize) {
+        self.changes
+            .iter()
+            .fold((0, 0), |(a, r), c| (a + c.added, r + c.removed))
+    }
+}
+
+/// A row of the CHANGES list: a folder's heading, or a file under it.
+#[derive(Clone, Debug)]
+pub enum ChangeRow {
+    Folder(usize),
+    File(usize, Change),
+}
+
+/// One workspace: a task, an agent, and the folders it is being done in —
+/// a worktree per repository, most often, with one timeline over them all.
+pub struct Session {
+    pub folders: Vec<Folder>,
+    pub agent: Option<Pty>,
+    pub follow: Follow,
+    /// A file's whole diff opened from CHANGES, shown in place of the
+    /// timeline's current edit until the follow keys are used again.
+    pub pinned: Option<EditEvent>,
+    pub view: View,
+    /// How far the follow pane's body — or the file being edited — is
+    /// scrolled, in rows.
+    pub scroll: u16,
+    /// The caret moved since the last frame, so the view must show it.
+    pub caret_moved: bool,
+    /// The workspace's files, for the sidebar.
+    pub tree: Option<Tree>,
+    /// A file open for editing, in the follow pane's place.
+    pub editor: Option<Buffer>,
+    /// A name the user gave the tab; otherwise it is named by its work.
+    pub name: Option<String>,
+}
+
+impl Session {
+    fn new(project: Option<PathBuf>, settings: &Settings) -> Self {
+        let folders: Vec<Folder> = project
+            .into_iter()
+            .map(|path| Folder::new(path, settings))
+            .collect();
+        Self {
+            tree: (!folders.is_empty())
+                .then(|| Tree::with_roots(folders.iter().map(|f| f.path.clone()).collect())),
+            folders,
+            agent: None,
             follow: Follow::default(),
             pinned: None,
             view: View::Diff,
@@ -191,26 +238,99 @@ impl Session {
             caret_moved: true,
             editor: None,
             name: None,
-            pr,
         }
     }
 
-    /// What the tab is called: the name it was given, else its pull
-    /// request, else its branch, else its folder.
+    /// The main folder: where the agent runs and what the chrome names.
+    pub fn main(&self) -> Option<&Folder> {
+        self.folders.first()
+    }
+
+    pub fn project(&self) -> Option<&std::path::Path> {
+        self.main().map(|f| f.path.as_path())
+    }
+
+    pub fn repo(&self) -> Option<&Repo> {
+        self.main().and_then(|f| f.repo.as_ref())
+    }
+
+    /// The folder a path belongs to.
+    pub fn folder_of(&self, path: &std::path::Path) -> Option<&Folder> {
+        self.folders.iter().find(|f| path.starts_with(&f.path))
+    }
+
+    /// A path as the panes show it: relative to its folder, and named by
+    /// that folder as well when the workspace holds more than one.
+    pub fn display_path(&self, path: &std::path::Path) -> String {
+        let Some(folder) = self.folder_of(path) else {
+            return path.display().to_string();
+        };
+        let relative = path
+            .strip_prefix(&folder.path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if self.folders.len() > 1 {
+            format!("{}/{relative}", folder.name())
+        } else {
+            relative
+        }
+    }
+
+    /// Whether git has anything to say about a path — what tints the tree.
+    pub fn is_changed(&self, path: &std::path::Path) -> bool {
+        let Some(folder) = self.folder_of(path) else {
+            return false;
+        };
+        let Ok(relative) = path.strip_prefix(&folder.path) else {
+            return false;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        folder.changes.iter().any(|c| c.path == relative)
+    }
+
+    /// The CHANGES list: a heading per folder when there are several, and
+    /// every changed file under it.
+    pub fn change_rows(&self) -> Vec<ChangeRow> {
+        let mut rows = Vec::new();
+        for (i, folder) in self.folders.iter().enumerate() {
+            if self.folders.len() > 1 {
+                rows.push(ChangeRow::Folder(i));
+            }
+            rows.extend(
+                folder
+                    .changes
+                    .iter()
+                    .map(|change| ChangeRow::File(i, change.clone())),
+            );
+        }
+        rows
+    }
+
+    /// Lines added and removed against the base, over every folder.
+    pub fn totals(&self) -> (usize, usize) {
+        self.folders.iter().fold((0, 0), |(a, r), f| {
+            let (fa, fr) = f.totals();
+            (a + fa, r + fr)
+        })
+    }
+
+    /// What the tab is called: the name it was given, else the main
+    /// folder's pull request, else its branch, else its own name.
     pub fn title(&self) -> String {
         if let Some(name) = &self.name {
             return name.clone();
         }
-        if let Some(pr) = self.pr.lock().unwrap().as_ref() {
+        let Some(folder) = self.main() else {
+            return "no project".into();
+        };
+        if let Some(pr) = folder.pr.lock().unwrap().as_ref() {
             return pr.clone();
         }
-        if let Some(repo) = &self.repo {
-            return repo.branch.clone();
+        match &folder.repo {
+            Some(repo) => repo.branch.clone(),
+            None => folder.name(),
         }
-        self.project
-            .as_ref()
-            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_else(|| "no project".into())
     }
 
     /// The edit the FOLLOW pane shows: a pinned file, else the timeline's.
@@ -308,29 +428,31 @@ impl App {
     /// Starts the active workspace's agent if it has none yet — a workspace
     /// opened from an existing worktree waits until it is looked at.
     pub fn ensure_agent(&mut self) {
-        if self.autostart && self.agent.is_none() && self.project.is_some() {
+        if self.autostart && self.agent.is_none() && self.project().is_some() {
             self.start_agent();
         }
     }
 
-    /// A tab per worktree the repository already has, after the folder
-    /// opened; each is named by its folder until it is renamed.
-    fn add_worktree_sessions(&mut self) {
-        let Some(repo) = self.repo.clone() else {
+    /// Adds a folder to the workspace: another repository's worktree for
+    /// the same task, most often.
+    fn add_folder(&mut self, path: &str) {
+        let path = PathBuf::from(expand_home(path.trim()));
+        if !path.is_dir() {
+            self.note = Some(format!("{} is not a folder", path.display()));
             return;
-        };
-        let here = self.project.clone();
-        for path in git::worktrees(&repo) {
-            if here.as_deref() == Some(path.as_path())
-                || self
-                    .sessions
-                    .iter()
-                    .any(|s| s.project.as_deref() == Some(path.as_path()))
-            {
-                continue;
-            }
-            self.sessions.push(Session::new(Some(path), &self.settings));
         }
+        let folder = Folder::new(path, &self.settings);
+        if self.folders.iter().any(|f| f.path == folder.path) {
+            self.note = Some("that folder is already in this workspace".into());
+            return;
+        }
+        self.folders.push(folder);
+        let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
+        match self.tree.as_mut() {
+            Some(tree) => tree.set_roots(roots),
+            None => self.tree = Some(Tree::with_roots(roots)),
+        }
+        self.refresh();
     }
 
     /// Asks the agents what they have used, off the drawing thread.
@@ -505,7 +627,7 @@ impl App {
                 self.overlay = Some(Overlay::Keys(step(scroll).min(command::ALL.len() - 1)))
             }
             Some(Overlay::Changes(row)) => {
-                let last = self.changes.len().saturating_sub(1);
+                let last = self.change_rows().len().saturating_sub(1);
                 self.overlay = Some(Overlay::Changes(if up {
                     row.saturating_sub(1)
                 } else {
@@ -737,7 +859,7 @@ impl App {
         // The path as the user typed it — `.`, most often — is not the name
         // the header should show.
         let project = project.map(|p| p.canonicalize().unwrap_or(p));
-        let mut app = Self {
+        Self {
             sessions: vec![Session::new(project, &settings)],
             active: 0,
             show_sidebar: settings.show_sidebar,
@@ -763,9 +885,7 @@ impl App {
             themes: theme::builtin(),
             note: None,
             should_quit: false,
-        };
-        app.add_worktree_sessions();
-        app
+        }
     }
 
     /// Opens a project: in this tab when it has none, else in a new one. The
@@ -774,7 +894,7 @@ impl App {
     pub fn open_project(&mut self, path: PathBuf) {
         let path = path.canonicalize().unwrap_or(path);
         let session = Session::new(Some(path.clone()), &self.settings);
-        if self.project.is_none() {
+        if self.project().is_none() {
             self.sessions[self.active] = session;
         } else {
             self.sessions.push(session);
@@ -783,7 +903,6 @@ impl App {
         self.settings.push_recent(&path);
         let _ = self.settings.save();
         self.start_agent();
-        self.add_worktree_sessions();
         self.refresh();
         self.focus = Focus::Agent;
     }
@@ -799,9 +918,33 @@ impl App {
     }
 
     fn search(&self, query: &str) -> (Vec<Hit>, usize) {
-        match &self.project {
-            Some(root) => search::search(root, query, &self.settings.search_exclude, 500),
-            None => (Vec::new(), 0),
+        let several = self.folders.len() > 1;
+        let mut hits = Vec::new();
+        let mut files = 0;
+        for folder in &self.folders {
+            let (found, in_files) =
+                search::search(&folder.path, query, &self.settings.search_exclude, 500);
+            files += in_files;
+            let name = folder.name();
+            hits.extend(found.into_iter().map(|mut hit| {
+                if several {
+                    hit.path = format!("{name}/{}", hit.path);
+                }
+                hit
+            }));
+        }
+        (hits, files)
+    }
+
+    /// The folder a path from a hit or the finder came from, and the path
+    /// inside it — the name the list showed carries the folder.
+    fn resolve(&self, shown: &str) -> Option<PathBuf> {
+        if self.folders.len() > 1 {
+            let (name, rest) = shown.split_once('/')?;
+            let folder = self.folders.iter().find(|f| f.name() == name)?;
+            Some(folder.path.join(rest))
+        } else {
+            Some(self.folders.first()?.path.join(shown))
         }
     }
 
@@ -809,8 +952,8 @@ impl App {
     /// the editor was started, with no project. A failure is a note.
     pub fn start_agent(&mut self) {
         let cwd = self
-            .project
-            .clone()
+            .project()
+            .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         let dirty = self.dirty.clone();
@@ -838,15 +981,19 @@ impl App {
     /// its CHANGES list is brought up to date. Called every `refresh_ms`.
     pub fn refresh(&mut self) {
         for session in &mut self.sessions {
-            let Some(repo) = &session.repo else { continue };
-            // Only a working tree that moved is worth a git process.
-            if !session.watcher.moved(repo) {
-                continue;
+            let mut edits = Vec::new();
+            for folder in &mut session.folders {
+                let Some(repo) = &folder.repo else { continue };
+                // Only a working tree that moved is worth a git process.
+                if !folder.watcher.moved(repo) {
+                    continue;
+                }
+                edits.extend(folder.watcher.poll(repo));
+                folder.changes = git::changes(repo).unwrap_or_default();
             }
-            for edit in session.watcher.poll(repo) {
+            for edit in edits {
                 session.follow.push(edit);
             }
-            session.changes = git::changes(repo).unwrap_or_default();
         }
         self.dirty.store(true, Ordering::Relaxed);
     }
@@ -875,11 +1022,17 @@ impl App {
 
     /// Opens the diff of the CHANGES row under the cursor in the FOLLOW pane.
     fn open_change(&mut self, row: usize) {
-        let Some((repo, change)) = self.repo.as_ref().zip(self.changes.get(row)) else {
+        let rows = self.change_rows();
+        let Some(ChangeRow::File(folder, change)) = rows.get(row).cloned() else {
             return;
         };
-        match git::file_diff(repo, &change.path) {
-            Ok(diff) => self.pinned = Some(EditEvent::from_unified(&change.path, &diff)),
+        let Some(repo) = self.folders[folder].repo.clone() else {
+            return;
+        };
+        match git::file_diff(&repo, &change.path) {
+            Ok(diff) => {
+                self.pinned = Some(EditEvent::from_unified(repo.root.join(&change.path), &diff))
+            }
             Err(e) => self.note = Some(e),
         }
         self.overlay = None;
@@ -924,7 +1077,7 @@ impl App {
     /// Removes the active workspace's worktree from disk and its tab. The
     /// main working copy is not a worktree to remove.
     fn delete_worktree(&mut self) {
-        let Some(repo) = self.repo.clone() else {
+        let Some(repo) = self.repo().cloned() else {
             return;
         };
         if repo.worktree.is_none() {
@@ -972,10 +1125,23 @@ impl App {
 
     /// The files the finder offers for what was typed, best first.
     pub fn quick_open_hits(&self, query: &str) -> Vec<String> {
-        let Some(root) = &self.project else {
-            return Vec::new();
-        };
-        let files = tree::all_files(root);
+        // Every folder's files, each named by its folder when there are
+        // several, so a hit says which repository it is in.
+        let several = self.folders.len() > 1;
+        let files: Vec<String> = self
+            .folders
+            .iter()
+            .flat_map(|folder| {
+                let name = folder.name();
+                tree::all_files(&folder.path).into_iter().map(move |path| {
+                    if several {
+                        format!("{name}/{path}")
+                    } else {
+                        path
+                    }
+                })
+            })
+            .collect();
         fuzzy::rank(query, files.iter().map(String::as_str))
             .into_iter()
             .take(50)
@@ -1002,8 +1168,8 @@ impl App {
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_default(),
-            None => match &self.project {
-                Some(root) => root.clone(),
+            None => match self.project() {
+                Some(root) => root.to_path_buf(),
                 None => {
                     self.note = Some("open a folder first".into());
                     return;
@@ -1033,8 +1199,8 @@ impl App {
     /// the name the user gave it, an agent started in it, and a tab called
     /// by that name.
     fn new_tab(&mut self, name: &str) {
-        let Some(repo) = self.repo.clone() else {
-            self.note = Some("a new tab needs a repository to branch from".into());
+        let Some(repo) = self.repo().cloned() else {
+            self.note = Some("a new workspace needs a repository to branch from".into());
             return;
         };
         let dir = match self.settings.worktrees_dir.as_str() {
@@ -1079,7 +1245,7 @@ impl App {
                 match key.code {
                     KeyCode::Up => self.overlay = Some(Overlay::Changes(row.saturating_sub(1))),
                     KeyCode::Down => {
-                        let last = self.changes.len().saturating_sub(1);
+                        let last = self.change_rows().len().saturating_sub(1);
                         self.overlay = Some(Overlay::Changes((row + 1).min(last)));
                     }
                     KeyCode::Enter => self.open_change(row),
@@ -1126,10 +1292,13 @@ impl App {
                     }
                     KeyCode::Enter => {
                         self.overlay = None;
-                        if let Some((root, hit)) = self.project.clone().zip(hits.get(row)) {
-                            self.open_file(&root.join(&hit.path));
+                        let found = hits
+                            .get(row)
+                            .and_then(|h| Some((self.resolve(&h.path)?, h.line)));
+                        if let Some((path, line)) = found {
+                            self.open_file(&path);
                             if let Some(buffer) = self.editor.as_mut() {
-                                for _ in 1..hit.line {
+                                for _ in 1..line {
                                     buffer.down();
                                 }
                             }
@@ -1279,12 +1448,12 @@ impl App {
                     KeyCode::Down => self.overlay = Some(Overlay::QuickOpen(query, row + 1)),
                     KeyCode::Enter => {
                         self.overlay = None;
-                        if let Some((root, hit)) = self
-                            .project
-                            .clone()
-                            .zip(self.quick_open_hits(&query).get(row).cloned())
+                        if let Some(path) = self
+                            .quick_open_hits(&query)
+                            .get(row)
+                            .and_then(|hit| self.resolve(hit))
                         {
-                            self.open_file(&root.join(hit));
+                            self.open_file(&path);
                         }
                     }
                     _ if closes => self.overlay = None,
@@ -1304,12 +1473,14 @@ impl App {
                 Overlay::NewTab(mut text)
                 | Overlay::RenameTab(mut text)
                 | Overlay::NewFile(mut text)
-                | Overlay::OpenFolder(mut text),
+                | Overlay::OpenFolder(mut text)
+                | Overlay::AddFolder(mut text),
             ) => {
                 let again = |text: String| match self.overlay.as_ref().unwrap() {
                     Overlay::NewTab(_) => Overlay::NewTab(text),
                     Overlay::RenameTab(_) => Overlay::RenameTab(text),
                     Overlay::NewFile(_) => Overlay::NewFile(text),
+                    Overlay::AddFolder(_) => Overlay::AddFolder(text),
                     _ => Overlay::OpenFolder(text),
                 };
                 match key.code {
@@ -1320,6 +1491,7 @@ impl App {
                             Overlay::NewTab(_) => self.new_tab(&text),
                             Overlay::RenameTab(_) => self.name = (!text.is_empty()).then_some(text),
                             Overlay::NewFile(_) => self.new_file(&text),
+                            Overlay::AddFolder(_) => self.add_folder(&text),
                             _ => {
                                 if !text.is_empty() {
                                     self.open_project(PathBuf::from(expand_home(&text)));
@@ -1345,7 +1517,7 @@ impl App {
         let command = self.settings.command(&chord);
         // The start page: the RECENT list is what the arrows and Enter are
         // about; everything else is a command.
-        if self.project.is_none() && command.is_none_or(|c| c == Command::MarkReviewed) {
+        if self.project().is_none() && command.is_none_or(|c| c == Command::MarkReviewed) {
             let last = self.settings.recent_projects.len().saturating_sub(1);
             match key.code {
                 KeyCode::Up => self.start_row = self.start_row.saturating_sub(1),
@@ -1508,6 +1680,7 @@ impl App {
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
             Command::NewFile => self.overlay = Some(Overlay::NewFile(String::new())),
             Command::OpenFolder => self.overlay = Some(Overlay::OpenFolder(String::new())),
+            Command::AddFolder => self.overlay = Some(Overlay::AddFolder(String::new())),
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => self.open_file(&path),
                 Err(e) => self.note = Some(e.to_string()),

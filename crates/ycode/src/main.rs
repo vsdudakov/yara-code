@@ -43,22 +43,10 @@ fn main() -> io::Result<()> {
     let mut out = io::stdout();
     // A thin bar that blinks, the way a caret does everywhere else; the
     // terminal gets its own shape back on the way out.
-    // The window's own title, so the terminal has something better to show
-    // than whichever git the watcher is running at the moment.
-    let title = match &app.project {
-        Some(p) => format!(
-            "ycode — {}",
-            p.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        ),
-        None => "ycode".to_string(),
-    };
     execute!(
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
-        crossterm::terminal::SetTitle(title),
         crossterm::cursor::SetCursorStyle::BlinkingBar
     )?;
     // The defaults need nothing beyond what every terminal sends; where the

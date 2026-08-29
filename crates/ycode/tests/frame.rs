@@ -392,7 +392,7 @@ fn changes_lists_what_differs_from_main_and_opens_a_files_diff() {
     assert!(all.contains("CHANGES"));
     assert!(all.contains(" A README.md"), "{all}");
     assert!(all.contains(" M src/main.rs"));
-    assert!(all.contains("git status vs main · 2 files · +2 −3 · ⏎ open diff · Esc close"));
+    assert!(all.contains("vs main · 2 files · +2 −3 · ⏎ open diff · Esc close"));
 
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
@@ -439,7 +439,7 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.sessions.len(), 2);
     assert_eq!(app.active, 1);
-    assert_eq!(app.repo.as_ref().unwrap().branch, "task-login");
+    assert_eq!(app.repo().unwrap().branch, "task-login");
     let rows = frame(&mut app);
     assert!(rows[0].contains(" main   task/login  [+]"), "{}", rows[0]);
     assert!(rows[0].contains("● cat — running"), "an agent of its own");
@@ -668,7 +668,7 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
     app.handle_key(key(KeyCode::Enter));
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&lock);
-    assert_eq!(app.project.as_deref(), Some(repo.0.as_path()));
+    assert_eq!(app.project(), Some(repo.0.as_path()));
     assert_eq!(
         app.settings.recent_projects[0], repo.0,
         "moved to the front"
@@ -798,7 +798,7 @@ fn a_new_file_is_made_where_the_files_cursor_is_and_settings_opens_its_own_file(
         app.note,
         app.overlay,
         app.editor.as_ref().map(|b| b.path.clone()),
-        app.project
+        app.project()
     );
     assert_eq!(app.focus, Focus::Editor);
     assert!(text(&mut app).contains("notes.md"));
@@ -1119,27 +1119,29 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
 }
 
 #[test]
-fn a_project_opens_with_a_tab_per_worktree_and_a_right_click_on_a_tab_drops_its_menu() {
+fn a_right_click_on_a_tab_renames_the_workspace_or_deletes_its_worktree() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    let repo = Repo::new("yara-frame-worktrees");
+    let repo = Repo::new("yara-frame-tabmenu");
     let trees = repo.0.join("trees");
-    repo.git(&[
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        "review",
-        trees.join("review").to_str().unwrap(),
-    ]);
-    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    let settings = Settings {
+        worktrees_dir: trees.to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    let mut app = App::with_settings(Some(repo.0.clone()), settings, Theme::default());
     app.focus = Focus::Follow;
-    assert_eq!(app.sessions.len(), 2, "the repository and its worktree");
+    assert_eq!(
+        app.sessions.len(),
+        1,
+        "one workspace, whatever worktrees exist"
+    );
+    app.handle_key(key(KeyCode::F(7)));
+    for c in "review".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.sessions.len(), 2);
     let rows = frame(&mut app);
     assert!(rows[0].contains(" main   review  [+]"), "{}", rows[0]);
-    assert!(
-        app.sessions[1].agent.is_none(),
-        "no agent until it is looked at"
-    );
 
     let (tab, _) = app.hits.tabs[1];
     let right = MouseEvent {
@@ -1165,8 +1167,8 @@ fn a_project_opens_with_a_tab_per_worktree_and_a_right_click_on_a_tab_drops_its_
     app.handle_mouse(right);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 1, "the worktree's tab is gone");
-    assert!(!trees.join("review").exists(), "and so is the worktree");
+    assert_eq!(app.sessions.len(), 1, "the workspace's tab is gone");
+    assert!(!trees.join("review").exists(), "and so is its worktree");
     // The repository itself is not a worktree to delete.
     frame(&mut app);
     let (tab, _) = app.hits.tabs[0];
@@ -1180,6 +1182,72 @@ fn a_project_opens_with_a_tab_per_worktree_and_a_right_click_on_a_tab_drops_its_
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.sessions.len(), 1);
     assert!(app.note.as_deref().unwrap().contains("not a worktree"));
+}
+
+#[test]
+fn a_workspace_holds_a_worktree_of_every_repository_the_task_touches() {
+    let backend = Repo::new("yara-frame-backend");
+    let frontend = Repo::new("yara-frame-frontend");
+    frontend.file("src/app.js", "export const app = 1;\n");
+    frontend.git(&["add", "."]);
+    frontend.git(&["commit", "-q", "-m", "front"]);
+    let mut app = App::with_settings(
+        Some(backend.0.clone()),
+        Settings::default(),
+        Theme::default(),
+    );
+    app.focus = Focus::Follow;
+    app.execute(yara_core::command::Command::AddFolder);
+    for c in frontend.0.to_string_lossy().chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.folders.len(), 2);
+
+    // An edit in either folder lands on the one timeline, named by its folder.
+    backend.file("src/main.rs", "fn main() { serve() }\n");
+    frontend.file("src/app.js", "export const app = 2;\n");
+    app.refresh();
+    assert_eq!(app.follow.len(), 2);
+    let all = text(&mut app);
+    let backend_name = backend
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        all.contains(&format!("{backend_name}/src/main.rs")) || all.contains("src/app.js"),
+        "{all}"
+    );
+
+    // CHANGES heads each folder with its branch and counts.
+    app.handle_key(key(KeyCode::F(4)));
+    let all = text(&mut app);
+    assert!(
+        all.contains(&backend_name) && all.contains("⎇ main"),
+        "{all}"
+    );
+    assert!(all.contains("vs main · 2 files"), "{all}");
+    app.handle_key(key(KeyCode::Esc));
+
+    // The tree heads each folder too, and the finder reaches both.
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    let all = text(&mut app);
+    assert!(all.contains(&backend_name), "{all}");
+    let hits = app.quick_open_hits("appjs");
+    assert!(hits.iter().any(|h| h.ends_with("src/app.js")), "{hits:?}");
+    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    for c in "appjs".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(
+        app.editor.as_ref().unwrap().path.starts_with(&frontend.0),
+        "opened from the other folder"
+    );
+    // The status bar says how many folders the workspace holds.
+    assert!(text(&mut app).contains("+1 folders"));
 }
 
 #[test]
@@ -1219,17 +1287,17 @@ fn closing_a_dirty_file_asks_first_and_so_does_quitting() {
 fn a_tab_dragged_over_another_takes_its_place() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let repo = Repo::new("yara-frame-drag-tab");
-    let trees = repo.0.join("trees");
-    repo.git(&[
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        "second",
-        trees.join("second").to_str().unwrap(),
-    ]);
-    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    let settings = Settings {
+        worktrees_dir: repo.0.join("trees").to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    let mut app = App::with_settings(Some(repo.0.clone()), settings, Theme::default());
     app.focus = Focus::Follow;
+    app.handle_key(key(KeyCode::F(7)));
+    for c in "second".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
     assert!(frame(&mut app)[0].contains(" main   second  [+]"));
     let ev = |kind, x, y| MouseEvent {
         kind,

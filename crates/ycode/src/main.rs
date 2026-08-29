@@ -41,7 +41,14 @@ fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut out = io::stdout();
-    execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
+    // A thin bar that blinks, the way a caret does everywhere else; the
+    // terminal gets its own shape back on the way out.
+    execute!(
+        out,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        crossterm::cursor::SetCursorStyle::BlinkingBar
+    )?;
     // The defaults need nothing beyond what every terminal sends; where the
     // kitty keyboard protocol is there, ask for it so a rebinding to a
     // Ctrl+Shift chord works too.
@@ -57,7 +64,12 @@ fn main() -> io::Result<()> {
     if enhanced {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = execute!(
+        io::stdout(),
+        crossterm::cursor::SetCursorStyle::DefaultUserShape,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    );
     disable_raw_mode()?;
     result
 }

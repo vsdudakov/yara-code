@@ -894,7 +894,8 @@ fn the_wheel_scrolls_the_diff_and_moves_the_editor_caret() {
     assert!(text(&mut app).contains("    4  line 4"));
     // Typing brings the view back to the caret.
     app.handle_key(key(KeyCode::Char('x')));
-    assert!(text(&mut app).contains("    1  xline 1"));
+    let all = text(&mut app);
+    assert!(all.contains("    1  xline 1"), "{:?} {all}", app.focus);
 }
 
 #[test]

@@ -1048,6 +1048,7 @@ impl App {
 
     /// A key typed into the open file.
     fn edit_key(&mut self, key: KeyEvent, chord: &Chord) {
+        self.caret_moved = true;
         let Some(buffer) = self.editor.as_mut() else {
             return;
         };

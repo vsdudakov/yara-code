@@ -1532,7 +1532,12 @@ impl App {
         let command = self.settings.command(&chord);
         // The start page: the RECENT list is what the arrows and Enter are
         // about; everything else is a command.
-        if self.project().is_none() && command.is_none_or(|c| c == Command::MarkReviewed) {
+        // The start page is what a folderless editor shows; a file open
+        // over it — the settings, most often — takes the keys instead.
+        if self.project().is_none()
+            && self.editor.is_none()
+            && command.is_none_or(|c| c == Command::MarkReviewed)
+        {
             let last = self.settings.recent_projects.len().saturating_sub(1);
             match key.code {
                 KeyCode::Up => self.start_row = self.start_row.saturating_sub(1),

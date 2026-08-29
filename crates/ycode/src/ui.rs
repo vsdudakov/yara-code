@@ -30,9 +30,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     .areas(area);
     draw_header(frame, app, header);
     if app.project().is_none() {
-        draw_start(frame, app, body);
+        // A file opened without a folder — the settings, most often — has
+        // the whole body to itself; otherwise the start page does.
+        app.hits.follow = body;
+        if app.editor.is_some() {
+            draw_follow(frame, app, body);
+        } else {
+            draw_start(frame, app, body);
+        }
         draw_status(frame, app, status);
         draw_overlay(frame, app, area);
+        draw_hover(frame, app);
+        draw_selection(frame, app);
         return;
     }
 

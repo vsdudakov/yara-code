@@ -1384,3 +1384,29 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
         "it opened here rather than in a new tab"
     );
 }
+
+#[test]
+fn settings_open_over_the_start_page() {
+    let config = std::env::temp_dir().join(format!("yara-frame-settings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&config);
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let mut app = App::with_settings(None, Settings::default(), Theme::default());
+    app.handle_key(key(KeyCode::F(12)));
+    let all = text(&mut app);
+    assert_eq!(app.focus, Focus::Editor);
+    assert!(
+        all.contains(" EDIT ") && all.contains("settings.json"),
+        "{all}"
+    );
+    assert!(all.contains("\"agent\""), "the file itself: {all}");
+    assert!(!all.contains("the terminal editor for the agent loop"));
+    // Typing goes into the file, not to the start page's list.
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Char('x')));
+    assert!(app.editor.as_ref().unwrap().modified());
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(text(&mut app).contains("the terminal editor for the agent loop"));
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&config);
+}

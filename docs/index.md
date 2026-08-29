@@ -34,13 +34,13 @@ is still unreviewed.
 branch differs from `main` by, file by file — the result, beside the timeline
 of how it got there.
 
-## Workspaces
+## Tasks
 
 ++f7++ asks for a name, makes a git worktree on a branch of that
 name, starts an agent in it and gives it a tab. Two agents on two tasks, each
 with its own timeline; ++ctrl+l++ moves between them.
 
-![Two workspaces](assets/shots/tabs.svg)
+![Two tasks](assets/shots/tabs.svg)
 
 ## And the small editor around it
 

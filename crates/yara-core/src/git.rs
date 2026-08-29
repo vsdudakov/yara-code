@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::follow::EditEvent;
+use crate::tree;
 
 /// The repository a project lives in.
 #[derive(Clone, Debug, PartialEq)]
@@ -269,20 +270,8 @@ pub fn unified(old: &str, new: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Watches the working tree: each poll, every changed path whose text moved
-/// since the last poll becomes an edit — the step the agent just took, not
-/// the whole distance from the base. The first poll only takes stock: what
-/// was already on the branch is the CHANGES list's business.
-#[derive(Default)]
-pub struct Watcher {
-    seen: Option<BTreeMap<String, String>>,
-    /// The working tree's files and their modification times as of the last
-    /// poll, so git is only asked when something on disk actually moved.
-    fingerprint: Option<u64>,
-}
-
 /// Every file under `root` with when it was last written, folded into one
-/// number. Cheap next to a git process: no process at all.
+/// number. Cheap next to reading them: no reading at all.
 fn fingerprint(root: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -292,16 +281,15 @@ fn fingerprint(root: &Path) -> u64 {
             continue;
         };
         for entry in entries.flatten() {
-            let path = entry.path();
             let name = entry.file_name();
             if name == ".git" || name == "target" || name == "node_modules" {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
             if meta.is_dir() {
-                stack.push(path);
+                stack.push(entry.path());
             } else {
-                path.hash(&mut hasher);
+                entry.path().hash(&mut hasher);
                 meta.len().hash(&mut hasher);
                 if let Ok(modified) = meta.modified() {
                     modified.hash(&mut hasher);
@@ -312,21 +300,40 @@ fn fingerprint(root: &Path) -> u64 {
     hasher.finish()
 }
 
+/// Watches a folder: each poll, every file whose text moved since the last
+/// one becomes an edit — the step the agent just took. The first poll only
+/// takes stock. A folder that is a repository is asked of git, which is
+/// quick and knows what is committed; one that is not is read whole.
+#[derive(Default)]
+pub struct Watcher {
+    seen: Option<BTreeMap<String, String>>,
+    /// The folder's files and their modification times as of the last poll,
+    /// so the files are only read when something on disk actually moved.
+    fingerprint: Option<u64>,
+}
+
 impl Watcher {
-    /// Whether anything on disk moved since the last poll; the first look
+    /// Whether anything in `root` moved since the last look; the first look
     /// counts as movement, so the stock is taken.
-    pub fn moved(&mut self, repo: &Repo) -> bool {
-        let now = fingerprint(&repo.root);
+    pub fn moved(&mut self, root: &Path) -> bool {
+        let now = fingerprint(root);
         let moved = self.fingerprint != Some(now);
         self.fingerprint = Some(now);
         moved
     }
 
-    pub fn poll(&mut self, repo: &Repo) -> Vec<EditEvent> {
-        let Ok(changes) = changes(repo) else {
-            return Vec::new();
+    /// The edits made in `root` since the last poll. `repo` is the folder's
+    /// repository when it has one — then only what differs from the base is
+    /// watched, rather than every file in the folder.
+    pub fn poll(&mut self, root: &Path, repo: Option<&Repo>) -> Vec<EditEvent> {
+        let mut paths: Vec<String> = match repo {
+            Some(repo) => changes(repo)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| c.path)
+                .collect(),
+            None => tree::all_files(root),
         };
-        let mut paths: Vec<String> = changes.into_iter().map(|c| c.path).collect();
         // A path put back the way it was is a change too, so what was seen
         // before is looked at again even when git no longer lists it.
         paths.extend(self.seen.iter().flat_map(|seen| seen.keys().cloned()));
@@ -335,7 +342,7 @@ impl Watcher {
         let now: BTreeMap<String, String> = paths
             .into_iter()
             .map(|path| {
-                let text = std::fs::read_to_string(repo.root.join(&path)).unwrap_or_default();
+                let text = std::fs::read_to_string(root.join(&path)).unwrap_or_default();
                 (path, text)
             })
             .collect();
@@ -344,19 +351,22 @@ impl Watcher {
             Some(seen) => now
                 .iter()
                 .filter_map(|(path, text)| {
-                    // A path not seen before starts from its base version,
-                    // so the first edit to a clean file is that edit alone.
-                    let old = match seen.get(path) {
-                        Some(old) => old.clone(),
-                        None => git(&repo.root, &["show", &format!("{}:{path}", repo.base)])
-                            .unwrap_or_default(),
+                    // A path not seen before starts from its committed
+                    // version where there is one, so the first edit to a
+                    // clean file is that edit alone.
+                    let old = match (seen.get(path), repo) {
+                        (Some(old), _) => old.clone(),
+                        (None, Some(repo)) => {
+                            git(&repo.root, &["show", &format!("{}:{path}", repo.base)])
+                                .unwrap_or_default()
+                        }
+                        (None, None) => String::new(),
                     };
-                    // The path an edit carries is the whole one: a workspace
+                    // The path an edit carries is the whole one: a task
                     // holds several folders, and a name alone would not say
                     // which.
-                    (old != *text).then(|| {
-                        EditEvent::from_unified(repo.root.join(path), &unified(&old, text))
-                    })
+                    (old != *text)
+                        .then(|| EditEvent::from_unified(root.join(path), &unified(&old, text)))
                 })
                 .collect(),
         };
@@ -384,6 +394,22 @@ mod tests {
         git(dir.path(), &["commit", "-q", "-m", "first"]).unwrap();
         let repo = open(dir.path(), "").unwrap();
         (dir, repo)
+    }
+
+    #[test]
+    fn a_folder_that_is_no_repository_is_watched_all_the_same() {
+        let dir = Dir::new("yara-watch-plain");
+        dir.file("notes.md", "one\n");
+        let mut watcher = Watcher::default();
+        assert!(watcher.poll(dir.path(), None).is_empty(), "stock taken");
+        dir.file("notes.md", "one\ntwo\n");
+        dir.file("fresh.txt", "hello\n");
+        let edits = watcher.poll(dir.path(), None);
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].path, dir.path().join("fresh.txt"));
+        assert_eq!(edits[1].path, dir.path().join("notes.md"));
+        assert_eq!((edits[1].added(), edits[1].removed()), (1, 0));
+        assert!(watcher.poll(dir.path(), None).is_empty(), "reported once");
     }
 
     #[test]
@@ -483,18 +509,20 @@ mod tests {
     #[test]
     fn the_watcher_reports_each_new_edit_once_and_never_what_was_already_there() {
         let (dir, repo) = repo("yara-git-watch");
+        let root = dir.path().to_path_buf();
         let mut watcher = Watcher::default();
-        assert!(watcher.poll(&repo).is_empty(), "the first poll takes stock");
-        assert!(watcher.poll(&repo).is_empty(), "nothing moved");
+        let poll = |w: &mut Watcher| w.poll(&root, Some(&repo));
+        assert!(poll(&mut watcher).is_empty(), "the first poll takes stock");
+        assert!(poll(&mut watcher).is_empty(), "nothing moved");
         // A clean file's first edit is measured from its committed version.
         dir.file("a.txt", "one\ntwo\nthree\n");
-        let edits = watcher.poll(&repo);
+        let edits = poll(&mut watcher);
         assert_eq!(edits.len(), 1);
         assert_eq!((edits[0].added(), edits[0].removed()), (1, 0));
 
         dir.file("a.txt", "one\nthree\n");
         dir.file("fresh.txt", "hello\n");
-        let edits = watcher.poll(&repo);
+        let edits = poll(&mut watcher);
         assert_eq!(edits.len(), 2);
         assert_eq!(edits[0].path, dir.path().join("a.txt"));
         // The step just taken — one line gone — not the distance from main.
@@ -502,17 +530,17 @@ mod tests {
         assert_eq!(edits[0].hunks[0].lines[1].text, "two");
         assert_eq!(edits[1].path, dir.path().join("fresh.txt"));
         assert_eq!(edits[1].added(), 1);
-        assert!(watcher.poll(&repo).is_empty(), "reported once");
+        assert!(poll(&mut watcher).is_empty(), "reported once");
 
         // Putting the file back is an edit too, even though git is quiet.
         dir.file("a.txt", "one\ntwo\n");
-        let edits = watcher.poll(&repo);
+        let edits = poll(&mut watcher);
         assert_eq!(edits.len(), 1);
         assert_eq!((edits[0].added(), edits[0].removed()), (1, 1));
         // With nothing written since, nothing moved and git is not asked.
-        assert!(watcher.moved(&repo), "the first look takes stock");
-        assert!(!watcher.moved(&repo));
+        assert!(watcher.moved(&root), "the first look takes stock");
+        assert!(!watcher.moved(&root));
         dir.file("b.txt", "new\n");
-        assert!(watcher.moved(&repo));
+        assert!(watcher.moved(&root));
     }
 }

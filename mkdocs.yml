@@ -84,7 +84,7 @@ nav:
       - First run: getting-started/first-run.md
   - Guides:
       - The follow loop: guides/follow.md
-      - Workspaces: guides/workspaces.md
+      - Tasks: guides/tasks.md
       - Files and editing: guides/editing.md
       - Search and the palette: guides/search.md
       - Key bindings: guides/keys.md

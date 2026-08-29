@@ -40,7 +40,7 @@ Code is one screen for exactly that.
 - **CHANGES** (`F4`) is the other view of the same work: what the
   branch differs from `main` by, file by file, against the timeline of how it
   got there.
-- **Workspaces** run agents in parallel: `F7` names one, gets a git
+- **Tasks** run agents in parallel: `F7` names one, gets a git
   worktree on a branch of that name, starts an agent in it, and gives it a tab.
 
 Everything else is the small editor around that: a file tree, an editor with
@@ -53,8 +53,8 @@ and a `settings.json` that holds everything you might want different.
 | --- | --- |
 | ![Scrubbed back to an earlier edit](docs/assets/shots/paused.svg) | ![The file as it stands, the added lines marked](docs/assets/shots/file-view.svg) |
 | *Scrubbed back: the pane pauses on an earlier edit, reviewed ones are hollow ticks.* | *The same edit as the file, with a bar beside every added line.* |
-| ![What differs from main](docs/assets/shots/changes.svg) | ![Two workspaces, two agents](docs/assets/shots/tabs.svg) |
-| *CHANGES: the branch against main, one row a file.* | *A second workspace: its own worktree, its own agent, its own timeline.* |
+| ![What differs from main](docs/assets/shots/changes.svg) | ![Two tasks, two agents](docs/assets/shots/tabs.svg) |
+| *CHANGES: the branch against main, one row a file.* | *A second task: its own worktree, its own agent, its own timeline.* |
 | ![A file open for editing](docs/assets/shots/edit.svg) | ![Project search](docs/assets/shots/search.svg) |
 | *A file from the tree, open where the follow pane was.* | *Search the project; Enter opens the hit on its line.* |
 | ![The command palette](docs/assets/shots/palette.svg) | ![Every key binding](docs/assets/shots/keys.svg) |
@@ -107,7 +107,7 @@ opens the file, every key commented.
 | Switch pane (agent → files → editor / follow) | `F6` |
 | Scrub the timeline · go live · mark reviewed · diff/file | `←` `→` · `f` · `⏎` · `v` |
 | Changes vs main · palette · search · go to file · files | `F4` · `F5` · `F3` · `Ctrl+P` · `Ctrl+B` |
-| New workspace · rename · next / previous · close | `F7` · `F2` · `Ctrl+L` / `Ctrl+K` · `Ctrl+W` |
+| New task · rename · next / previous · close | `F7` · `F2` · `Ctrl+L` / `Ctrl+K` · `Ctrl+W` |
 | Save · close the file · undo / redo | `Ctrl+S` · `Esc` · `Ctrl+Z` / `Ctrl+Y` |
 | Keys · menus · recent · theme · agent usage · quit | `F1` · `F10` · `Ctrl+R` · `F9` · `F8` · `Ctrl+Q` |
 
@@ -121,7 +121,7 @@ a terminal cannot send: no `Ctrl+Shift`, no `Alt`.
 
 ```bash
 make lint     # cargo fmt --check + clippy -D warnings
-make test     # cargo test --workspace
+make test     # cargo test --task
 make shots    # redraws docs/assets/shots/*.svg with the editor itself
 make run ARGS=~/code/project
 ```

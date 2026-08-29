@@ -47,10 +47,10 @@ follow pane → agent. A click moves it too.
 | Switch Pane | ++f6++ |
 | Copy / Paste | ++ctrl+c++ / ++ctrl+v++ |
 | Close | ++esc++ |
-| New Workspace… | ++f7++ |
-| Close Workspace | ++ctrl+w++ |
-| Next / Previous Workspace | ++ctrl+l++ / ++ctrl+k++ |
-| Rename Workspace… | ++f2++ |
+| New Task… | ++f7++ |
+| Close Task | ++ctrl+w++ |
+| Next / Previous Task | ++ctrl+l++ / ++ctrl+k++ |
+| Rename Task… | ++f2++ |
 | Undo / Redo | ++ctrl+z++ / ++ctrl+y++ |
 | Follow: Go Live | ++f++ |
 | Follow: Previous / Next Edit | ++left++ / ++right++ |

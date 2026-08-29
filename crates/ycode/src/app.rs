@@ -137,8 +137,8 @@ pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete worktree", "Close"];
 /// The menus in the order the header shows them.
 pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HELP_MENU)];
 
-/// One folder of a workspace: a worktree of a repository, usually, and
-/// what git says about it.
+/// One folder of a task: a worktree of a repository, most often, but any
+/// folder will do — what git says about it is a bonus, not a requirement.
 pub struct Folder {
     pub path: PathBuf,
     pub repo: Option<Repo>,
@@ -197,8 +197,8 @@ pub enum ChangeRow {
     File(usize, Change),
 }
 
-/// One workspace: a task, an agent, and the folders it is being done in —
-/// a worktree per repository, most often, with one timeline over them all.
+/// One task: an agent, and the folders it works in — a worktree per
+/// repository, most often — with one timeline over them all.
 pub struct Session {
     pub folders: Vec<Folder>,
     pub agent: Option<Pty>,
@@ -212,7 +212,7 @@ pub struct Session {
     pub scroll: u16,
     /// The caret moved since the last frame, so the view must show it.
     pub caret_moved: bool,
-    /// The workspace's files, for the sidebar.
+    /// The task's files, for the sidebar.
     pub tree: Option<Tree>,
     /// A file open for editing, in the follow pane's place.
     pub editor: Option<Buffer>,
@@ -433,8 +433,8 @@ impl App {
         }
     }
 
-    /// Adds a folder to the workspace: another repository's worktree for
-    /// the same task, most often.
+    /// Adds a folder to the task: another repository's worktree, most
+    /// often, though any folder is welcome.
     fn add_folder(&mut self, path: &str) {
         let path = PathBuf::from(expand_home(path.trim()));
         if !path.is_dir() {
@@ -443,7 +443,7 @@ impl App {
         }
         let folder = Folder::new(path, &self.settings);
         if self.folders.iter().any(|f| f.path == folder.path) {
-            self.note = Some("that folder is already in this workspace".into());
+            self.note = Some("that folder is already in this task".into());
             return;
         }
         self.folders.push(folder);
@@ -983,13 +983,14 @@ impl App {
         for session in &mut self.sessions {
             let mut edits = Vec::new();
             for folder in &mut session.folders {
-                let Some(repo) = &folder.repo else { continue };
-                // Only a working tree that moved is worth a git process.
-                if !folder.watcher.moved(repo) {
+                // Only a folder that moved is worth reading, or asking git.
+                if !folder.watcher.moved(&folder.path) {
                     continue;
                 }
-                edits.extend(folder.watcher.poll(repo));
-                folder.changes = git::changes(repo).unwrap_or_default();
+                edits.extend(folder.watcher.poll(&folder.path, folder.repo.as_ref()));
+                if let Some(repo) = &folder.repo {
+                    folder.changes = git::changes(repo).unwrap_or_default();
+                }
             }
             for edit in edits {
                 session.follow.push(edit);
@@ -1195,12 +1196,26 @@ impl App {
         }
     }
 
-    /// A new workspace: a worktree of the current repository on a branch of
-    /// the name the user gave it, an agent started in it, and a tab called
-    /// by that name.
+    /// A new task, named by the user: a worktree of the current repository
+    /// on a branch of that name where there is a repository, and the same
+    /// folders over again where there is not — either way its own agent and
+    /// its own timeline.
     fn new_tab(&mut self, name: &str) {
         let Some(repo) = self.repo().cloned() else {
-            self.note = Some("a new workspace needs a repository to branch from".into());
+            let folders: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
+            let Some(first) = folders.first().cloned() else {
+                self.note = Some("open a folder first".into());
+                return;
+            };
+            let mut session = Session::new(Some(first), &self.settings);
+            for path in folders.into_iter().skip(1) {
+                session.folders.push(Folder::new(path, &self.settings));
+            }
+            session.name = Some(name.trim().to_string());
+            self.sessions.push(session);
+            self.active = self.sessions.len() - 1;
+            self.start_agent();
+            self.refresh();
             return;
         };
         let dir = match self.settings.worktrees_dir.as_str() {

@@ -30,6 +30,6 @@ pane; ++enter++ marks the edit reviewed and moves to the next one;
 That is the loop. The rest is in the guides:
 
 - [The follow loop](../guides/follow.md) — live, paused, reviewed; diff and file.
-- [Workspaces](../guides/workspaces.md) — an agent per task, in its own worktree.
+- [Tasks](../guides/tasks.md) — an agent per task, in its own worktree.
 - [Files and editing](../guides/editing.md) — the tree, the editor, saving.
 - [Key bindings](../guides/keys.md) — which keys are the agent's and which the editor's.

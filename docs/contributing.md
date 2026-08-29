@@ -8,7 +8,7 @@ description: How to build, test and contribute to Yara Code — the CI gate, the
 git clone https://github.com/vsdudakov/yara-code
 cd yara-code
 make lint     # cargo fmt --check + clippy -D warnings
-make test     # cargo test --workspace
+make test     # cargo test --task
 make run ARGS=~/code/project
 ```
 

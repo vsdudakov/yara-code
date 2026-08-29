@@ -429,7 +429,7 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     );
 
     app.handle_key(key(KeyCode::F(7)));
-    assert!(text(&mut app).contains("NEW WORKSPACE"));
+    assert!(text(&mut app).contains("NEW TASK"));
     for c in "task/login".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
@@ -1119,7 +1119,7 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
 }
 
 #[test]
-fn a_right_click_on_a_tab_renames_the_workspace_or_deletes_its_worktree() {
+fn a_right_click_on_a_tab_renames_the_task_or_deletes_its_worktree() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let repo = Repo::new("yara-frame-tabmenu");
     let trees = repo.0.join("trees");
@@ -1167,7 +1167,7 @@ fn a_right_click_on_a_tab_renames_the_workspace_or_deletes_its_worktree() {
     app.handle_mouse(right);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 1, "the workspace's tab is gone");
+    assert_eq!(app.sessions.len(), 1, "the task's tab is gone");
     assert!(!trees.join("review").exists(), "and so is its worktree");
     // The repository itself is not a worktree to delete.
     frame(&mut app);
@@ -1185,7 +1185,7 @@ fn a_right_click_on_a_tab_renames_the_workspace_or_deletes_its_worktree() {
 }
 
 #[test]
-fn a_workspace_holds_a_worktree_of_every_repository_the_task_touches() {
+fn a_task_holds_a_folder_of_every_repository_it_touches() {
     let backend = Repo::new("yara-frame-backend");
     let frontend = Repo::new("yara-frame-frontend");
     frontend.file("src/app.js", "export const app = 1;\n");
@@ -1329,4 +1329,33 @@ fn a_tab_dragged_over_another_takes_its_place() {
     );
     assert_eq!(app.active, 1, "the dragged tab stays active");
     assert!(app.dragging_tab.is_none());
+}
+
+#[test]
+fn a_task_watches_folders_that_are_no_repository_at_all() {
+    let dir = std::env::temp_dir().join(format!("yara-frame-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/notes.md"), "one\n").unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let mut app = App::with_settings(Some(dir.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    assert!(app.repo().is_none(), "no git here");
+    std::fs::write(dir.join("src/notes.md"), "one\ntwo\n").unwrap();
+    app.refresh();
+    assert_eq!(app.follow.len(), 1);
+    let all = text(&mut app);
+    assert!(all.contains("src/notes.md +1 −0"), "{all}");
+    assert!(all.contains("+ two"), "{all}");
+    // A new task on the same folders is another agent with its own timeline.
+    app.handle_key(key(KeyCode::F(7)));
+    for c in "second look".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.project(), Some(dir.as_path()));
+    assert!(frame(&mut app)[0].contains(" second look  [+]"));
+    let _ = std::fs::remove_dir_all(&dir);
 }

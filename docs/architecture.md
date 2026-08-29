@@ -4,7 +4,7 @@ description: How Yara Code is built — a core crate that knows everything and a
 
 # Architecture
 
-Two crates in one workspace.
+Two crates in one task.
 
 **`crates/yara-core`** is everything the editor knows and nothing it draws:
 
@@ -26,7 +26,7 @@ Two crates in one workspace.
 **`crates/ycode`** is the terminal:
 
 - `app.rs` — `App` holds the settings, the theme and a `Vec<Session>`; a
-  `Session` is one workspace — its folder, repository, agent, watcher,
+  `Session` is one task — its folder, repository, agent, watcher,
   timeline, tree and open file. `App` derefs to the active session, so the
   drawing code reads `app.follow` and means the one in front. `handle_key`
   decides whose key it is; `execute` runs a `Command`; `handle_mouse`

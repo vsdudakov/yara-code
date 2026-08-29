@@ -153,10 +153,10 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::TabMenu(tab, row)) => draw_tab_menu(frame, app, tab, row, area),
         Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
         Some(Overlay::NewTab(text)) => {
-            draw_prompt(frame, app, " NEW WORKSPACE ", "workspace name", &text, area)
+            draw_prompt(frame, app, " NEW TASK ", "task name", &text, area)
         }
         Some(Overlay::RenameTab(text)) => {
-            draw_prompt(frame, app, " RENAME WORKSPACE ", "name", &text, area)
+            draw_prompt(frame, app, " RENAME TASK ", "name", &text, area)
         }
         Some(Overlay::NewFile(text)) => {
             draw_prompt(frame, app, " NEW FILE ", "file name", &text, area)
@@ -1281,12 +1281,15 @@ fn draw_changes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
             ChangeRow::Folder(i) => {
                 let folder = &app.folders[*i];
                 let (a, r) = folder.totals();
-                Line::from(vec![
-                    Span::styled(format!(" {} ", folder.name()), bold(ui.fg)),
-                    Span::styled(format!("⎇ {}  ", folder.branch()), dim),
-                    Span::styled(format!("+{a}"), fg(ui.success)),
-                    Span::styled(format!(" −{r}"), fg(ui.accent)),
-                ])
+                let mut spans = vec![Span::styled(format!(" {} ", folder.name()), bold(ui.fg))];
+                if folder.repo.is_some() {
+                    spans.push(Span::styled(format!("⎇ {}  ", folder.branch()), dim));
+                    spans.push(Span::styled(format!("+{a}"), fg(ui.success)));
+                    spans.push(Span::styled(format!(" −{r}"), fg(ui.accent)));
+                } else {
+                    spans.push(Span::styled("not a repository", dim));
+                }
+                Line::from(spans)
             }
             ChangeRow::File(_, change) => Line::from(vec![
                 match change.letter {

@@ -1,5 +1,5 @@
 ---
-description: Yara Code's settings.json — the agent command, the layout, the follow loop, workspaces, keys, search, usage; every key commented, every one optional.
+description: Yara Code's settings.json — the agent command, the layout, the follow loop, tasks, keys, search, usage; every key commented, every one optional.
 ---
 
 # Settings
@@ -22,7 +22,7 @@ saves a setting. `//` comments are allowed.
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |
 | `refresh_ms` | `500` | How often the working tree is looked at |
 | `base_branch` | `""` | What CHANGES measures against; empty means the main working copy's branch |
-| `worktrees_dir` | `""` | Where new workspaces' worktrees go; empty means `<repo>-worktrees` beside the repository |
+| `worktrees_dir` | `""` | Where new tasks' worktrees go; empty means `<repo>-worktrees` beside the repository |
 | `usage_commands` | `{}` | A command per agent that prints its plan usage as JSON — see [Agent usage](usage.md) |
 | `search_exclude` | `["target", "node_modules", ".*"]` | What Search Project leaves out |
 | `agent_keys` | `["Ctrl+R", "Ctrl+N", "Ctrl+Z"]` | Bound chords the agent keeps anyway |

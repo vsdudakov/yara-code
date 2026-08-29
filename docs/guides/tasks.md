@@ -23,7 +23,8 @@ it.
 | New task | ++f7++ |
 | Next / previous | ++ctrl+l++ / ++ctrl+k++, or click the tab |
 | Rename | ++f2++, or a right click on the tab |
-| Delete the worktree | a right click on the tab — the folder goes, the branch stays |
+| Delete the task | a right click on the tab — its worktrees go, their branches stay |
+| Add a folder | a right click on the tab, or the palette |
 | Reorder | drag a tab along the strip |
 | Close | ++ctrl+w++ — the agent stops; the worktree stays for git |
 
@@ -37,7 +38,8 @@ empty means a `<repo>-worktrees` folder beside the repository.
 ## Several folders, one task
 
 A feature that touches a backend and a frontend is one task with two
-folders. `File → Add Folder to Task…` walks the filesystem — type to narrow
+folders. **Add Folder to Task…** — a right click on the tab, or the palette —
+walks the filesystem — type to narrow
 the list, ++enter++ to step into a folder, ++enter++ on the first row to add
 the one the walk stands on — and from then on the task treats them as one:
 

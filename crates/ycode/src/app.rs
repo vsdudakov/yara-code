@@ -139,7 +139,7 @@ pub struct Updates {
 }
 
 /// What a right click on a tab offers, in order.
-pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete worktree", "Close"];
+pub const TAB_MENU: [&str; 4] = ["Rename…", "Add Folder to Task…", "Delete Task", "Close"];
 
 /// What a right click in the tree offers.
 pub const TREE_MENU: [Command; 2] = [Command::NewFile, Command::NewFolder];
@@ -1141,28 +1141,40 @@ impl App {
         self.active = tab.min(self.sessions.len() - 1);
         match TAB_MENU[row.min(TAB_MENU.len() - 1)] {
             "Rename…" => self.execute(Command::RenameTab),
-            "Delete worktree" => self.delete_worktree(),
+            "Add Folder to Task…" => self.execute(Command::AddFolder),
+            "Delete Task" => self.delete_task(),
             _ => self.execute(Command::CloseTab),
         }
     }
 
-    /// Removes the active workspace's worktree from disk and its tab. The
-    /// main working copy is not a worktree to remove.
-    fn delete_worktree(&mut self) {
-        let Some(repo) = self.repo().cloned() else {
-            return;
-        };
-        if repo.worktree.is_none() {
-            self.note = Some("this is the repository itself, not a worktree".into());
+    /// Closes the task and takes its worktrees off the disk with it. A
+    /// folder that is a repository's own working copy is left where it is:
+    /// that is the project, not the task.
+    fn delete_task(&mut self) {
+        let worktrees: Vec<Repo> = self
+            .folders
+            .iter()
+            .filter_map(|f| f.repo.clone())
+            .filter(|repo| repo.worktree.is_some())
+            .collect();
+        if worktrees.is_empty() {
+            self.note = Some("no worktree of this task's own to remove".into());
             return;
         }
         self.agent = None;
-        match git::worktree_remove(&repo, &repo.root) {
-            Ok(()) => {
-                self.note = Some(format!("removed {}", repo.root.display()));
-                self.execute(Command::CloseTab);
+        let mut removed = 0;
+        for repo in &worktrees {
+            match git::worktree_remove(repo, &repo.root) {
+                Ok(()) => removed += 1,
+                Err(e) => self.note = Some(e),
             }
-            Err(e) => self.note = Some(e),
+        }
+        if removed > 0 {
+            self.note = Some(match removed {
+                1 => format!("removed {}", worktrees[0].root.display()),
+                n => format!("removed {n} worktrees"),
+            });
+            self.execute(Command::CloseTab);
         }
     }
 

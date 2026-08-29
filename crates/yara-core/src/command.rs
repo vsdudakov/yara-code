@@ -194,7 +194,6 @@ pub const FILE_MENU: Menu = &[
     Some(Command::OpenRecent),
     None,
     Some(Command::NewTab),
-    Some(Command::AddFolder),
     None,
     Some(Command::Settings),
     None,
@@ -507,7 +506,6 @@ mod tests {
             [
                 Command::OpenRecent,
                 Command::NewTab,
-                Command::AddFolder,
                 Command::Settings,
                 Command::Quit
             ]

@@ -14,8 +14,9 @@ saves a setting. `//` comments are allowed.
 | --- | --- | --- |
 | `theme` | `"Dark Modern"` | The theme, built in or a VS Code JSON in `themes/` beside the file |
 | `agent` | `"claude"` | The command that runs in the AGENT pane: `claude`, `codex`, `cursor-agent`, a path, with arguments |
-| `agent_side` | `"left"` | Which side the agent sits on; `"right"` puts it on the right |
-| `agent_width` | `42` | The agent pane's share of the width, in percent |
+| `agent_side` | `"left"` | Which side the agent sits on; ++shift+f6++ swaps it |
+| `cursor_blink_ms` | `500` | One step of the editor caret's blink; `0` keeps it on |
+| `agent_width` | `42` | The agent pane's share of the width, in percent; dragging the seam between the panes sets it |
 | `sidebar_width` | `30` | The FILES tree, in columns |
 | `show_sidebar` | `false` | Whether FILES is open at start |
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |

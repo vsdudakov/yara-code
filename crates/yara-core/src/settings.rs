@@ -111,6 +111,7 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         // The keyboard's own key for moving between parts of a window, and
         // one no program in the agent pane is listening for.
         Command::NextPane => "F6",
+        Command::SwapPanes => "Shift+F6",
         Command::Close => "Esc",
         Command::NewTab => "F7",
         Command::CloseTab => "Ctrl+W",

@@ -46,18 +46,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     });
     let agent = Constraint::Percentage(app.settings.agent_width.min(100));
     let gap = Constraint::Length(1);
-    let (files, agent, follow) = match app.settings.agent_side {
+    let (files, agent, follow, seam) = match app.settings.agent_side {
         Side::Left => {
-            let [agent, _gap, follow, files] =
+            let [agent, seam, follow, files] =
                 Layout::horizontal([agent, gap, Constraint::Min(0), sidebar]).areas(body);
-            (files, agent, follow)
+            (files, agent, follow, seam)
         }
         Side::Right => {
-            let [files, follow, _gap, agent] =
+            let [files, follow, seam, agent] =
                 Layout::horizontal([sidebar, Constraint::Min(0), gap, agent]).areas(body);
-            (files, agent, follow)
+            (files, agent, follow, seam)
         }
     };
+    app.hits.seam = seam;
+    app.hits.body = body;
     app.hits.files = files;
     app.hits.agent = agent;
     app.hits.follow = follow;

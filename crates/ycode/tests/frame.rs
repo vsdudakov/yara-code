@@ -1008,3 +1008,48 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
     app.handle_key(key(KeyCode::Right));
     assert!(app.selection.is_none());
 }
+
+#[test]
+fn shift_f6_moves_the_panes_to_the_other_side_and_the_seam_drags_the_width() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let config =
+        std::env::temp_dir().join(format!("yara-frame-swap-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let mut app = following(Settings::default());
+    let rows = frame(&mut app);
+    assert!(rows[1].find("AGENT").unwrap() < rows[1].find("FOLLOW").unwrap());
+    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+    let rows = frame(&mut app);
+    assert!(rows[1].find("FOLLOW").unwrap() < rows[1].find("AGENT").unwrap());
+    assert_eq!(app.settings.agent_side, Side::Right);
+    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    frame(&mut app);
+    let seam = app.hits.seam;
+    assert_eq!(seam.width, 1);
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        seam.x,
+        seam.y + 3,
+    ));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 60, seam.y + 3));
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), 60, seam.y + 3));
+    assert_eq!(app.settings.agent_width, 60);
+    let rows = frame(&mut app);
+    assert!(rows[1].find("FOLLOW").unwrap() >= 58, "{}", rows[1]);
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        app.hits.seam.x,
+        5,
+    ));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 2, 5));
+    assert_eq!(app.settings.agent_width, 20, "never narrower than a fifth");
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&config);
+}

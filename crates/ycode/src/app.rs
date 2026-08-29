@@ -86,6 +86,11 @@ pub struct Hits {
     pub file_rows: Vec<(Rect, usize)>,
     pub agent: Rect,
     pub follow: Rect,
+    /// The blank column between the agent and the follow pane; dragging
+    /// it resizes them.
+    pub seam: Rect,
+    /// The row the panes sit in, for the drag to measure against.
+    pub body: Rect,
     /// The text of the file being edited, without its gutter.
     pub editor: Rect,
     pub live: Rect,
@@ -223,6 +228,8 @@ pub struct App {
     /// The cells the mouse dragged over, as (column, row) corners, and the
     /// text of the last frame they are read from.
     pub selection: Option<((u16, u16), (u16, u16))>,
+    /// The seam is being dragged.
+    pub resizing: bool,
     pub last_frame: Vec<String>,
     /// An OSC 52 escape waiting to be written to the terminal — a copy made
     /// where no clipboard tool answered.
@@ -349,6 +356,22 @@ impl App {
         let _ = self.settings.save();
     }
 
+    /// The seam dragged to column `x`: the agent's share of the width
+    /// follows it, kept between a fifth and four fifths.
+    fn resize_to(&mut self, x: u16) {
+        let body = self.hits.body;
+        if body.width == 0 {
+            return;
+        }
+        let from_left = x.saturating_sub(body.x) as u32 * 100 / body.width as u32;
+        let agent = match self.settings.agent_side {
+            yara_core::settings::Side::Left => from_left,
+            yara_core::settings::Side::Right => 100 - from_left.min(100),
+        };
+        self.settings.agent_width = agent.clamp(20, 80) as u16;
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
     /// The text the mouse dragged over, read off the last frame row by row,
     /// trailing blanks dropped. In the file being edited the gutter is left
     /// out, so what is copied is the code.
@@ -464,10 +487,23 @@ impl App {
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => Some(true),
             MouseEventKind::ScrollDown => Some(false),
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
+                self.resize_to(x);
+                return;
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some((_, end)) = self.selection.as_mut() {
                     *end = (x, y);
                 }
+                return;
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.resizing => {
+                self.resizing = false;
+                let _ = self.settings.save();
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) if hit(self.hits.seam, x, y) => {
+                self.resizing = true;
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -590,6 +626,7 @@ impl App {
             start_row: 0,
             hits: Hits::default(),
             selection: None,
+            resizing: false,
             last_frame: Vec::new(),
             osc52: None,
             caret_on: true,
@@ -1218,6 +1255,14 @@ impl App {
                 if let Some(b) = self.editor.as_mut() {
                     b.redo()
                 }
+            }
+            Command::SwapPanes => {
+                use yara_core::settings::Side;
+                self.settings.agent_side = match self.settings.agent_side {
+                    Side::Left => Side::Right,
+                    Side::Right => Side::Left,
+                };
+                let _ = self.settings.save();
             }
             Command::Copy => self.copy(),
             Command::Paste => self.paste(),

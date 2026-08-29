@@ -73,6 +73,9 @@ pub enum Overlay {
     Usage,
     /// The themes, with the row the cursor is on.
     Themes(usize),
+    /// The file being edited has unsaved changes and is about to close:
+    /// save it, drop it, or stay. `quit` when the whole editor is closing.
+    CloseFile { quit: bool },
 }
 
 /// Which seam a drag has hold of.
@@ -241,6 +244,9 @@ pub struct App {
     pub resizing: Option<Seam>,
     /// Where the mouse is, for what lights up under it.
     pub hover: Option<(u16, u16)>,
+    /// The last tab clicked and when, so a second click soon after is a
+    /// double click that renames it.
+    last_tab_click: Option<(usize, std::time::Instant)>,
     pub last_frame: Vec<String>,
     /// An OSC 52 escape waiting to be written to the terminal — a copy made
     /// where no clipboard tool answered.
@@ -586,7 +592,15 @@ impl App {
         if let Some(menu) = find(&self.hits.menus) {
             self.overlay = Some(Overlay::Menu(menu, 0));
         } else if let Some(tab) = find(&self.hits.tabs) {
+            let now = std::time::Instant::now();
+            let again = self
+                .last_tab_click
+                .is_some_and(|(t, at)| t == tab && now.duration_since(at).as_millis() < 400);
             self.active = tab;
+            self.last_tab_click = Some((tab, now));
+            if again {
+                self.execute(Command::RenameTab);
+            }
         } else if hit(self.hits.plus, x, y) {
             self.execute(Command::NewTab);
         } else if hit(self.hits.usage, x, y) {
@@ -671,6 +685,7 @@ impl App {
             selection: None,
             resizing: None,
             hover: None,
+            last_tab_click: None,
             last_frame: Vec::new(),
             osc52: None,
             caret_on: true,
@@ -818,6 +833,25 @@ impl App {
             }
             Err(e) => self.note = Some(format!("{}: {e}", path.display())),
         }
+    }
+
+    /// Closes the file — or the editor, with `quit` — once it is safe to.
+    fn close_file(&mut self, quit: bool) {
+        self.editor = None;
+        self.focus = Focus::Follow;
+        if quit {
+            self.should_quit = true;
+        }
+    }
+
+    /// Whether the file may go: a dirty one asks first, and the answer is
+    /// what closes it.
+    fn may_close(&mut self, quit: bool) -> bool {
+        if self.editor.as_ref().is_some_and(|b| b.modified()) {
+            self.overlay = Some(Overlay::CloseFile { quit });
+            return false;
+        }
+        true
     }
 
     fn save(&mut self) {
@@ -1065,6 +1099,24 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::CloseFile { quit }) => {
+                match key.code {
+                    KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                        self.overlay = None;
+                        self.save();
+                        if self.editor.as_ref().is_some_and(|b| !b.modified()) {
+                            self.close_file(quit);
+                        }
+                    }
+                    KeyCode::Char('n' | 'N') => {
+                        self.overlay = None;
+                        self.close_file(quit);
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::Themes(row)) => {
                 match key.code {
                     KeyCode::Up => self.overlay = Some(Overlay::Themes(row.saturating_sub(1))),
@@ -1267,7 +1319,20 @@ impl App {
 
     pub fn execute(&mut self, command: Command) {
         match command {
-            Command::Quit => self.should_quit = true,
+            Command::Quit => {
+                // Any workspace with an unsaved file asks before the editor goes.
+                let dirty = self
+                    .sessions
+                    .iter()
+                    .position(|s| s.editor.as_ref().is_some_and(|b| b.modified()));
+                match dirty {
+                    Some(i) => {
+                        self.active = i;
+                        self.may_close(true);
+                    }
+                    None => self.should_quit = true,
+                }
+            }
             Command::ToggleSidebar => {
                 self.show_sidebar = !self.show_sidebar;
                 self.focus = if self.show_sidebar {
@@ -1412,8 +1477,9 @@ impl App {
                 self.active = (self.active + self.sessions.len() - 1) % self.sessions.len()
             }
             Command::Close if self.editor.is_some() => {
-                self.editor = None;
-                self.focus = Focus::Follow;
+                if self.may_close(false) {
+                    self.close_file(false);
+                }
             }
             Command::Close => self.pinned = None,
             Command::ToggleView => {

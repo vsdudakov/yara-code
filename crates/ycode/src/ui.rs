@@ -149,6 +149,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
     match app.overlay.clone() {
         Some(Overlay::Usage) => draw_usage(frame, app, area),
         Some(Overlay::Themes(row)) => draw_themes(frame, app, row, area),
+        Some(Overlay::CloseFile { .. }) => draw_close_file(frame, app, area),
         Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
         Some(Overlay::NewTab(text)) => {
             draw_prompt(frame, app, " NEW WORKSPACE ", "workspace name", &text, area)
@@ -475,6 +476,25 @@ fn draw_usage(frame: &mut Frame, app: &mut App, area: Rect) {
             ));
         }
     }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The question a dirty file asks on its way out.
+fn draw_close_file(frame: &mut Frame, app: &mut App, area: Rect) {
+    let name = app
+        .editor
+        .as_ref()
+        .and_then(|b| b.path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let dim = fg(app.theme.ui.fg_dim);
+    let inner = overlay_box(frame, app, "UNSAVED CHANGES", 56, 2, area);
+    let lines = vec![
+        Line::raw(format!(" {name} has unsaved changes. Save it?")),
+        Line::styled(
+            format!(" y save · n discard · {} stay", app.hint(Command::Close)),
+            dim,
+        ),
+    ];
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

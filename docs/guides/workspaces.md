@@ -22,7 +22,7 @@ it.
 | --- | --- |
 | New workspace | ++f7++ |
 | Next / previous | ++ctrl+pgdn++ / ++ctrl+pgup++, or click the tab |
-| Rename | ++f2++ |
+| Rename | ++f2++, or a double click on the tab |
 | Close | ++ctrl+w++ — the agent stops; the worktree stays for git |
 
 The first workspace, the one without a name of its own, is called by its

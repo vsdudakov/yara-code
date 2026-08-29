@@ -1116,3 +1116,59 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
         "the whole seam"
     );
 }
+
+#[test]
+fn a_double_click_on_a_tab_asks_for_its_name() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut app = following(Settings::default());
+    frame(&mut app);
+    let (tab, _) = app.hits.tabs[0];
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: tab.x + 1,
+        row: tab.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click);
+    assert!(app.overlay.is_none(), "one click only switches");
+    app.handle_mouse(click);
+    assert!(matches!(app.overlay, Some(Overlay::RenameTab(_))));
+    for c in "review".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(frame(&mut app)[0].contains(" review  [+]"));
+}
+
+#[test]
+fn closing_a_dirty_file_asks_first_and_so_does_quitting() {
+    let repo = Repo::new("yara-frame-dirty");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.open_file(&repo.0.join("src/main.rs"));
+    app.handle_key(key(KeyCode::Char('q')));
+    app.handle_key(key(KeyCode::Esc));
+    let all = text(&mut app);
+    assert!(
+        all.contains("UNSAVED CHANGES") && all.contains("main.rs has unsaved changes"),
+        "{all}"
+    );
+    assert!(app.editor.is_some());
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.overlay.is_none() && app.editor.is_some(), "stayed");
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(app.editor.is_none(), "discarded");
+    assert!(std::fs::read_to_string(repo.0.join("src/main.rs"))
+        .unwrap()
+        .starts_with("fn main"));
+
+    app.open_file(&repo.0.join("src/main.rs"));
+    app.handle_key(key(KeyCode::Char('q')));
+    app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(!app.should_quit && matches!(app.overlay, Some(Overlay::CloseFile { quit: true })));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(app.should_quit);
+    assert!(std::fs::read_to_string(repo.0.join("src/main.rs"))
+        .unwrap()
+        .starts_with("qfn main"));
+}

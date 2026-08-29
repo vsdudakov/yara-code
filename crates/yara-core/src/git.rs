@@ -21,9 +21,12 @@ pub struct Repo {
     pub base: String,
 }
 
+/// Runs git in `dir`. Without optional locks: the watcher asks git every
+/// half second, and a status that refreshed the index would leave a lock
+/// in the way of the user's own git.
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
-        .arg("-C")
+        .args(["--no-optional-locks", "-C"])
         .arg(dir)
         .args(args)
         .output()

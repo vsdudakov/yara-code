@@ -46,18 +46,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     });
     let agent = Constraint::Percentage(app.settings.agent_width.min(100));
     let gap = Constraint::Length(1);
-    let (files, agent, follow, seam) = match app.settings.agent_side {
+    // A blank column between the tree and the pane beside it as well, so
+    // the tree has the same seam to drag as the agent does.
+    let tree_gap = Constraint::Length(u16::from(app.show_sidebar));
+    let (files, agent, follow, seam, tree_seam) = match app.settings.agent_side {
         Side::Left => {
-            let [agent, seam, follow, files] =
-                Layout::horizontal([agent, gap, Constraint::Min(0), sidebar]).areas(body);
-            (files, agent, follow, seam)
+            let [agent, seam, follow, tree_seam, files] =
+                Layout::horizontal([agent, gap, Constraint::Min(0), tree_gap, sidebar]).areas(body);
+            (files, agent, follow, seam, tree_seam)
         }
         Side::Right => {
-            let [files, follow, seam, agent] =
-                Layout::horizontal([sidebar, Constraint::Min(0), gap, agent]).areas(body);
-            (files, agent, follow, seam)
+            let [files, tree_seam, follow, seam, agent] =
+                Layout::horizontal([sidebar, tree_gap, Constraint::Min(0), gap, agent]).areas(body);
+            (files, agent, follow, seam, tree_seam)
         }
     };
+    app.hits.tree_seam = tree_seam;
     app.hits.seam = seam;
     app.hits.body = body;
     app.hits.files = files;

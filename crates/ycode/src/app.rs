@@ -75,6 +75,13 @@ pub enum Overlay {
     Themes(usize),
 }
 
+/// Which seam a drag has hold of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Seam {
+    Panes,
+    Tree,
+}
+
 /// Where things were drawn, so a click can be told what it landed on.
 #[derive(Default)]
 pub struct Hits {
@@ -89,6 +96,8 @@ pub struct Hits {
     /// The blank column between the agent and the follow pane; dragging
     /// it resizes them.
     pub seam: Rect,
+    /// The blank column between the tree and the pane beside it.
+    pub tree_seam: Rect,
     /// The row the panes sit in, for the drag to measure against.
     pub body: Rect,
     /// The text of the file being edited, without its gutter.
@@ -228,8 +237,8 @@ pub struct App {
     /// The cells the mouse dragged over, as (column, row) corners, and the
     /// text of the last frame they are read from.
     pub selection: Option<((u16, u16), (u16, u16))>,
-    /// The seam is being dragged.
-    pub resizing: bool,
+    /// A seam is being dragged: the one between the panes, or the tree's.
+    pub resizing: Option<Seam>,
     pub last_frame: Vec<String>,
     /// An OSC 52 escape waiting to be written to the terminal — a copy made
     /// where no clipboard tool answered.
@@ -356,19 +365,34 @@ impl App {
         let _ = self.settings.save();
     }
 
-    /// The seam dragged to column `x`: the agent's share of the width
-    /// follows it, kept between a fifth and four fifths.
+    /// A seam dragged to column `x`. Between the panes, the agent's share of
+    /// the width follows it, kept between a fifth and four fifths; the
+    /// tree's seam sets the tree's width, from a dozen columns to half.
     fn resize_to(&mut self, x: u16) {
+        use yara_core::settings::Side;
         let body = self.hits.body;
         if body.width == 0 {
             return;
         }
-        let from_left = x.saturating_sub(body.x) as u32 * 100 / body.width as u32;
-        let agent = match self.settings.agent_side {
-            yara_core::settings::Side::Left => from_left,
-            yara_core::settings::Side::Right => 100 - from_left.min(100),
-        };
-        self.settings.agent_width = agent.clamp(20, 80) as u16;
+        let from_left = x.saturating_sub(body.x);
+        match self.resizing {
+            Some(Seam::Panes) => {
+                let percent = from_left as u32 * 100 / body.width as u32;
+                let agent = match self.settings.agent_side {
+                    Side::Left => percent,
+                    Side::Right => 100 - percent.min(100),
+                };
+                self.settings.agent_width = agent.clamp(20, 80) as u16;
+            }
+            Some(Seam::Tree) => {
+                let width = match self.settings.agent_side {
+                    Side::Left => body.width.saturating_sub(from_left + 1),
+                    Side::Right => from_left,
+                };
+                self.settings.sidebar_width = width.clamp(12, body.width / 2);
+            }
+            None => {}
+        }
         self.dirty.store(true, Ordering::Relaxed);
     }
 
@@ -475,7 +499,7 @@ impl App {
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => Some(true),
             MouseEventKind::ScrollDown => Some(false),
-            MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing.is_some() => {
                 self.resize_to(x);
                 return;
             }
@@ -485,13 +509,17 @@ impl App {
                 }
                 return;
             }
-            MouseEventKind::Up(MouseButton::Left) if self.resizing => {
-                self.resizing = false;
+            MouseEventKind::Up(MouseButton::Left) if self.resizing.is_some() => {
+                self.resizing = None;
                 let _ = self.settings.save();
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) if hit(self.hits.seam, x, y) => {
-                self.resizing = true;
+                self.resizing = Some(Seam::Panes);
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) if hit(self.hits.tree_seam, x, y) => {
+                self.resizing = Some(Seam::Tree);
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -635,7 +663,7 @@ impl App {
             start_row: 0,
             hits: Hits::default(),
             selection: None,
-            resizing: false,
+            resizing: None,
             last_frame: Vec::new(),
             osc52: None,
             caret_on: true,

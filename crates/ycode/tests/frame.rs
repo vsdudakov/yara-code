@@ -1062,6 +1062,16 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     ));
     app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 2, 5));
     assert_eq!(app.settings.agent_width, 20, "never narrower than a fifth");
+    // The tree's seam sets the tree's width; the tree keeps a column of air.
+    app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    frame(&mut app);
+    let tree_seam = app.hits.tree_seam;
+    assert_eq!(tree_seam.width, 1);
+    assert_eq!(tree_seam.x + 1, app.hits.files.x);
+    app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), tree_seam.x, 5));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 79, 5));
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), 79, 5));
+    assert_eq!(app.settings.sidebar_width, 20);
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&config);
 }

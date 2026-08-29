@@ -612,7 +612,7 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     let rows = frame(&mut app);
     assert!(rows[1].contains("┌ File "), "{}", rows[1]);
     assert!(
-        rows[2].contains("New File") && rows[2].contains("^N"),
+        rows[2].contains("Open Folder…") && rows[2].contains("^O"),
         "{}",
         rows[2]
     );

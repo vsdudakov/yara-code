@@ -191,12 +191,13 @@ pub const ALL: &[Command] = &[
 pub type Menu = &'static [Option<Command>];
 
 pub const FILE_MENU: Menu = &[
-    Some(Command::NewFile),
-    Some(Command::NewTab),
-    None,
     Some(Command::OpenFolder),
-    Some(Command::AddFolder),
     Some(Command::OpenRecent),
+    None,
+    Some(Command::NewTab),
+    Some(Command::AddFolder),
+    None,
+    Some(Command::NewFile),
     None,
     Some(Command::Settings),
     None,
@@ -502,16 +503,16 @@ mod tests {
     }
 
     #[test]
-    fn the_file_menu_is_the_designs() {
+    fn the_file_menu_opens_then_makes_then_settles() {
         let entries: Vec<Command> = FILE_MENU.iter().flatten().copied().collect();
         assert_eq!(
             entries,
             [
-                Command::NewFile,
-                Command::NewTab,
                 Command::OpenFolder,
-                Command::AddFolder,
                 Command::OpenRecent,
+                Command::NewTab,
+                Command::AddFolder,
+                Command::NewFile,
                 Command::Settings,
                 Command::Quit
             ]

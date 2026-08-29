@@ -116,6 +116,14 @@ impl Buffer {
         self.goal = None;
     }
 
+    /// Puts the caret on a line and column, both from zero and clamped to
+    /// what is there — where a click landed.
+    pub fn goto(&mut self, line: usize, col: usize) {
+        let last = self.text.split('\n').count() - 1;
+        self.cursor = self.offset_of(line.min(last), col);
+        self.moved();
+    }
+
     pub fn left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
         self.moved();
@@ -254,6 +262,18 @@ mod tests {
         b.down();
         b.down();
         assert_eq!(b.cursor, b.text.chars().count(), "never past the end");
+    }
+
+    #[test]
+    fn a_click_puts_the_caret_where_it_landed_or_as_near_as_there_is() {
+        let dir = Dir::new("yara-buffer-goto");
+        let mut b = buffer(&dir, "short\na longer line\n");
+        b.goto(1, 3);
+        assert_eq!(b.line_col(), (1, 3));
+        b.goto(0, 99);
+        assert_eq!(b.line_col(), (0, 5), "past the end of a line is its end");
+        b.goto(99, 0);
+        assert_eq!(b.line_col(), (2, 0), "past the last line is the last line");
     }
 
     #[test]

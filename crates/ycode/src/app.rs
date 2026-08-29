@@ -86,6 +86,8 @@ pub struct Hits {
     pub file_rows: Vec<(Rect, usize)>,
     pub agent: Rect,
     pub follow: Rect,
+    /// The text of the file being edited, without its gutter.
+    pub editor: Rect,
     pub live: Rect,
     pub ticks: Vec<(Rect, usize)>,
     pub counter: Rect,

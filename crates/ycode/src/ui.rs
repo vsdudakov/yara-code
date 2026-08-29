@@ -1070,6 +1070,12 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.scroll = new_scroll;
     app.caret_moved = false;
+    app.hits.editor = Rect::new(
+        body.x + 7,
+        body.y,
+        body.width.saturating_sub(7),
+        body.height,
+    );
 }
 
 /// The file as it stands, with an accent bar beside every line the edit

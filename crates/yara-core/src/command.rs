@@ -198,8 +198,6 @@ pub const FILE_MENU: Menu = &[
     Some(Command::AddFolder),
     Some(Command::OpenRecent),
     None,
-    Some(Command::Save),
-    None,
     Some(Command::Settings),
     None,
     Some(Command::Quit),
@@ -514,7 +512,6 @@ mod tests {
                 Command::OpenFolder,
                 Command::AddFolder,
                 Command::OpenRecent,
-                Command::Save,
                 Command::Settings,
                 Command::Quit
             ]

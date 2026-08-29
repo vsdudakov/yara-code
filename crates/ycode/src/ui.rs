@@ -74,7 +74,48 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_follow(frame, app, follow);
     draw_status(frame, app, status);
     draw_overlay(frame, app, area);
+    draw_hover(frame, app);
     draw_selection(frame, app);
+}
+
+/// What the mouse rests on, lit: a row, a tab, a button, a tick — and a
+/// seam, which shows itself as a line so it reads as something to drag.
+fn draw_hover(frame: &mut Frame, app: &mut App) {
+    let Some((x, y)) = app.hover else { return };
+    let hits = &app.hits;
+    let inside = |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
+    let seam = [hits.seam, hits.tree_seam].into_iter().find(|r| inside(*r));
+    let buffer = frame.buffer_mut();
+    if let Some(seam) = seam {
+        for row in seam.y..seam.bottom() {
+            let cell = &mut buffer[(seam.x, row)];
+            cell.set_symbol("┃");
+            cell.set_fg(color(app.theme.ui.accent));
+        }
+        return;
+    }
+    let rows = hits
+        .file_rows
+        .iter()
+        .chain(&hits.rows)
+        .chain(&hits.tabs)
+        .chain(&hits.menus)
+        .chain(&hits.ticks)
+        .map(|(r, _)| *r)
+        .chain([hits.plus, hits.usage, hits.live, hits.counter]);
+    let Some(rect) = rows.filter(|r| r.width > 0).find(|r| inside(*r)) else {
+        return;
+    };
+    // An overlay's rows are its own; the chrome under it is not lit through it.
+    if app.overlay.is_some() && !inside(hits.overlay) {
+        return;
+    }
+    let bg = color(app.theme.ui.hover_bg);
+    for cx in rect.x..rect.right().min(buffer.area.width) {
+        for cy in rect.y..rect.bottom().min(buffer.area.height) {
+            buffer[(cx, cy)].set_bg(bg);
+        }
+    }
 }
 
 /// The cells the mouse dragged over, lit — and the frame's text kept, so a

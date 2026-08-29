@@ -239,6 +239,8 @@ pub struct App {
     pub selection: Option<((u16, u16), (u16, u16))>,
     /// A seam is being dragged: the one between the panes, or the tree's.
     pub resizing: Option<Seam>,
+    /// Where the mouse is, for what lights up under it.
+    pub hover: Option<(u16, u16)>,
     pub last_frame: Vec<String>,
     /// An OSC 52 escape waiting to be written to the terminal — a copy made
     /// where no clipboard tool answered.
@@ -496,6 +498,10 @@ impl App {
     /// on the backdrop; otherwise the chrome answers to it.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
+        if self.hover != Some((x, y)) {
+            self.hover = Some((x, y));
+            self.dirty.store(true, Ordering::Relaxed);
+        }
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => Some(true),
             MouseEventKind::ScrollDown => Some(false),
@@ -664,6 +670,7 @@ impl App {
             hits: Hits::default(),
             selection: None,
             resizing: None,
+            hover: None,
             last_frame: Vec::new(),
             osc52: None,
             caret_on: true,

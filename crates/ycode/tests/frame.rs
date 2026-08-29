@@ -1075,3 +1075,44 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&config);
 }
+
+#[test]
+fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-hover");
+    let mut app = App::with_settings(
+        Some(repo.0.clone()),
+        Settings {
+            show_sidebar: true,
+            ..Settings::default()
+        },
+        Theme::default(),
+    );
+    frame(&mut app);
+    let moved = |x, y| MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let (row, _) = app.hits.file_rows[0];
+    app.handle_mouse(moved(row.x + 2, row.y));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(row.x + 2, row.y)].bg,
+        ycode::theme::color(app.theme.ui.hover_bg)
+    );
+    let seam = app.hits.seam;
+    app.handle_mouse(moved(seam.x, seam.y + 4));
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(seam.x, seam.y + 4)].symbol(),
+        "┃"
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(seam.x, seam.y + 9)].symbol(),
+        "┃",
+        "the whole seam"
+    );
+}

@@ -91,9 +91,9 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
     })
 }
 
-/// A new linked worktree in `dir`, on a new branch, both named after the
-/// workspace: what the user typed, with spaces and slashes made dashes so
-/// that it is a folder name and a branch name.
+/// A worktree in `dir` for the workspace, named after it with spaces and
+/// slashes made dashes. One that is already there is simply used; a branch
+/// of that name that already exists is checked out rather than made.
 pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, String> {
     let slug: Vec<&str> = name
         .split(|c: char| c.is_whitespace() || c == '/')
@@ -104,18 +104,18 @@ pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, Stri
         return Err("a workspace needs a name".into());
     }
     let path = dir.join(&slug);
+    if path.join(".git").exists() {
+        return Ok(path.canonicalize().unwrap_or(path));
+    }
     let _ = std::fs::create_dir_all(dir);
-    git(
-        &repo.root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            &slug,
-            &path.to_string_lossy(),
-        ],
-    )?;
+    let branch_exists = git(&repo.root, &["rev-parse", "--verify", "--quiet", &slug]).is_ok();
+    let path_text = path.to_string_lossy().into_owned();
+    let args: Vec<&str> = if branch_exists {
+        vec!["worktree", "add", "-q", &path_text, &slug]
+    } else {
+        vec!["worktree", "add", "-q", "-b", &slug, &path_text]
+    };
+    git(&repo.root, &args)?;
     Ok(path.canonicalize().unwrap_or(path))
 }
 
@@ -388,10 +388,15 @@ mod tests {
         assert_eq!(added.branch, "task-login-flow");
         assert_eq!(added.worktree.as_deref(), Some("task-login-flow"));
         assert!(worktree_add(&repo, &trees, " ").is_err());
-        assert!(
-            worktree_add(&repo, &trees, "task/login flow").is_err(),
-            "taken"
+        // The same name again is the same workspace, not an error.
+        assert_eq!(
+            worktree_add(&repo, &trees, "task/login flow").unwrap(),
+            path
         );
+        // A branch that exists without a worktree is checked out, not remade.
+        git(dir.path(), &["branch", "-q", "older"]).unwrap();
+        let older = worktree_add(&repo, &trees, "older").unwrap();
+        assert_eq!(open(&older, "main").unwrap().branch, "older");
     }
 
     #[test]

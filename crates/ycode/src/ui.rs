@@ -36,21 +36,27 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
 
+    // The tree sits at the edge away from the agent: on the right when the
+    // agent is on the left, on the left otherwise, so the two panes that
+    // talk to each other stay side by side.
     let sidebar = Constraint::Length(if app.show_sidebar {
         app.settings.sidebar_width
     } else {
         0
     });
     let agent = Constraint::Percentage(app.settings.agent_width.min(100));
-    let (first, second) = match app.settings.agent_side {
-        Side::Left => (agent, Constraint::Min(0)),
-        Side::Right => (Constraint::Min(0), agent),
-    };
-    let [files, first, _gap, second] =
-        Layout::horizontal([sidebar, first, Constraint::Length(1), second]).areas(body);
-    let (agent, follow) = match app.settings.agent_side {
-        Side::Left => (first, second),
-        Side::Right => (second, first),
+    let gap = Constraint::Length(1);
+    let (files, agent, follow) = match app.settings.agent_side {
+        Side::Left => {
+            let [agent, _gap, follow, files] =
+                Layout::horizontal([agent, gap, Constraint::Min(0), sidebar]).areas(body);
+            (files, agent, follow)
+        }
+        Side::Right => {
+            let [files, follow, _gap, agent] =
+                Layout::horizontal([sidebar, Constraint::Min(0), gap, agent]).areas(body);
+            (files, agent, follow)
+        }
     };
     app.hits.files = files;
     app.hits.agent = agent;

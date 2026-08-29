@@ -92,9 +92,21 @@ fn the_settings_place_the_agent_name_its_pane_and_the_sidebar() {
     };
     let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
     let rows = frame(&mut app);
-    assert!(rows[1].contains("FILES"));
     assert!(rows[1].contains("AGENT · codex"));
+    // The tree keeps to the edge away from the agent.
+    assert!(rows[1].find("FILES").unwrap() < rows[1].find("FOLLOW").unwrap());
     assert!(rows[1].find("FOLLOW").unwrap() < rows[1].find("AGENT").unwrap());
+    let mut app = App::with_settings(
+        Some(scratch()),
+        Settings {
+            show_sidebar: true,
+            ..Settings::default()
+        },
+        Theme::default(),
+    );
+    let rows = frame(&mut app);
+    assert!(rows[1].find("AGENT").unwrap() < rows[1].find("FOLLOW").unwrap());
+    assert!(rows[1].find("FOLLOW").unwrap() < rows[1].find("FILES").unwrap());
     assert!(rows[21].contains("^B hide · ⏎ open"), "{}", rows[21]);
 }
 

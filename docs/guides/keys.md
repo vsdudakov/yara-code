@@ -15,7 +15,7 @@ With the keyboard on the **agent**, plain keys, ++enter++, ++esc++,
 ++tab++ and the arrows are the agent's, whatever the editor binds them to —
 they are how it is talked to. A bound ++ctrl++ or ++alt++ chord, or a
 function key, is the editor's, except the ones `agent_keys` lists
-(++ctrl+r++, ++ctrl+n++, ++ctrl+z++, ++ctrl+o++, ++ctrl+w++, ++ctrl+y++ by
+(++ctrl+r++, ++ctrl+n++, ++ctrl+z++, , ++ctrl+w++, ++ctrl+y++ by
 default), which the agents use themselves. Chords nobody bound reach the
 agent.
 
@@ -30,7 +30,7 @@ follow pane → agent. A click moves it too.
 | Command | Key |
 | --- | --- |
 | New File | ++ctrl+n++ |
-| Open Folder… | ++ctrl+o++ |
+| Open Folder… |  |
 | Open Recent… | ++ctrl+r++ |
 | Save | ++ctrl+s++ |
 | Settings | ++f12++ |

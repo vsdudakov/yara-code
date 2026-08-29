@@ -170,17 +170,9 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::NewFile(text)) => {
             draw_prompt(frame, app, " NEW FILE ", "file name", &text, area)
         }
-        Some(Overlay::OpenFolder(text)) => {
-            draw_prompt(frame, app, " OPEN FOLDER ", "path", &text, area)
+        Some(Overlay::AddFolder(text)) => {
+            draw_prompt(frame, app, " ADD FOLDER ", "path of a folder", &text, area)
         }
-        Some(Overlay::AddFolder(text)) => draw_prompt(
-            frame,
-            app,
-            " ADD FOLDER ",
-            "path of another repository's worktree",
-            &text,
-            area,
-        ),
         Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, &query, row, area),
         Some(Overlay::Palette(query, row)) => draw_palette(frame, app, &query, row, area),
         Some(Overlay::Search(query, row, hits, files)) => {
@@ -616,8 +608,8 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
     let lines = if rows.is_empty() {
         vec![Line::styled(
             format!(
-                "  nothing yet — {} open a folder, or ycode <path>",
-                app.hint(Command::OpenFolder)
+                "  nothing yet — {} adds a folder, or ycode <path>",
+                app.hint(Command::NewTab)
             ),
             dim,
         )]

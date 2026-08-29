@@ -9,8 +9,7 @@ ycode
 ```
 
 With no folder named, the start page lists the projects opened before.
-++enter++ opens the one under the cursor; `File → Open Folder…` asks for a
-path.
+++enter++ opens the one under the cursor; `File → New Task…` asks for a path.
 
 ![The start page](../assets/shots/start.svg)
 

@@ -1366,7 +1366,7 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
     let mut app = App::with_settings(None, Settings::default(), Theme::default());
     app.handle_key(key(KeyCode::F(7)));
     assert!(
-        text(&mut app).contains("OPEN FOLDER"),
+        text(&mut app).contains("ADD FOLDER"),
         "a task needs a folder first"
     );
     let config = std::env::temp_dir().join(format!("yara-newtask-config-{}", std::process::id()));

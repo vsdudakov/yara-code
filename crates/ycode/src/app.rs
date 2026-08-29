@@ -55,9 +55,7 @@ pub enum Overlay {
     /// A name being typed for a new file, made in the folder under the
     /// FILES cursor.
     NewFile(String),
-    /// A folder path being typed to open.
-    OpenFolder(String),
-    /// A folder path being typed to add to this workspace.
+    /// A folder path being typed: it opens the task, or joins it.
     AddFolder(String),
     /// Go to file: what was typed, and the row the cursor is on.
     QuickOpen(String, usize),
@@ -446,7 +444,16 @@ impl App {
             self.note = Some("that folder is already in this task".into());
             return;
         }
+        // The first folder is what opens the task, and worth remembering.
+        let first = self.folders.is_empty();
+        let path = folder.path.clone();
         self.folders.push(folder);
+        if first {
+            self.settings.push_recent(&path);
+            let _ = self.settings.save();
+            self.start_agent();
+            self.focus = Focus::Agent;
+        }
         let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
         match self.tree.as_mut() {
             Some(tree) => tree.set_roots(roots),
@@ -1488,15 +1495,13 @@ impl App {
                 Overlay::NewTab(mut text)
                 | Overlay::RenameTab(mut text)
                 | Overlay::NewFile(mut text)
-                | Overlay::OpenFolder(mut text)
                 | Overlay::AddFolder(mut text),
             ) => {
                 let again = |text: String| match self.overlay.as_ref().unwrap() {
                     Overlay::NewTab(_) => Overlay::NewTab(text),
                     Overlay::RenameTab(_) => Overlay::RenameTab(text),
                     Overlay::NewFile(_) => Overlay::NewFile(text),
-                    Overlay::AddFolder(_) => Overlay::AddFolder(text),
-                    _ => Overlay::OpenFolder(text),
+                    _ => Overlay::AddFolder(text),
                 };
                 match key.code {
                     KeyCode::Enter => {
@@ -1506,12 +1511,7 @@ impl App {
                             Overlay::NewTab(_) => self.new_tab(&text),
                             Overlay::RenameTab(_) => self.name = (!text.is_empty()).then_some(text),
                             Overlay::NewFile(_) => self.new_file(&text),
-                            Overlay::AddFolder(_) => self.add_folder(&text),
-                            _ => {
-                                if !text.is_empty() {
-                                    self.open_project(PathBuf::from(expand_home(&text)));
-                                }
-                            }
+                            _ => self.add_folder(&text),
                         }
                     }
                     _ if closes => self.overlay = None,
@@ -1699,7 +1699,6 @@ impl App {
             Command::HelpMenu => self.overlay = Some(Overlay::Menu(1, 0)),
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
             Command::NewFile => self.overlay = Some(Overlay::NewFile(String::new())),
-            Command::OpenFolder => self.overlay = Some(Overlay::OpenFolder(String::new())),
             Command::AddFolder => self.overlay = Some(Overlay::AddFolder(String::new())),
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => self.open_file(&path),
@@ -1780,7 +1779,7 @@ impl App {
             // A task is its folders, so the first thing a task without any
             // needs is one.
             Command::NewTab if self.project().is_none() => {
-                self.overlay = Some(Overlay::OpenFolder(String::new()))
+                self.overlay = Some(Overlay::AddFolder(String::new()))
             }
             Command::NewTab => self.overlay = Some(Overlay::NewTab(String::new())),
             Command::RenameTab => self.overlay = Some(Overlay::RenameTab(String::new())),

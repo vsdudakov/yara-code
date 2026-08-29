@@ -89,7 +89,6 @@ impl<'de> Deserialize<'de> for Keys {
 pub fn default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Ctrl+N",
-        Command::OpenFolder => "Ctrl+O",
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
         Command::Settings => "F12",
@@ -206,7 +205,7 @@ impl Default for Settings {
             usage_commands: BTreeMap::new(),
             search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
             agent_keys: [
-                "Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+O", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V",
+                "Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V",
             ]
             .iter()
             .filter_map(|c| c.parse().ok())

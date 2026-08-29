@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 pub enum Command {
     // File.
     NewFile,
-    OpenFolder,
     AddFolder,
     OpenRecent,
     Save,
@@ -60,7 +59,6 @@ impl Command {
     pub fn id(&self) -> &'static str {
         match self {
             Self::NewFile => "new_file",
-            Self::OpenFolder => "open_folder",
             Self::AddFolder => "add_folder",
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
@@ -107,7 +105,6 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::NewFile => "New File",
-            Self::OpenFolder => "Open Folder…",
             Self::AddFolder => "Add Folder to Task…",
             Self::OpenRecent => "Open Recent…",
             Self::Save => "Save",
@@ -149,7 +146,6 @@ impl Command {
 
 pub const ALL: &[Command] = &[
     Command::NewFile,
-    Command::OpenFolder,
     Command::AddFolder,
     Command::OpenRecent,
     Command::Save,

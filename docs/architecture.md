@@ -1,70 +1,39 @@
 ---
-description: How one Rust core drives two frontends: a ratatui terminal UI and an egui GPU window, sharing buffers, search, git and key bindings.
+description: How Yara Code is built — a core crate that knows everything and a terminal crate that draws it, the session, the watcher, the pty, and the tests.
 ---
 
 # Architecture
 
-Yara Code is one crate with three modules and a rule: **anything a user could do in
-both frontends lives in `core`**. Each frontend only paints it and translates
-its own input.
+Two crates in one workspace.
 
-```
-src/
-  core/    frontend-independent logic
-  gui/     egui on wgpu — the window
-  tui/     ratatui on crossterm — the terminal
-  bin/     ycode-gui.rs, yara.rs
-```
+**`crates/yara-core`** is everything the editor knows and nothing it draws:
 
-Cargo features draw the line: `--no-default-features --features tui` builds the
-terminal frontend with no graphics stack at all, which is what makes it usable
-over SSH on a headless machine. CI builds that configuration on every push, so
-it cannot rot.
+- `follow.rs` — the timeline: `EditEvent`s with their hunks, and `Follow`
+  with its live/paused cursor and the reviewed flags.
+- `git.rs` — the repository through the `git` CLI: the base branch, what
+  differs from it, a `Watcher` that turns working-tree changes into edits
+  by diffing each file against its last snapshot, worktrees, and pull
+  request titles through `gh`.
+- `pty.rs` and `keyboard.rs` — the agent on a pseudo-terminal, its screen
+  parsed by `vt100`, and the kitty keyboard protocol it may ask for.
+- `command.rs`, `settings.rs`, `theme.rs` — every action and its chord,
+  `settings.json`, the theme and VS Code theme files.
+- `buffer.rs`, `history.rs`, `syntax.rs`, `tree.rs`, `search.rs`, `glob.rs`,
+  `fuzzy.rs` — the editor, the tree, search and the finders.
+- `update.rs`, `usage.rs` — releases through `curl`, usage through the
+  commands the settings name.
 
-## The core
+**`crates/ycode`** is the terminal:
 
-| Module | What it owns |
-| --- | --- |
-| `buffer.rs` | Open files and the set of them; tab order. |
-| `history.rs` | Undo/redo as whole-text snapshots, with typing runs folded into one step. |
-| `command.rs` | Every action as a `Command`, the menus, and the key-chord type. |
-| `settings.rs` | `settings.json`, the two default keymaps, chord lookup both ways. |
-| `project.rs` | The folder list behind "Add Folder to Project". |
-| `search.rs` | Project search and replace-across-files. |
-| `find.rs` | Find/replace inside the open file. |
-| `diff.rs` | Side-by-side rows built from a unified diff. |
-| `git.rs` | Status, worktrees, diff, changed lines and blame — through the `git` CLI. |
-| `fold.rs`, `indent.rs` | Folding regions; smart indentation. |
-| `syntax.rs`, `theme.rs` | syntect grammars; VS Code theme JSON. |
-| `pty.rs` | The shell behind both terminals. |
-| `fs_ops.rs`, `glob.rs` | File operations; the exclude-glob matcher. |
+- `app.rs` — `App` holds the settings, the theme and a `Vec<Session>`; a
+  `Session` is one workspace — its folder, repository, agent, watcher,
+  timeline, tree and open file. `App` derefs to the active session, so the
+  drawing code reads `app.follow` and means the one in front. `handle_key`
+  decides whose key it is; `execute` runs a `Command`; `handle_mouse`
+  matches a click against the `Hits` the last frame recorded.
+- `ui.rs` — every frame: header, panes, status bar, overlays.
+- `main.rs` — raw mode, the kitty flags, mouse capture, the loop.
 
-## Two frontends, one behaviour
-
-A feature lands in `core` first, then twice in the drawing layer. The window
-uses egui's widgets; the terminal draws every row itself. What they agree on is
-not a coincidence — it is that they read the same state:
-
-- the same `Command` set, so a menu entry, a key chord and a mouse click all end
-  up in one `execute`;
-- the same settings file, so a rebinding moves the action in both;
-- the same theme, down to the terminal palette used for git tints.
-
-## Adding an action
-
-1. A `Command` variant with an id and a label.
-2. A default chord in **both** keymaps in `core/settings.rs`.
-3. An arm in each frontend's `execute`.
-
-The settings tests then enforce the rest: every command must be bound out of the
-box (bar the handful the text widget or the mouse owns), and no two commands may
-share a chord.
-
-## What Yara Code deliberately does not have
-
-- No language server. Go-to-definition is a keyword heuristic that falls back to
-  listing references.
-- No plugin system, no scripting host.
-- No libgit2 — the `git` binary is already on the machine.
-- No editor framework. The text widget, the tree, the tabs and the terminal grid
-  are all drawn here.
+The tests drive the real `App` on ratatui's `TestBackend` and read the frame
+back, with real repositories in temp folders and `cat` on a real pty for the
+agent. `examples/screenshot.rs` does the same into SVG for these pages.

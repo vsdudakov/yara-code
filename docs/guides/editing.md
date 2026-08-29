@@ -1,118 +1,42 @@
 ---
-description: Tabs, undo and redo, smart indentation, folding with sticky scroll, and go-to-definition without a language server.
+description: Files and editing in Yara Code — the FILES tree, opening a file where the follow pane was, typing, undo, saving, and go to file.
 ---
 
-# Editing
+# Files and editing
 
-## Tabs
+Yara Code is not where you write the code; the agent does that. It is where
+you fix a line. So the editor is small, and it opens where the follow pane
+was.
 
-Open files sit in a strip over the editor, with a dot while they have unsaved
-changes and a cross once the pointer is over them. Drag a tab onto another to
-reorder; `Ctrl+PageUp` / `Ctrl+PageDown` walk the strip. Diffs open as tabs of
-their own beside the files — see [Git](git.md).
+## The tree
 
-## Getting around
+++ctrl+b++ shows FILES and puts the keyboard on it. ++up++ ++down++ move,
+++enter++ opens a folder or a file, ++ctrl+b++ hides it again. Files the
+branch changed are tinted with a `●`; the open file has its row lit. The
+sidebar is `sidebar_width` columns wide and `show_sidebar` says whether it
+starts open.
 
-- **Command Palette** (`Cmd+Shift+P` / `Ctrl+Shift+P`) lists every command by
-  name with its chord; type a few letters, the rows narrow to what matches,
-  Enter runs the top one. Everything in the menus is here too, so nothing
-  needs remembering.
-- **Go to File** (`Cmd+P` / `Ctrl+P`) does the same over every file in the
-  project — `gapp` finds `src/gui/app.rs` — and opens the pick.
-- **Go to Line** (`Ctrl+G` in both) jumps within the file in front.
+## The editor
 
-The mouse wheel scrolls the view without moving the caret; the next keystroke
-brings the view back to it. A line wider than the pane scrolls sideways under
-the caret rather than hiding it.
+![A file open for editing](../assets/shots/edit.svg)
 
-## Undo and redo
+A file opens in the follow pane's place with the title **EDIT**, its path,
+a `●` while it has unsaved changes, and the name of its grammar on the
+right. Every key is typing except these:
 
-`Cmd+Z` / `Ctrl+Z` and `Cmd+Shift+Z` / `Ctrl+Shift+Z`. Every change is
-undoable, including **Replace All** and a replace inside the find bar.
+| | Key |
+| --- | --- |
+| Save | ++ctrl+s++ — `✓ saved <path>` in the status bar |
+| Close, back to the follow pane | ++esc++ |
+| Undo / redo | ++ctrl+z++ / ++ctrl+shift+z++ — a run of typing is one step |
+| Move | arrows, ++home++, ++end++; ++tab++ inserts four spaces |
 
-A run of typing folds into a single step, so undo takes back a word rather than
-a letter; moving the cursor closes the run; a bulk rewrite always stands alone.
-Each buffer keeps 200 steps, and the cursor returns to where the step left it.
+A save is a change to the working tree like any other, so it lands on the
+timeline too.
 
-## Smart indent
+## Go to file
 
-Enter continues the current indentation, opens a block after `:` (Python, YAML)
-or `{ ( [`, dedents after `return` / `pass` / `break` / `continue` / `raise`,
-and splits bracket pairs onto their own lines. The indent unit — tabs, 2, 4 or
-8 spaces — is inferred from the file being edited unless
-`indent.detect_from_file` is off.
-
-## Folding
-
-Every indented block folds, in both frontends: click the marker in the gutter,
-or use **Fold / Unfold** (`Cmd+Alt+F` / `Ctrl+Alt+F`), **Fold All**
-(`Cmd+Alt+0`) and **Unfold All** (`Cmd+Alt+9`). Brace languages take their
-closing line with them, and a collapsed block shows how many lines it swallowed.
-Folds are dropped when an edit moves their header.
-
-**Sticky scroll**: the headers of the blocks you are inside stay pinned at the
-top of the editor while you scroll, syntax highlighted, with their real line
-numbers, up to three deep.
-
-## Markdown preview
-
-=== "Terminal"
-
-    ![A markdown file and its preview in the terminal frontend](../assets/shots/tui-markdown.png)
-
-=== "Window"
-
-    ![The same preview in the window frontend](../assets/shots/gui-markdown.png)
-
-
-`Cmd+Shift+V` / `Ctrl+Shift+V`, or **◫ Preview** on the tab strip, renders the
-markdown file in front in a tab of its own, and follows it keystroke by
-keystroke. Both frontends draw the same document:
-
-- **Headings**, ruled under the first two levels, with emphasis, inline code
-  and links inside them.
-- **Lists** of every kind — bulleted, numbered from the number written, and
-  ticked (`- [x]` / `- [ ]`), nested as deep as the indentation goes, with a
-  bullet per level.
-- **Tables**, with the alignment their `:---:` row asks for.
-- **Quotes**, fenced code with its language, and rules.
-- **Charts**: a ```` ```mermaid ```` block is drawn as a picture where it is a
-  `pie` or a `flowchart`/`graph` — boxes, arrows and the labels on them, laid
-  out the same way in both frontends. Every other mermaid diagram is left as
-  the code it was written as, which is easier to read than a wrong picture.
-- **Images**, as the alt text they were described as: neither frontend fetches
-  or decodes a picture, and a README's badges say what they say in their names.
-  A badge written the usual way — a link wrapped round an image — stays the
-  link it is.
-- **Raw HTML** is markup for a browser and is not painted. The one thing it is
-  obeyed for is centring: what a `<div align="center">` holds is centred, which
-  is how most READMEs set their title, their badges and their screenshot.
-
-## Go to definition
-
-`F12` at the cursor, `Cmd+click` in the window, `Ctrl+click` or `Alt+click` in
-the terminal (the xterm mouse protocol carries Shift, Alt and Ctrl, never Cmd).
-Holding the modifier underlines the identifier under the pointer.
-
-It is a keyword heuristic across Rust, Python, JS/TS, Go, Swift, Java/Kotlin,
-C# and proto — not an LSP — and it falls back to listing references. `Ctrl+-`
-(window) / `Alt+←` (terminal) goes back.
-
-## Files that change outside the editor
-
-A formatter, a script, an agent, another editor: once a second every open file
-is checked against the disk. A file you have not touched takes the new text
-silently and the status bar says `main.rs changed on disk — reloaded` — the
-reload is one undo step, so it can be taken back. A file with unsaved edits
-keeps them and says `changed on disk — saving will overwrite it`, so nothing
-of yours is lost without being asked.
-
-## The navigator
-
-Arrows or `j`/`k` move, <kbd>Enter</kbd> opens or expands. New file, new folder,
-rename, move and delete are on the context menu (right-click, or `Shift+F10`),
-and each has a binding of its own — `F2` renames, `Shift+Delete`
-deletes.
-
-Drag a row onto a folder to move it; the target folder highlights, and dropping
-on empty space moves to the project root.
+++ctrl+p++ finds a file by a few letters — `gd` finds `docs/guide.md` —
+and opens it. ++ctrl+n++ makes a new file, in the folder under the FILES
+cursor when the tree is open and at the root otherwise, and opens it.
+`File → Settings` opens `settings.json` the same way.

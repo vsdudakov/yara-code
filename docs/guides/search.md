@@ -1,68 +1,28 @@
 ---
-description: Project-wide search with VS Code-style exclude globs, and find and replace inside the open file.
+description: Project search and the command palette in Yara Code — Ctrl+Shift+F finds every line, Ctrl+Shift+P runs any command by a few letters.
 ---
 
-# Search & replace
+# Search and the palette
 
-Yara Code has two searches built from the same parts, so they look and behave alike:
-**project search** in the sidebar, and **find in file** over the editor.
+## Search the project
 
-## Project search
+![Project search](../assets/shots/search.svg)
 
-`Cmd+Shift+F` / `Ctrl+Shift+F`. Live, case-insensitive by default, grouped by
-file; click or press <kbd>Enter</kbd> on a hit to jump to it, and the file opens
-with every match highlighted.
+++ctrl+shift+f++ opens SEARCH PROJECT. Type; every line containing the
+text, in any file under the project, is listed as `path:line  text`. The
+footer counts matches and files and names what was left out —
+`search_exclude` in [settings](settings.md), `target`, `node_modules` and
+dot-folders by default, in VS Code's glob spelling. ++enter++ opens the hit
+with the caret on its line. Case does not matter; the list stops at five
+hundred hits.
 
-=== "Terminal"
+## The palette
 
-    ![Project search in the terminal frontend](../assets/shots/tui-search.png)
+![The command palette](../assets/shots/palette.svg)
 
-=== "Window"
+++ctrl+shift+p++ opens the COMMAND PALETTE: every command with its chord on
+the right, found by a few letters — `tf` for Toggle Files. ++enter++ runs
+it. The menus (++f10++ for File, ++shift+f1++ for Help) hold the same
+commands in the order a menu bar would.
 
-    ![Project search in the window frontend](../assets/shots/gui-search.png)
-
-
-Three fields, each with a lit heading over it: `SEARCH`, `REPLACE`, `EXCLUDE`.
-The toggles at the right of the heading row are `Aa` (match case), `ab` (whole
-word) and `.*` (regular expression) — VS Code's own.
-
-**Replace All** asks first — the files are rewritten on disk and there is no
-undo — then replaces every match in the results and reloads any open buffer
-that was not modified.
-
-### The exclude box
-
-Comma-separated globs in VS Code's spelling:
-
-```
-target, *.lock, **/node_modules, src/generated
-```
-
-- a bare name matches any path component;
-- `*` and `?` match within one component;
-- `**` spans directories;
-- naming a directory excludes everything under it.
-
-The box starts out holding `.*`, which keeps every file and folder whose name
-begins with a dot — `.git`, `.venv`, an agent's own state — out of the results.
-It is a pattern like any other: delete it to search them.
-
-Excluded directories are never walked. `.git`, `node_modules`, `target`,
-`dist`, `build`, `.venv`, binaries and files over 1 MB are always skipped.
-
-## Find in file
-
-`Cmd+F` / `Ctrl+F` opens the same form over the editor: a lit `FIND` /
-`REPLACE` heading over each field, both always shown, `…` in an empty one, the
-option toggles and the close mark in the top-right corner, and the match counter
-along the bottom with `Replace` · `Replace All` · `<` · `>` at its right end —
-the two replace actions appear once the replace field has something in it.
-
-- <kbd>Tab</kbd> switches field.
-- `F3` / `Shift+F3` (or `Cmd+G` / `Cmd+Shift+G` in the window on macOS) step
-  through matches — <kbd>Enter</kbd> and <kbd>Shift+Enter</kbd> in the query do
-  the same; `Ctrl+Alt+Enter` replaces them all.
-- The bar **belongs to the file it was opened on**: switching tabs hides it, and
-  coming back brings the query, the options and the counter with it. Closing
-  that file closes it.
-- Match highlighting follows the text as you edit.
+![The File menu](../assets/shots/menu.svg)

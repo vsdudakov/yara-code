@@ -1,97 +1,33 @@
 ---
-description: Everything in settings.json: themes, indentation, font size, go-to-definition modifiers and key bindings.
+description: Yara Code's settings.json — the agent command, the layout, the follow loop, workspaces, keys, search, usage; every key commented, every one optional.
 ---
 
 # Settings
 
-Everything Yara Code reads lives in one JSON file, editable from inside the editor
-(**File → Settings**, `Cmd+,` / `Ctrl+,`) or with anything else. The editor
-looks at the file once a second, so a change applies the moment it is saved —
-from either frontend, a script, or a hand edit — without a restart. It is
-written on first run to:
+`File → Settings` (++ctrl+comma++) opens the file in the editor:
+`~/.config/ycode/settings.json`, or `%APPDATA%\ycode\settings.json` on
+Windows, or wherever `YARA_CONFIG_DIR` points. Every key is optional and the
+file is written afresh, with a comment over each key, whenever the editor
+saves a setting. `//` comments are allowed.
 
-```
-~/.config/ycode/settings.json
-```
+| Key | Default | What it is |
+| --- | --- | --- |
+| `theme` | `"Dark Modern"` | The theme, built in or a VS Code JSON in `themes/` beside the file |
+| `agent` | `"claude"` | The command that runs in the AGENT pane: `claude`, `codex`, `cursor-agent`, a path, with arguments |
+| `agent_side` | `"left"` | Which side the agent sits on; `"right"` puts it on the right |
+| `agent_width` | `42` | The agent pane's share of the width, in percent |
+| `sidebar_width` | `30` | The FILES tree, in columns |
+| `show_sidebar` | `false` | Whether FILES is open at start |
+| `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |
+| `refresh_ms` | `500` | How often the working tree is looked at |
+| `base_branch` | `""` | What CHANGES measures against; empty means the main working copy's branch |
+| `worktrees_dir` | `""` | Where new workspaces' worktrees go; empty means `<repo>-worktrees` beside the repository |
+| `usage_commands` | `{}` | A command per agent that prints its plan usage as JSON — see [Agent usage](usage.md) |
+| `search_exclude` | `["target", "node_modules", ".*"]` | What Search Project leaves out |
+| `agent_keys` | `["Ctrl+R", "Ctrl+N", "Ctrl+Z"]` | Bound chords the agent keeps anyway |
+| `keys` | `{}` | Rebindings, command id to chord — see [Key bindings](keys.md) |
+| `recent_projects` | `[]` | Kept by the editor for the start page and ++ctrl+r++ |
 
-The file explains itself: every key is written out with a comment over it.
-The editor writes the whole file afresh when it saves a setting — a theme
-picked, a folder opened — so a comment of your own is best kept in a
-project's `.ycode/settings.json`, which the editor only reads.
-
-```jsonc
-// Yara Code settings. Every key is optional: leave one out and the built-in
-// default applies.
-{
-  // Colour theme: "Dark+", "Light+", "Monokai". Also View → Theme.
-  "theme": "Dark+",
-
-  // Editor font size in points. Window frontend only: the terminal frontend
-  // draws in whatever font the terminal itself uses.
-  "font_size": 13.5,
-
-  // How much further the wheel carries than the platform asks for. 1.0 is the
-  // platform's own notch — three lines in a terminal.
-  "scroll_speed": 1.5,
-
-  "indent": {
-    // "spaces" or "tabs". Also View → Indentation.
-    "style": "spaces",
-    // Spaces per level, and how wide a tab is drawn.
-    "width": 4,
-    // Follow the indentation a file already uses, falling back to the above.
-    "detect_from_file": true
-  },
-
-  // Panels open at start.
-  "show_sidebar": true,
-  "show_terminal": true,
-
-  // Modifier held while clicking an identifier to jump to its definition.
-  "goto_modifiers": { "gui": ["cmd"], "tui": ["ctrl", "alt"] },
-
-  // Modifier held while the pointer rests on a line to blame it.
-  "blame_modifiers": { "gui": ["shift"], "tui": ["shift"] },
-
-  // Key bindings per frontend; only what differs from the defaults is listed.
-  "keys": { "gui": { "save": "Cmd+S" }, "tui": { "save": "Ctrl+S" } },
-
-  // Folders offered by File → Open Recent, newest first.
-  "recent_projects": ["/path/to/project"]
-}
-```
-
-## Per-project settings
-
-A project can carry its own `.ycode/settings.json` at its root. Whatever it
-sets — indentation and theme are the usual reasons — is laid over the global
-file while that project is open, and nothing else changes. The folder is hidden
-from the navigator and from project search.
-
-| Field | What it does |
-| --- | --- |
-| `theme` | Name of the active theme, as the picker shows it. |
-| `indent.width` | Spaces per level; `style` picks `spaces` or `tabs`. |
-| `indent.detect_from_file` | When on, a file that already uses another width wins and these values are only the fallback. |
-| `font_size` | The window's code font size; it takes effect the moment the file is saved. The terminal frontend draws in your terminal's own font, so it does not apply there. |
-| `scroll_speed` | How much further the wheel and the trackpad carry than the platform asks for, in both frontends. `1.0` is the platform's own notch — three lines in a terminal — and the default `1.5` moves four rows where a terminal would move three. Held between `0.25` and `8`. |
-| `show_sidebar`, `show_terminal` | Which panels are open at startup. |
-| `goto_modifiers` | Which modifier turns a click into go-to-definition. A list, because terminals differ in which ones they deliver — and none deliver Cmd, which is why the terminal default is Ctrl or Alt. |
-| `blame_modifiers` | Which modifier held under the pointer blames the line it rests on, in the status bar. Shift in both frontends by default: the other three are spoken for by go-to-definition in one or the other. |
-| `keys` | Every binding, per frontend. See [Key bindings](keys.md). |
-| `recent_projects` | Most recent first, capped at 15 — what **Open Recent** lists. |
-
-## How the file is merged
-
-Anything you leave out keeps its default, and **key bindings are laid over the
-defaults** — rebinding one key does not drop the rest.
-
-Only the bindings that *differ* from the defaults are written back, so a later
-change to a default (or a newly added command) still reaches you.
-
-A malformed file is reported in the status bar rather than silently ignored, and
-so is a binding you gave to two commands at once:
-
-```
-settings.json: tui Ctrl+X is bound to both cut and file_menu
-```
+A file that cannot be read is reported in the status bar and never written
+over: the mistake is yours to fix, and the editor runs on the defaults until
+you do.

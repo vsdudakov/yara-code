@@ -70,10 +70,10 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::Themes(row)) => draw_themes(frame, app, row, area),
         Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
         Some(Overlay::NewTab(text)) => {
-            draw_prompt(frame, app, " NEW AGENT ", "branch / task name", &text, area)
+            draw_prompt(frame, app, " NEW WORKSPACE ", "workspace name", &text, area)
         }
         Some(Overlay::RenameTab(text)) => {
-            draw_prompt(frame, app, " RENAME TAB ", "name", &text, area)
+            draw_prompt(frame, app, " RENAME WORKSPACE ", "name", &text, area)
         }
         Some(Overlay::NewFile(text)) => {
             draw_prompt(frame, app, " NEW FILE ", "file name", &text, area)
@@ -580,19 +580,6 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
             .push((Rect::new(x, area.y, name.len() as u16 + 2, 1), i));
         x += name.len() as u16 + 2;
     }
-    left.push(Span::styled(" │ ", fg(ui.fg_dim)));
-    let path_index = left.len();
-    left.push(Span::styled(
-        app.project
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default(),
-        fg(ui.fg_dim),
-    ));
-    if let Some(name) = app.repo.as_ref().and_then(|r| r.worktree.as_deref()) {
-        left.push(Span::styled(" │ ", fg(ui.fg_dim)));
-        left.push(Span::styled(format!("⌥ worktree: {name}"), fg(ui.success)));
-    }
     // The tabs: one agent in one worktree each, and the way to another.
     left.push(Span::styled(" │ ", fg(ui.fg_dim)));
     let tabs_from = left.len();
@@ -615,11 +602,6 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         right.insert(0, Span::styled(format!("{chip}  "), fg(ui.fg_dim)));
     }
     let right = Line::from(right);
-    shorten(
-        &mut left,
-        path_index,
-        (area.width as usize).saturating_sub(right.width() + 1),
-    );
     // Where the tabs and the [+] landed, for the mouse.
     let mut x = area.x + left[..tabs_from].iter().map(Span::width).sum::<usize>() as u16;
     for (i, pair) in left[tabs_from..].chunks(2).enumerate() {

@@ -91,17 +91,30 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
     })
 }
 
-/// A new linked worktree on a new branch of the same name, in `dir`.
+/// A new linked worktree in `dir`, on a new branch, both named after the
+/// workspace: what the user typed, with spaces and slashes made dashes so
+/// that it is a folder name and a branch name.
 pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("a worktree needs a name".into());
+    let slug: Vec<&str> = name
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let slug = slug.join("-");
+    if slug.is_empty() {
+        return Err("a workspace needs a name".into());
     }
-    let path = dir.join(name.replace('/', "-"));
+    let path = dir.join(&slug);
     let _ = std::fs::create_dir_all(dir);
     git(
         &repo.root,
-        &["worktree", "add", "-q", "-b", name, &path.to_string_lossy()],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &slug,
+            &path.to_string_lossy(),
+        ],
     )?;
     Ok(path.canonicalize().unwrap_or(path))
 }
@@ -369,13 +382,16 @@ mod tests {
     fn a_worktree_is_added_on_a_branch_of_its_name() {
         let (dir, repo) = repo("yara-git-add-worktree");
         let trees = dir.path().join("trees");
-        let path = worktree_add(&repo, &trees, "task/login").unwrap();
-        assert_eq!(path, trees.join("task-login").canonicalize().unwrap());
+        let path = worktree_add(&repo, &trees, " task/login flow ").unwrap();
+        assert_eq!(path, trees.join("task-login-flow").canonicalize().unwrap());
         let added = open(&path, "main").unwrap();
-        assert_eq!(added.branch, "task/login");
-        assert_eq!(added.worktree.as_deref(), Some("task-login"));
+        assert_eq!(added.branch, "task-login-flow");
+        assert_eq!(added.worktree.as_deref(), Some("task-login-flow"));
         assert!(worktree_add(&repo, &trees, " ").is_err());
-        assert!(worktree_add(&repo, &trees, "task/login").is_err(), "taken");
+        assert!(
+            worktree_add(&repo, &trees, "task/login flow").is_err(),
+            "taken"
+        );
     }
 
     #[test]

@@ -1,90 +1,22 @@
 ---
-description: Install Yara Code with Homebrew, a .deb or .rpm package, the AUR, prebuilt binaries, or from source. One install gives you both the ycode terminal editor and the ycode-gui window.
+description: Install Yara Code with Homebrew, apt, dnf, the AUR, a prebuilt binary, or cargo. One command, ycode, on macOS, Linux and Windows.
 ---
 
 # Installation
 
-Yara Code ships two binaries from one crate: **`ycode`** (the terminal frontend) and
-**`ycode-gui`** (the window). Every install method below installs **both at
-once** — one `brew install`, one `.deb`, one archive — because the point of the
-two frontends is that you can move between them without thinking about it.
+Yara Code is one binary, **`ycode`**. The command is `ycode` rather than
+`yara` because `yara` belongs to VirusTotal's scanner in every package
+manager.
 
-## macOS
-
-```bash
-brew install vsdudakov/tap/yara-code
-```
-
-That is the whole install: **Yara Code.app** lands in `/Applications` with its
-own icon and opens from the Dock and from Spotlight. Both commands live inside
-the bundle and are linked onto your `PATH` at the same time, so `ycode` still
-works in a terminal.
-
-It is a cask, because only a cask may put an application where Finder can see
-it — a formula's install runs in a sandbox that stops at Homebrew's own prefix.
-`brew upgrade --cask` follows new versions as they are tagged.
-
-## Linux, and macOS without the application
+## Homebrew — macOS and Linux
 
 ```bash
 brew install vsdudakov/tap/ycode
 ```
 
-The formula installs the two bare commands and no application — all a box
-without a Dock has use for, and all a Mac you only ever reach over SSH needs.
-The two cannot both be installed on one machine: they own the same commands.
-
-!!! note "Signing"
-
-    Yara Code is signed ad-hoc rather than with an Apple Developer ID, and is
-    not notarised, so macOS would refuse to open it — the dialog it shows for
-    such an app offers *Move to Trash* and nothing else. The cask clears the
-    quarantine flag on the copy it installs, which is the same step you would
-    otherwise take by hand, and nothing else on the machine is affected.
-
-!!! note "Why `yara-code` and not `ycode`"
-
-    `ycode` is already taken in Homebrew core, Debian, Fedora and the AUR by
-    [VirusTotal's YARA](https://virustotal.github.io/yara/), the malware
-    pattern-matching tool, and it owns `/usr/bin/yara`. The **package** is
-    therefore called `yara-code` and declares a conflict with `ycode`; the
-    **commands** it installs are still `ycode` and `ycode-gui`.
-
-## Prebuilt binaries
-
-Download the archive for your platform from the
-[latest release](https://github.com/vsdudakov/yara-code/releases/latest):
-
-| Platform | Archive |
-| --- | --- |
-| macOS, Apple Silicon | `ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-| macOS, Intel | `ycode-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
-| Linux, x86_64 | `ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux, arm64 | `ycode-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| Windows, x64 | `ycode-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
-
-Each archive carries the README, the licence and a `.sha256` beside it. On
-Linux and Windows it carries the two binaries; on **macOS** it carries
-`Yara Code.app`, which holds them both:
-
-```bash
-# Linux
-shasum -a 256 -c ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-sudo mv ycode-vX.Y.Z-x86_64-unknown-linux-gnu/ycode* /usr/local/bin/
-
-# macOS: drag the app to /Applications, and link the commands out of it
-shasum -a 256 -c ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz.sha256
-tar xzf ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz
-mv "ycode-vX.Y.Z-aarch64-apple-darwin/Yara Code.app" /Applications/
-sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode" /usr/local/bin/ycode
-sudo ln -sf "/Applications/Yara Code.app/Contents/MacOS/ycode-gui" /usr/local/bin/ycode-gui
-```
-
 ## Debian and Ubuntu
 
-Add the repository once, and `apt install ycode` works from then on — upgrades
-included, with `apt upgrade` like anything else on the machine:
+Add the repository once; `apt upgrade` follows releases from then on:
 
 ```bash
 sudo install -d /usr/share/keyrings
@@ -92,14 +24,12 @@ curl -fsSL https://vsdudakov.github.io/packages/apt/ycode.gpg \
   | sudo tee /usr/share/keyrings/ycode.gpg > /dev/null
 echo "deb [signed-by=/usr/share/keyrings/ycode.gpg] https://vsdudakov.github.io/packages/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/ycode.list > /dev/null
-
 sudo apt update
 sudo apt install ycode
 ```
 
-Both architectures are served: `amd64` and `arm64`. The repository's `Release`
-file is signed, and `signed-by` is what ties the key to it, so nothing else on
-the machine is trusted any further than it was.
+`amd64` and `arm64` are both served; the `Release` file is signed and
+`signed-by` ties the key to this source alone.
 
 ## Fedora, RHEL and openSUSE
 
@@ -109,13 +39,16 @@ sudo curl -fsSL -o /etc/yum.repos.d/ycode.repo \
 sudo dnf install ycode
 ```
 
-`x86_64` and `aarch64`, and the repository metadata is signed with the same
-key, which `ycode.repo` points at.
+## Arch Linux
+
+A `PKGBUILD` is attached to every release:
+
+```bash
+curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/PKGBUILD
+makepkg -si
+```
 
 ## A single package file
-
-Every release also carries the `.deb` and the `.rpm` on their own, for a
-machine that should not grow a new repository:
 
 ```bash
 curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/ycode_X.Y.Z-1_amd64.deb
@@ -125,48 +58,40 @@ curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/ycode-X
 sudo dnf install ./ycode-X.Y.Z-1.x86_64.rpm
 ```
 
-Every Linux path installs `ycode` and `ycode-gui` into `/usr/bin` and registers
-a desktop entry for the window frontend. The repositories keep the ten most
-recent versions; older ones stay on their GitHub release.
+## Prebuilt binaries
 
-### Arch Linux
+From the [latest release](https://github.com/vsdudakov/yara-code/releases/latest):
 
-A `PKGBUILD` is attached to every release and tracks the published tarball:
+| Platform | Archive |
+| --- | --- |
+| macOS, Apple Silicon | `ycode-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `ycode-vX.Y.Z-x86_64-apple-darwin.tar.gz` |
+| Linux, x86_64 | `ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, arm64 | `ycode-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows, x64 | `ycode-vX.Y.Z-x86_64-pc-windows-msvc.zip` |
 
 ```bash
-curl -LO https://github.com/vsdudakov/yara-code/releases/latest/download/PKGBUILD
-makepkg -si
+shasum -a 256 -c ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf ycode-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+sudo mv ycode-vX.Y.Z-x86_64-unknown-linux-gnu/ycode /usr/local/bin/
 ```
 
+`Help → Check for Updates…` downloads a newer release over the binary in
+place, when the folder it lives in is writable; otherwise it says which
+package manager to ask.
 
 ## From source
 
 ```bash
-git clone https://github.com/vsdudakov/yara-code
-cd yara-code
-cargo build --release
+cargo install --git https://github.com/vsdudakov/yara-code ycode
 ```
 
-The binaries land in `target/release/`.
+Nothing but a Rust toolchain and `git` on the `PATH` is needed: there is no
+graphics stack, and git is driven through its own CLI.
 
-### Terminal frontend only
+## The terminal
 
-The window needs a display server and a graphics stack; the terminal frontend
-needs neither. On a server, build it alone:
-
-```bash
-cargo build --release --no-default-features --features tui
-```
-
-Nothing but a Rust toolchain is required — no GTK, no Wayland, no wgpu.
-
-### Linux build dependencies
-
-The window frontend needs the usual desktop development packages. On Debian and
-Ubuntu:
-
-```bash
-sudo apt-get install libgtk-3-dev libxkbcommon-dev libwayland-dev
-```
-
-(GTK is there for the native Open/Save dialogs.)
+Any terminal works. Telling ++ctrl+shift+s++ from ++ctrl+s++ needs the kitty
+keyboard protocol — Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later have
+it. Without it the editor says so in the status bar, and the `Ctrl+Shift`
+chords can be rebound in [settings](../guides/settings.md).

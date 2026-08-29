@@ -48,7 +48,7 @@ pub enum View {
 pub enum Overlay {
     /// The CHANGES list, with the row the cursor is on.
     Changes(usize),
-    /// A name being typed for a new tab's worktree.
+    /// A name being typed for a new workspace.
     NewTab(String),
     /// A name being typed for the current tab.
     RenameTab(String),
@@ -528,11 +528,16 @@ impl App {
 
     /// The agent as the chrome names it: the program, without its arguments.
     pub fn agent_name(&self) -> &str {
-        self.settings
+        let program = self
+            .settings
             .agent
             .split_whitespace()
             .next()
-            .unwrap_or("agent")
+            .unwrap_or("agent");
+        std::path::Path::new(program)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(program)
     }
 
     /// The chord a hint shows for a command, as glyphs; nothing if unbound.
@@ -638,8 +643,9 @@ impl App {
         }
     }
 
-    /// A new tab: a worktree of the current repository on a branch of that
-    /// name, with an agent started in it.
+    /// A new workspace: a worktree of the current repository on a branch of
+    /// the name the user gave it, an agent started in it, and a tab called
+    /// by that name.
     fn new_tab(&mut self, name: &str) {
         let Some(repo) = self.repo.clone() else {
             self.note = Some("a new tab needs a repository to branch from".into());
@@ -660,7 +666,9 @@ impl App {
         };
         match git::worktree_add(&repo, &dir, name) {
             Ok(path) => {
-                self.sessions.push(Session::new(Some(path), &self.settings));
+                let mut session = Session::new(Some(path), &self.settings);
+                session.name = Some(name.trim().to_string());
+                self.sessions.push(session);
                 self.active = self.sessions.len() - 1;
                 self.start_agent();
                 self.refresh();

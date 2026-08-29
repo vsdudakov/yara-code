@@ -1,65 +1,44 @@
 ---
-description: How to build, test and contribute to Yara Code — the CI gate, the house rules, and how the terminal frontend is tested under a pty.
+description: How to build, test and contribute to Yara Code — the CI gate, the house rules, and how the frontend is tested.
 ---
 
 # Contributing
 
-Yara Code is one Rust crate with two frontends. Everything below is what CI enforces,
-so a green local run is a green pull request.
-
-## Getting set up
-
 ```bash
 git clone https://github.com/vsdudakov/yara-code
 cd yara-code
-make build
-```
-
-On Debian/Ubuntu the window frontend needs `libgtk-3-dev libxkbcommon-dev
-libwayland-dev`; the terminal frontend needs nothing beyond a Rust toolchain.
-
-## The gate
-
-```bash
 make lint     # cargo fmt --check + clippy -D warnings
-make test     # cargo test --all-features
+make test     # cargo test --workspace
+make run ARGS=~/code/project
 ```
 
-CI runs both on Linux, macOS and Windows, and separately builds the terminal
-frontend with `--no-default-features --features tui` — that configuration must
-keep compiling with no graphics stack at all, because that is how Yara Code is used
-over SSH.
+Nothing but a Rust toolchain and `git` is needed. CI runs the gate on Linux,
+macOS and Windows and gates `crates/yara-core` at 90% line coverage.
 
 ## House rules
 
-- **The two frontends mirror each other.** A feature that lands in one is
-  expected in the other, with the same wording, the same menu entry and the same
-  chord modulo `Cmd`→`Ctrl`. If a frontend genuinely cannot do it — the terminal
-  has no font size of its own — say so in a comment.
-- **Key bindings are never hardcoded.** Add a `Command` variant, a default chord
-  in both keymaps in `core/settings.rs`, and an arm in each frontend's
-  `execute`. The settings tests then enforce that every command is bound and
-  that no two share a chord.
-- **Logic goes in `core`.** The frontends paint and translate input; they do not
-  decide what an action means.
-- **Comments explain why, not what**, and read as prose. No comment restates the
-  line under it.
-- **Tests are named as sentences** — `a_run_of_typing_undoes_in_one_step` — and
-  assert behaviour, not implementation.
-- **No new dependency** without a reason the standard library or a crate already
-  in the tree cannot meet.
+- **Minimal.** Add what a screen uses; no new dependency without a reason
+  the standard library or a crate already in the tree cannot meet.
+- **Everything configurable lives in `settings.json`**, with a comment in
+  `Settings::to_commented_json` and a test. Keys are never hardcoded: an
+  action is a `Command` variant, a default chord in `settings.rs`, and an
+  arm in `App::execute` — the settings tests then enforce that it is bound
+  and that no two commands share a chord.
+- Comments explain *why*, not *what*, and read as prose.
+- Tests are named as sentences and assert behaviour, not implementation.
+- The frontend is tested end to end: `crates/ycode/tests/frame.rs` runs
+  the real `App` on ratatui's test backend, keys and mouse in, the frame's
+  text out.
 
-## Testing the terminal frontend
+## Screenshots
 
-A terminal UI cannot be driven by a normal test harness. To see a real frame,
-run it under a pty: spawn `target/debug/ycode`, write the key bytes, strip the
-escape sequences and print the grid. That is how the terminal changes in this
-repository are checked — including the mouse, which is just another escape
-sequence (`\x1b[<0;25;40M`).
+`make shots` redraws every image on these pages with the editor itself,
+from a scripted session in a temporary repository. Change a screen, run it,
+commit the SVGs with the change.
 
-## Releases
+## Releasing
 
-Tagging `vX.Y.Z` builds the binaries for macOS (Apple Silicon and Intel), Linux
-x86_64 and Windows x64, attaches them to a GitHub release with their checksums,
-and updates the Homebrew tap. The documentation site redeploys from `main`
-whenever `docs/` or `mkdocs.yml` changes.
+Tag `vX.Y.Z`. The release workflow builds the binary for macOS, Linux and
+Windows, the `.deb` and `.rpm`, attaches them with checksums, publishes the
+apt and dnf repositories, and updates the Homebrew tap and the AUR
+`PKGBUILD`.

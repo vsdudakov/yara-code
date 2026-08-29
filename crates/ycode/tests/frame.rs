@@ -54,7 +54,7 @@ fn an_empty_session_shows_both_panes_and_waits_for_an_edit() {
     let mut app = App::new(Some("/work/demo".into()));
     let rows = frame(&mut app);
     assert!(
-        rows[0].contains("YARA") && rows[0].contains("/work/demo"),
+        rows[0].contains("YARA  File  Help  │  demo  [+]"),
         "{}",
         rows[0]
     );
@@ -432,7 +432,7 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
         )
     };
     app.handle_key(ctrl_shift('n'));
-    assert!(text(&mut app).contains("NEW AGENT"));
+    assert!(text(&mut app).contains("NEW WORKSPACE"));
     for c in "task/login".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
@@ -442,8 +442,8 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.sessions.len(), 2);
     assert_eq!(app.active, 1);
+    assert_eq!(app.repo.as_ref().unwrap().branch, "task-login");
     let rows = frame(&mut app);
-    assert!(rows[0].contains("⌥ worktree: task-login"), "{}", rows[0]);
     assert!(rows[0].contains(" main   task/login  [+]"), "{}", rows[0]);
     assert!(rows[0].contains("● cat — running"), "an agent of its own");
     assert!(repo.0.join("trees/task-login/src/main.rs").exists());

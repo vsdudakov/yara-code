@@ -824,3 +824,62 @@ fn without_a_usage_command_agent_usage_asks_the_agent_itself() {
     }
     assert!(screen.contains("/status"), "typed at the agent: {screen:?}");
 }
+
+#[test]
+fn the_wheel_scrolls_the_diff_and_moves_the_editor_caret() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-wheel");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    let body: String = (1..=60).map(|i| format!("line {i}\n")).collect();
+    repo.file("src/main.rs", &body);
+    app.refresh();
+    let wheel = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    frame(&mut app);
+    let follow = app.hits.follow;
+    let all = text(&mut app);
+    assert!(all.contains("    1 + line 1"), "{all}");
+    for _ in 0..4 {
+        app.handle_mouse(wheel(
+            MouseEventKind::ScrollDown,
+            follow.x + 3,
+            follow.y + 3,
+        ));
+    }
+    let all = text(&mut app);
+    assert!(
+        !all.contains("    1 + line 1") && all.contains("   13 + line 13"),
+        "{all}"
+    );
+    for _ in 0..40 {
+        app.handle_mouse(wheel(
+            MouseEventKind::ScrollDown,
+            follow.x + 3,
+            follow.y + 3,
+        ));
+    }
+    assert!(
+        text(&mut app).contains("   60 + line 60"),
+        "stops at the end"
+    );
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.scroll, 0, "a follow key starts at the top again");
+
+    app.open_file(&repo.0.join("src/main.rs"));
+    for _ in 0..2 {
+        app.handle_mouse(wheel(
+            MouseEventKind::ScrollDown,
+            follow.x + 3,
+            follow.y + 3,
+        ));
+    }
+    assert_eq!(app.editor.as_ref().unwrap().line_col().0, 6);
+    app.handle_mouse(wheel(MouseEventKind::ScrollUp, follow.x + 3, follow.y + 3));
+    assert_eq!(app.editor.as_ref().unwrap().line_col().0, 3);
+}

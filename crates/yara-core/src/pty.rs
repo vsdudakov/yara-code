@@ -121,6 +121,22 @@ impl Pty {
         }
     }
 
+    /// One notch of the wheel over a cell: to a program that asked to hear
+    /// about the mouse — an agent, a pager — it is sent as the SGR wheel
+    /// event, rows and columns counted from one; to any other the view
+    /// scrolls through the scrollback instead.
+    pub fn wheel(&mut self, up: bool, row: u16, col: u16) {
+        let wants_mouse = self
+            .with_screen(|screen| screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None);
+        if wants_mouse {
+            let button = if up { 64 } else { 65 };
+            self.write(format!("\x1b[<{button};{};{}M", col + 1, row + 1).as_bytes());
+        } else {
+            let now = self.scrollback();
+            self.set_scrollback(if up { now + 3 } else { now.saturating_sub(3) });
+        }
+    }
+
     /// Runs `f` over the screen as it should be drawn, scrollback applied.
     pub fn with_screen<R>(&self, f: impl FnOnce(&vt100::Screen) -> R) -> R {
         f(self.parser.lock().unwrap().screen())
@@ -204,6 +220,11 @@ mod tests {
         }
         pty.send_key(&Key::Named("enter".into()), Mods::default());
         assert!(wait_for(&pty, "hi\nhi").contains("hi\nhi"), "echoed by cat");
+        assert_eq!(pty.scrollback(), 0);
+        // cat never asked for the mouse, so the wheel scrolls the view — as
+        // far back as there is anything, which is nothing yet.
+        pty.wheel(true, 0, 0);
+        pty.wheel(false, 0, 0);
         assert_eq!(pty.scrollback(), 0);
         // Ctrl+D ends cat.
         pty.send_key(

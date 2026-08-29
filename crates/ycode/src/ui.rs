@@ -927,6 +927,7 @@ fn draw_follow(frame: &mut Frame, app: &mut App, area: Rect) {
         draw_file(frame, app, &edit, body);
         return;
     }
+    let scroll = app.scroll;
     // Body: the unified diff, one hunk after another.
     let mut lines = Vec::new();
     for hunk in &edit.hunks {
@@ -957,7 +958,10 @@ fn draw_follow(frame: &mut Frame, app: &mut App, area: Rect) {
             ]));
         }
     }
-    frame.render_widget(Paragraph::new(lines), body);
+    // Never past the end: the wheel may have asked for more than there is.
+    let scroll = scroll.min((lines.len() as u16).saturating_sub(body.height));
+    app.scroll = scroll;
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
 }
 
 /// A file being edited where the follow pane was: its path, a dot while it
@@ -1079,6 +1083,10 @@ fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
             }
         }
     }
+    let scroll = app
+        .scroll
+        .min((text.lines().count() as u16).saturating_sub(area.height));
+    app.scroll = scroll;
     let lines: Vec<Line> = text
         .lines()
         .enumerate()
@@ -1096,7 +1104,7 @@ fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
             ])
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
 }
 
 /// The CHANGES overlay: what differs from the base branch, one row a file.

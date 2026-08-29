@@ -124,6 +124,8 @@ pub struct Session {
     /// timeline's current edit until the follow keys are used again.
     pub pinned: Option<EditEvent>,
     pub view: View,
+    /// How far the follow pane's body is scrolled, in rows.
+    pub scroll: u16,
     /// The project's files, for the sidebar.
     pub tree: Option<Tree>,
     /// A file open for editing, in the follow pane's place.
@@ -158,6 +160,7 @@ impl Session {
             follow: Follow::default(),
             pinned: None,
             view: View::Diff,
+            scroll: 0,
             editor: None,
             name: None,
             pr,
@@ -331,13 +334,74 @@ impl App {
         let _ = self.settings.save();
     }
 
+    /// The wheel, over whatever is under it: the agent's own scrollback, the
+    /// diff, the file being edited, the tree, a list.
+    fn wheel(&mut self, up: bool, x: u16, y: u16) {
+        let step = |value: usize| {
+            if up {
+                value.saturating_sub(3)
+            } else {
+                value + 3
+            }
+        };
+        match self.overlay.clone() {
+            Some(Overlay::Keys(scroll)) => {
+                self.overlay = Some(Overlay::Keys(step(scroll).min(command::ALL.len() - 1)))
+            }
+            Some(Overlay::Changes(row)) => {
+                let last = self.changes.len().saturating_sub(1);
+                self.overlay = Some(Overlay::Changes(if up {
+                    row.saturating_sub(1)
+                } else {
+                    (row + 1).min(last)
+                }))
+            }
+            Some(_) => {}
+            None if hit(self.hits.agent, x, y) => {
+                let grid = self.hits.agent;
+                if let Some(pty) = self.agent.as_mut() {
+                    pty.wheel(
+                        up,
+                        y.saturating_sub(grid.y + 1),
+                        x.saturating_sub(grid.x + 1),
+                    );
+                }
+            }
+            None if hit(self.hits.follow, x, y) => match self.editor.as_mut() {
+                Some(buffer) => {
+                    for _ in 0..3 {
+                        if up {
+                            buffer.up()
+                        } else {
+                            buffer.down()
+                        }
+                    }
+                }
+                None => self.scroll = step(self.scroll as usize) as u16,
+            },
+            None if hit(self.hits.files, x, y) => {
+                if let Some(tree) = self.tree.as_mut() {
+                    tree.move_selection(if up { -3 } else { 3 });
+                }
+            }
+            None => {}
+        }
+    }
+
     /// A click. Overlays take the click if it lands in their box and close
     /// on the backdrop; otherwise the chrome answers to it.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+        let (x, y) = (mouse.column, mouse.row);
+        let up = match mouse.kind {
+            MouseEventKind::ScrollUp => Some(true),
+            MouseEventKind::ScrollDown => Some(false),
+            MouseEventKind::Down(MouseButton::Left) => None,
+            _ => return,
+        };
+        if let Some(up) = up {
+            self.wheel(up, x, y);
             return;
         }
-        let (x, y) = (mouse.column, mouse.row);
         if self.overlay.is_some() {
             if !hit(self.hits.overlay, x, y) {
                 self.overlay = None;
@@ -1138,6 +1202,7 @@ impl App {
             }
             Command::Close => self.pinned = None,
             Command::ToggleView => {
+                self.scroll = 0;
                 self.view = match self.view {
                     View::Diff => View::File,
                     View::File => View::Diff,
@@ -1145,18 +1210,22 @@ impl App {
             }
             Command::FollowLive => {
                 self.pinned = None;
+                self.scroll = 0;
                 self.follow.go_live()
             }
             Command::ScrubBack => {
                 self.pinned = None;
+                self.scroll = 0;
                 self.follow.scrub_back()
             }
             Command::ScrubForward => {
                 self.pinned = None;
+                self.scroll = 0;
                 self.follow.scrub_forward()
             }
             Command::MarkReviewed => {
                 self.pinned = None;
+                self.scroll = 0;
                 self.follow.mark_reviewed()
             }
         }

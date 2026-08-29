@@ -38,7 +38,7 @@ of how it got there.
 
 ++f7++ asks for a name, makes a git worktree on a branch of that
 name, starts an agent in it and gives it a tab. Two agents on two tasks, each
-with its own timeline; ++ctrl+pgdn++ moves between them.
+with its own timeline; ++ctrl+l++ moves between them.
 
 ![Two workspaces](assets/shots/tabs.svg)
 

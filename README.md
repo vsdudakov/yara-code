@@ -107,7 +107,7 @@ opens the file, every key commented.
 | Switch pane (agent → files → editor / follow) | `F6` |
 | Scrub the timeline · go live · mark reviewed · diff/file | `←` `→` · `f` · `⏎` · `v` |
 | Changes vs main · palette · search · go to file · files | `F4` · `F5` · `F3` · `Ctrl+P` · `Ctrl+B` |
-| New workspace · rename · next / previous · close | `F7` · `F2` · `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+W` |
+| New workspace · rename · next / previous · close | `F7` · `F2` · `Ctrl+L` / `Ctrl+K` · `Ctrl+W` |
 | Save · close the file · undo / redo | `Ctrl+S` · `Esc` · `Ctrl+Z` / `Ctrl+Y` |
 | Keys · menus · recent · theme · agent usage · quit | `F1` · `F10` · `Ctrl+R` · `F9` · `F8` · `Ctrl+Q` |
 

@@ -94,11 +94,14 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::Save => "Ctrl+S",
         Command::Settings => "F12",
         Command::Quit => "Ctrl+Q",
-        Command::Documentation => "Shift+F12",
         Command::Help => "F1",
-        // Updating is a menu action and moving the panes a palette one; a
-        // key for either would only be pressed by accident.
-        Command::CheckForUpdates | Command::InstallUpdate | Command::SwapPanes => return None,
+        // Updating, moving the panes, the Help menu and the documentation are
+        // menu and palette actions; F10 then → opens Help.
+        Command::CheckForUpdates
+        | Command::InstallUpdate
+        | Command::SwapPanes
+        | Command::HelpMenu
+        | Command::Documentation => return None,
         Command::ToggleSidebar => "Ctrl+B",
         Command::Changes => "F4",
         Command::CommandPalette => "F5",
@@ -107,15 +110,16 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::ThemePicker => "F9",
         Command::QuickOpen => "Ctrl+P",
         Command::FileMenu => "F10",
-        Command::HelpMenu => "Shift+F1",
         // The keyboard's own key for moving between parts of a window, and
         // one no program in the agent pane is listening for.
         Command::NextPane => "F6",
         Command::Close => "Esc",
         Command::NewTab => "F7",
         Command::CloseTab => "Ctrl+W",
-        Command::NextTab => "Ctrl+PageDown",
-        Command::PrevTab => "Ctrl+PageUp",
+        // Ctrl with an arrow or a page key does not survive every terminal;
+        // two letters do.
+        Command::NextTab => "Ctrl+L",
+        Command::PrevTab => "Ctrl+K",
         Command::RenameTab => "F2",
         Command::Undo => "Ctrl+Z",
         Command::Redo => "Ctrl+Y",
@@ -498,7 +502,11 @@ mod tests {
         for command in ALL {
             let unbound = matches!(
                 command,
-                Command::CheckForUpdates | Command::InstallUpdate | Command::SwapPanes
+                Command::CheckForUpdates
+                    | Command::InstallUpdate
+                    | Command::SwapPanes
+                    | Command::HelpMenu
+                    | Command::Documentation
             );
             assert_eq!(
                 settings.chord(*command).is_none(),

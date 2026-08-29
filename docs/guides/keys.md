@@ -35,7 +35,6 @@ follow pane → agent. A click moves it too.
 | Save | ++ctrl+s++ |
 | Settings | ++f12++ |
 | Quit | ++ctrl+q++ |
-| Documentation | ++shift+f12++ |
 | Key Bindings | ++f1++ |
 | Toggle Files | ++ctrl+b++ |
 | Changes | ++f4++ |
@@ -44,13 +43,13 @@ follow pane → agent. A click moves it too.
 | Agent Usage | ++f8++ |
 | Theme… | ++f9++ |
 | Go to File | ++ctrl+p++ |
-| File Menu / Help Menu | ++f10++ / ++shift+f1++ |
+| File Menu | ++f10++ — ++right++ for Help |
 | Switch Pane | ++f6++ |
 | Copy / Paste | ++ctrl+c++ / ++ctrl+v++ |
 | Close | ++esc++ |
 | New Workspace… | ++f7++ |
 | Close Workspace | ++ctrl+w++ |
-| Next / Previous Workspace | ++ctrl+pgdn++ / ++ctrl+pgup++ |
+| Next / Previous Workspace | ++ctrl+l++ / ++ctrl+k++ |
 | Rename Workspace… | ++f2++ |
 | Undo / Redo | ++ctrl+z++ / ++ctrl+y++ |
 | Follow: Go Live | ++f++ |

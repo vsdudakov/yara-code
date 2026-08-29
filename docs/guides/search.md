@@ -22,7 +22,7 @@ hundred hits.
 
 ++f5++ opens the COMMAND PALETTE: every command with its chord on
 the right, found by a few letters — `tf` for Toggle Files. ++enter++ runs
-it. The menus (++f10++ for File, ++shift+f1++ for Help) hold the same
+it. The menus (++f10++, then ++right++ for Help) hold the same
 commands in the order a menu bar would.
 
 ![The File menu](../assets/shots/menu.svg)

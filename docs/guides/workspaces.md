@@ -22,7 +22,7 @@ it.
 | | Key |
 | --- | --- |
 | New workspace | ++f7++ |
-| Next / previous | ++ctrl+pgdn++ / ++ctrl+pgup++, or click the tab |
+| Next / previous | ++ctrl+l++ / ++ctrl+k++, or click the tab |
 | Rename | ++f2++, or a right click on the tab |
 | Delete the worktree | a right click on the tab — the folder goes, the branch stays |
 | Reorder | drag a tab along the strip |

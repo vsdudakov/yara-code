@@ -463,9 +463,10 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     app.handle_key(key(KeyCode::Enter));
     assert!(frame(&mut app)[0].contains(" main   PR 42  [+]"));
 
-    app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::CONTROL));
+    let with_ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    app.handle_key(with_ctrl('k'));
     assert_eq!(app.active, 0);
-    app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
+    app.handle_key(with_ctrl('l'));
     assert_eq!(app.active, 1);
     app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
     assert_eq!(app.sessions.len(), 1);

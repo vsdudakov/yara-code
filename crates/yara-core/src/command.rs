@@ -191,7 +191,6 @@ pub const ALL: &[Command] = &[
 pub type Menu = &'static [Option<Command>];
 
 pub const FILE_MENU: Menu = &[
-    Some(Command::OpenFolder),
     Some(Command::OpenRecent),
     None,
     Some(Command::NewTab),
@@ -508,7 +507,6 @@ mod tests {
         assert_eq!(
             entries,
             [
-                Command::OpenFolder,
                 Command::OpenRecent,
                 Command::NewTab,
                 Command::AddFolder,

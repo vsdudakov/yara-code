@@ -1,5 +1,5 @@
 ---
-description: Project search and the command palette in Yara Code — Ctrl+Shift+F finds every line, Ctrl+Shift+P runs any command by a few letters.
+description: Project search and the command palette in Yara Code — F3 finds every line, F5 runs any command by a few letters.
 ---
 
 # Search and the palette

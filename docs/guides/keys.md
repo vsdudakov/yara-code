@@ -68,6 +68,6 @@ Only the bindings that differ need listing:
 Chords are `Ctrl`/`Alt`/`Shift` and a key — `F3`, `Ctrl+-`,
 `Alt+Left`, `F12` — or a bare key like `F` for the follow pane. A chord that
 cannot be read keeps its default and is named in the status bar; one given
-to two commands is reported too. Telling ++ctrl+shift+s++ from ++ctrl+s++
-needs the kitty keyboard protocol; in a terminal without it, move those
-chords elsewhere.
+to two commands is reported too. The defaults use only what every terminal
+sends; a `Ctrl+Shift` rebinding works where the kitty keyboard protocol does
+— Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later.

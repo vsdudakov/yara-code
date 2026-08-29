@@ -1266,6 +1266,7 @@ impl App {
                 Some(
                     Command::Save
                         | Command::Close
+                        | Command::Quit
                         | Command::Undo
                         | Command::Redo
                         | Command::Copy

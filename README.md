@@ -37,10 +37,10 @@ Code is one screen for exactly that.
   timeline and the pane snaps to its diff. `←` `→` scrub back through the
   edits, `⏎` marks one reviewed, `f` snaps back to live, `v` shows the file
   instead of the diff.
-- **CHANGES** (`Ctrl+Shift+G`) is the other view of the same work: what the
+- **CHANGES** (`F4`) is the other view of the same work: what the
   branch differs from `main` by, file by file, against the timeline of how it
   got there.
-- **Workspaces** run agents in parallel: `Ctrl+Shift+N` names one, gets a git
+- **Workspaces** run agents in parallel: `F7` names one, gets a git
   worktree on a branch of that name, starts an agent in it, and gives it a tab.
 
 Everything else is the small editor around that: a file tree, an editor with
@@ -106,17 +106,16 @@ opens the file, every key commented.
 | --- | --- |
 | Switch pane (agent → files → editor / follow) | `F6` |
 | Scrub the timeline · go live · mark reviewed · diff/file | `←` `→` · `f` · `⏎` · `v` |
-| Changes vs main · palette · search · go to file · files | `Ctrl+Shift+G` · `Ctrl+Shift+P` · `Ctrl+Shift+F` · `Ctrl+P` · `Ctrl+B` |
-| New workspace · rename · next / previous · close | `Ctrl+Shift+N` · `F2` · `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+Shift+W` |
-| Save · close the file · undo / redo | `Ctrl+S` · `Esc` · `Ctrl+Z` / `Ctrl+Shift+Z` |
-| Keys · menus · recent · theme · agent usage · quit | `F1` · `F10` · `Ctrl+R` · `Ctrl+Shift+T` · `Ctrl+Shift+U` · `Ctrl+Q` |
+| Changes vs main · palette · search · go to file · files | `F4` · `F5` · `F3` · `Ctrl+P` · `Ctrl+B` |
+| New workspace · rename · next / previous · close | `F7` · `F2` · `Ctrl+PageDown` / `Ctrl+PageUp` · `Ctrl+W` |
+| Save · close the file · undo / redo | `Ctrl+S` · `Esc` · `Ctrl+Z` / `Ctrl+Y` |
+| Keys · menus · recent · theme · agent usage · quit | `F1` · `F10` · `Ctrl+R` · `F9` · `F8` · `Ctrl+Q` |
 
 With the agent focused, plain keys, `⏎`, `Esc`, `Tab` and the arrows are the
-agent's; a bound `Ctrl` or `Alt` chord or a function key is the editor's,
-except the ones `"agent_keys"` lists (`Ctrl+R`, `Ctrl+N`, `Ctrl+Z` by default),
-which agents use themselves. Telling `Ctrl+Shift+S` from `Ctrl+S` needs the
-kitty keyboard protocol — Ghostty, kitty, WezTerm, foot, iTerm2 3.5+; in a
-terminal without it, rebind those chords.
+agent's; a function key or a bound `Ctrl` chord is the editor's, except the
+ones `"agent_keys"` lists (`Ctrl+R`, `Ctrl+N`, `Ctrl+Z`, `Ctrl+O`, `Ctrl+W`,
+`Ctrl+Y` by default), which agents use themselves. The defaults need nothing
+a terminal cannot send: no `Ctrl+Shift`, no `Alt`.
 
 ## Development
 

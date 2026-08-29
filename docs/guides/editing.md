@@ -28,7 +28,7 @@ right. Every key is typing except these:
 | --- | --- |
 | Save | ++ctrl+s++ — `✓ saved <path>` in the status bar |
 | Close, back to the follow pane | ++esc++ |
-| Undo / redo | ++ctrl+z++ / ++ctrl+shift+z++ — a run of typing is one step |
+| Undo / redo | ++ctrl+z++ / ++ctrl+y++ — a run of typing is one step |
 | Move | arrows, ++home++, ++end++; ++tab++ inserts four spaces |
 
 A save is a change to the working tree like any other, so it lands on the

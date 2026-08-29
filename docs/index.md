@@ -30,13 +30,13 @@ and ++right++, mark an edit reviewed with ++enter++, snap back to live with
 ++f++, see the file instead of the diff with ++v++. The status bar counts what
 is still unreviewed.
 
-**CHANGES** (++ctrl+shift+g++) is the other view of the same work: what the
+**CHANGES** (++f4++) is the other view of the same work: what the
 branch differs from `main` by, file by file — the result, beside the timeline
 of how it got there.
 
 ## Workspaces
 
-++ctrl+shift+n++ asks for a name, makes a git worktree on a branch of that
+++f7++ asks for a name, makes a git worktree on a branch of that
 name, starts an agent in it and gives it a tab. Two agents on two tasks, each
 with its own timeline; ++ctrl+pgdn++ moves between them.
 
@@ -46,7 +46,7 @@ with its own timeline; ++ctrl+pgdn++ moves between them.
 
 A file tree (++ctrl+b++), an editor with undo and syntax colours for fixing a
 line (++ctrl+s++, ++esc++), go to file (++ctrl+p++), project search
-(++ctrl+shift+f++), a command palette (++ctrl+shift+p++), ++f1++ for every
+(++f3++), a command palette (++f5++), ++f1++ for every
 key, and a commented `settings.json` that holds everything you might want
 different — the agent command, which side it sits on, its width, the keys.
 

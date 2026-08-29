@@ -42,19 +42,15 @@ fn main() -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
-    // Without the kitty keyboard protocol a terminal cannot tell Ctrl+Shift+S
-    // from Ctrl+S; where it is available, ask for it.
+    // The defaults need nothing beyond what every terminal sends; where the
+    // kitty keyboard protocol is there, ask for it so a rebinding to a
+    // Ctrl+Shift chord works too.
     let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
         execute!(
             out,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
-    } else {
-        app.note = Some(
-            "this terminal cannot tell Ctrl+Shift from Ctrl — rebind those chords in settings.json"
-                .into(),
-        );
     }
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let result = run(&mut terminal, &mut app);

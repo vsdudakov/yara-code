@@ -69,7 +69,7 @@ fn an_empty_session_shows_both_panes_and_waits_for_an_edit() {
     assert!(all.contains("waiting for the agent's first edit"));
     assert!(all.contains("no edits yet"));
     assert!(
-        rows[23].contains("^⇧P palette  ^⇧F search  F1 keys  v"),
+        rows[23].contains("F5 palette  F3 search  F1 keys  v"),
         "the hints that fit, then the version: {}",
         rows[23]
     );
@@ -171,17 +171,14 @@ fn the_agent_runs_in_its_pane_takes_the_keys_and_f6_hands_them_to_follow() {
     assert!(app.follow.is_live());
     app.handle_key(key(KeyCode::F(6)));
     assert_eq!(app.focus, Focus::Agent);
-    // A bound Ctrl chord is the editor's even with the agent focused; one
-    // the agent uses itself is not.
+    // A function key is the editor's even with the agent focused; a Ctrl
+    // chord the agent uses itself is not.
     app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     assert!(
         app.overlay.is_none() && app.note.is_none(),
         "Ctrl+R went to cat"
     );
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('g'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(4)));
     assert!(app.overlay.is_some(), "CHANGES opened");
 }
 
@@ -378,10 +375,7 @@ fn changes_lists_what_differs_from_main_and_opens_a_files_diff() {
     app.refresh();
     repo.file("src/main.rs", "fn main() {}\n");
     app.refresh();
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('g'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(4)));
     let all = text(&mut app);
     assert!(all.contains("CHANGES"));
     assert!(all.contains(" A README.md"), "{all}");
@@ -401,10 +395,7 @@ fn changes_lists_what_differs_from_main_and_opens_a_files_diff() {
     app.handle_key(key(KeyCode::Esc));
     assert!(text(&mut app).contains("FOLLOW · LIVE"));
 
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('g'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(4)));
     app.handle_key(key(KeyCode::Esc));
     assert!(app.overlay.is_none());
 }
@@ -425,13 +416,7 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
         "named by its branch"
     );
 
-    let ctrl_shift = |c| {
-        KeyEvent::new(
-            KeyCode::Char(c),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        )
-    };
-    app.handle_key(ctrl_shift('n'));
+    app.handle_key(key(KeyCode::F(7)));
     assert!(text(&mut app).contains("NEW WORKSPACE"));
     for c in "task/login".chars() {
         app.handle_key(key(KeyCode::Char(c)));
@@ -470,10 +455,10 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     assert_eq!(app.active, 0);
     app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::CONTROL));
     assert_eq!(app.active, 1);
-    app.handle_key(ctrl_shift('w'));
+    app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
     assert_eq!(app.sessions.len(), 1);
     assert!(!app.should_quit);
-    app.handle_key(ctrl_shift('w'));
+    app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
     assert!(app.should_quit, "closing the last tab is quitting");
 }
 
@@ -507,10 +492,7 @@ fn files_open_in_the_editor_type_save_and_close_back_to_follow() {
     assert!(all.contains("    2  fn main() {"));
     app.handle_key(ctrl('z'));
     assert!(!text(&mut app).contains("main.rs ●"), "undone");
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('z'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(ctrl('y'));
     assert!(text(&mut app).contains("main.rs ●"), "redone");
     app.handle_key(ctrl('s'));
     let all = text(&mut app);
@@ -565,15 +547,9 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     let repo = Repo::new("yara-frame-overlays");
     let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
     app.focus = Focus::Follow;
-    let ctrl_shift = |c| {
-        KeyEvent::new(
-            KeyCode::Char(c),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        )
-    };
 
     // The palette runs a command found by a few letters.
-    app.handle_key(ctrl_shift('p'));
+    app.handle_key(key(KeyCode::F(5)));
     let overlay = format!("{:?}", app.overlay);
     let all = text(&mut app);
     assert!(
@@ -589,7 +565,7 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     assert!(app.show_sidebar && app.overlay.is_none());
 
     // Search lists path:line text and opens the hit on its line.
-    app.handle_key(ctrl_shift('f'));
+    app.handle_key(key(KeyCode::F(3)));
     for c in "let".chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
@@ -694,10 +670,7 @@ fn agent_usage_is_polled_from_the_configured_commands_and_shown_as_bars() {
         ..Settings::default()
     };
     let mut app = following(settings);
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('u'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(8)));
     assert!(text(&mut app).contains("asking the agents…"));
     let start = std::time::Instant::now();
     while app.usage.is_none() && start.elapsed().as_secs() < 5 {
@@ -725,10 +698,7 @@ fn the_theme_picker_switches_the_theme_and_the_mouse_reaches_the_chrome() {
     let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
     app.focus = Focus::Follow;
     app.refresh();
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('t'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(9)));
     let all = text(&mut app);
     assert!(
         all.contains("THEME") && all.contains(" Dark Modern"),
@@ -832,10 +802,7 @@ fn without_a_usage_command_agent_usage_asks_the_agent_itself() {
     };
     let mut app = following(settings);
     app.start_agent();
-    app.handle_key(KeyEvent::new(
-        KeyCode::Char('u'),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    ));
+    app.handle_key(key(KeyCode::F(8)));
     assert_eq!(app.focus, Focus::Agent);
     let start = std::time::Instant::now();
     let mut screen = String::new();

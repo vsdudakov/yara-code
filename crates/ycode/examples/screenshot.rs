@@ -84,18 +84,18 @@ fn main() {
     shot(&out, "file-view", &mut app);
     app.handle_key(plain(KeyCode::Char('v')));
 
-    app.handle_key(ctrl_shift('g'));
+    app.handle_key(plain(KeyCode::F(4)));
     shot(&out, "changes", &mut app);
     app.handle_key(plain(KeyCode::Esc));
 
-    app.handle_key(ctrl_shift('p'));
+    app.handle_key(plain(KeyCode::F(5)));
     for c in "fol".chars() {
         app.handle_key(plain(KeyCode::Char(c)));
     }
     shot(&out, "palette", &mut app);
     app.handle_key(plain(KeyCode::Esc));
 
-    app.handle_key(ctrl_shift('f'));
+    app.handle_key(plain(KeyCode::F(3)));
     for c in "redirect".chars() {
         app.handle_key(plain(KeyCode::Char(c)));
     }
@@ -119,7 +119,7 @@ fn main() {
     app.handle_key(ctrl('b'));
 
     // A second agent in a worktree of its own.
-    app.handle_key(ctrl_shift('n'));
+    app.handle_key(plain(KeyCode::F(7)));
     for c in "logout flow".chars() {
         app.handle_key(plain(KeyCode::Char(c)));
     }
@@ -152,13 +152,6 @@ fn plain(code: KeyCode) -> KeyEvent {
 
 fn ctrl(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-}
-
-fn ctrl_shift(c: char) -> KeyEvent {
-    KeyEvent::new(
-        KeyCode::Char(c),
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-    )
 }
 
 /// Waits until the agent's screen shows `text`, so a shot never catches the

@@ -4,7 +4,7 @@ description: Yara Code's settings.json — the agent command, the layout, the fo
 
 # Settings
 
-`File → Settings` (++ctrl+comma++) opens the file in the editor:
+`File → Settings` (++f12++) opens the file in the editor:
 `~/.config/ycode/settings.json`, or `%APPDATA%\ycode\settings.json` on
 Windows, or wherever `YARA_CONFIG_DIR` points. Every key is optional and the
 file is written afresh, with a comment over each key, whenever the editor

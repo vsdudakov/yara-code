@@ -4,9 +4,8 @@
 //! A terminal cannot tell Ctrl+Shift+V from Ctrl+V, because the control byte
 //! the two share has no room for Shift. The protocol is how a program says it
 //! wants the difference: it pushes a set of flags, and from then on the
-//! terminal spells the ambiguous keys out as `CSI code ; modifiers u`. Without
-//! it, this editor's own second tier of bindings — every `Ctrl+Shift` chord —
-//! is unreachable in this editor's own terminal.
+//! terminal spells the ambiguous keys out as `CSI code ; modifiers u`. The
+//! agent in the pane may ask for it, and gets it.
 
 use crate::command::{Key, Mods};
 

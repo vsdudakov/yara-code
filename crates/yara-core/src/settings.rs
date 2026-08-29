@@ -83,28 +83,28 @@ impl<'de> Deserialize<'de> for Keys {
     }
 }
 
-/// VS Code's keys with Ctrl for Cmd, and Ctrl+Shift where it uses Cmd+Shift.
-/// Telling Ctrl+Shift+X from Ctrl+X needs the kitty keyboard protocol; in a
-/// terminal without it, rebind those few here.
+/// Keys every terminal can send: function keys and plain Ctrl+letter. There
+/// is no Ctrl+Shift here on purpose — without the kitty keyboard protocol a
+/// terminal cannot tell it from Ctrl, and most terminals do not have it.
 pub fn default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Ctrl+N",
-        Command::OpenFolder => "Ctrl+Shift+O",
+        Command::OpenFolder => "Ctrl+O",
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
-        Command::Settings => "Ctrl+,",
+        Command::Settings => "F12",
         Command::Quit => "Ctrl+Q",
-        Command::Documentation => "Ctrl+Shift+H",
+        Command::Documentation => "Shift+F12",
         Command::Help => "F1",
         // Updating is a menu action; a key for it would only be pressed by
         // accident.
         Command::CheckForUpdates | Command::InstallUpdate => return None,
         Command::ToggleSidebar => "Ctrl+B",
-        Command::Changes => "Ctrl+Shift+G",
-        Command::CommandPalette => "Ctrl+Shift+P",
-        Command::SearchProject => "Ctrl+Shift+F",
-        Command::AgentUsage => "Ctrl+Shift+U",
-        Command::ThemePicker => "Ctrl+Shift+T",
+        Command::Changes => "F4",
+        Command::CommandPalette => "F5",
+        Command::SearchProject => "F3",
+        Command::AgentUsage => "F8",
+        Command::ThemePicker => "F9",
         Command::QuickOpen => "Ctrl+P",
         Command::FileMenu => "F10",
         Command::HelpMenu => "Shift+F1",
@@ -112,13 +112,13 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         // one no program in the agent pane is listening for.
         Command::NextPane => "F6",
         Command::Close => "Esc",
-        Command::NewTab => "Ctrl+Shift+N",
-        Command::CloseTab => "Ctrl+Shift+W",
+        Command::NewTab => "F7",
+        Command::CloseTab => "Ctrl+W",
         Command::NextTab => "Ctrl+PageDown",
         Command::PrevTab => "Ctrl+PageUp",
         Command::RenameTab => "F2",
         Command::Undo => "Ctrl+Z",
-        Command::Redo => "Ctrl+Shift+Z",
+        Command::Redo => "Ctrl+Y",
         Command::FollowLive => "F",
         Command::ScrubBack => "Left",
         Command::ScrubForward => "Right",
@@ -195,7 +195,7 @@ impl Default for Settings {
             .collect(),
             usage_commands: BTreeMap::new(),
             search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
-            agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z"]
+            agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+O", "Ctrl+W", "Ctrl+Y"]
                 .iter()
                 .filter_map(|c| c.parse().ok())
                 .collect(),
@@ -367,14 +367,14 @@ impl Settings {
   // beside the repository).
   "worktrees_dir": {worktrees_dir},
 
-  // What Agent Usage (Ctrl+Shift+U) types at each agent, by program name:
+  // What Agent Usage (F8) types at each agent, by program name:
   // the agents only show their limits from inside their own session.
   "usage_slash": {usage_slash},
 
   // Or, a command per agent that prints what it has used of its plan, as JSON:
   //   {{"plan": "Max", "percent": 62, "detail": "1.2M tokens", "reset": "in 3h"}}
   // for example  "usage_commands": {{ "claude": "my-claude-usage" }}. Set, it
-  // is shown by Agent Usage instead, and as the chip in the header.
+  // is shown by Agent Usage (F8) instead, and as the chip in the header.
   "usage_commands": {usage_commands},
 
   // What Search Project leaves out: a bare name matches a folder anywhere,
@@ -388,7 +388,7 @@ impl Settings {
 
   // Key bindings, command id to chord. Only bindings that differ from the
   // defaults need listing, for example  "keys": {{ "save": "Ctrl+D" }}.
-  // Chords are Ctrl/Alt/Shift + a key: "Ctrl+Shift+F", "Ctrl+-", "Alt+Left",
+  // Chords are Ctrl/Alt/Shift + a key: "F3", "Ctrl+-", "Alt+Left",
   // "F12", or a bare key like "F" for the follow pane. The commands and
   // their defaults (see also {docs}guides/keys/):
 {reference}
@@ -502,7 +502,7 @@ mod tests {
         let save = settings.chord(Command::Save).unwrap().clone();
         assert_eq!(settings.command(&save), Some(Command::Save));
         // Ctrl+Shift+F is Search, not a Ctrl+F with a stray Shift.
-        let search: Chord = "Ctrl+Shift+F".parse().unwrap();
+        let search: Chord = "F3".parse().unwrap();
         assert_eq!(settings.command(&search), Some(Command::SearchProject));
         let live: Chord = "F".parse().unwrap();
         assert_eq!(settings.command(&live), Some(Command::FollowLive));
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn a_bad_chord_keeps_its_default_is_reported_and_survives_a_save() {
         let settings: Settings =
-            serde_json::from_str(r#"{"keys":{"save":"Ctrl+Shift+S","quit":"Ctrl+"}}"#).unwrap();
+            serde_json::from_str(r#"{"keys":{"save":"Ctrl+D","quit":"Ctrl+"}}"#).unwrap();
         assert_eq!(settings.chord(Command::Quit).unwrap().to_string(), "Ctrl+Q");
         let complaint = settings.binding_complaint().unwrap();
         assert!(

@@ -47,7 +47,7 @@ this edit added.
 
 ## CHANGES
 
-++ctrl+shift+g++ opens CHANGES: what the branch differs from `main` by, one
+++f4++ opens CHANGES: what the branch differs from `main` by, one
 row a file — `A` added, `M` modified, `D` deleted, `U` untracked — with its
 counts, and the totals in the footer. It is the *result*; the timeline is
 the *history*. ++enter++ on a row opens that file's whole diff in the follow

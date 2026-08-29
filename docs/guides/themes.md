@@ -9,7 +9,7 @@ beside it. Any other is a VS Code colour theme JSON — the file a theme
 extension carries under `themes/` — dropped into `~/.config/ycode/themes/`.
 Its `colors` drive the chrome and the agent pane's palette, its
 `tokenColors` the syntax; whatever it leaves out keeps Dark Modern's value.
-++ctrl+shift+t++ lists what is there and switches; the choice is saved as
+++f9++ lists what is there and switches; the choice is saved as
 `theme`.
 
 Syntax colours come from syntect's grammars, which cover the usual

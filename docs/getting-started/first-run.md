@@ -25,7 +25,7 @@ the agent: talk to it.
 When it edits a file, the FOLLOW pane shows the diff of that edit and the
 status bar counts one unreviewed. ++f6++ moves the keyboard to the follow
 pane; ++enter++ marks the edit reviewed and moves to the next one;
-++ctrl+shift+g++ shows what the whole branch differs from `main` by.
+++f4++ shows what the whole branch differs from `main` by.
 
 That is the loop. The rest is in the guides:
 

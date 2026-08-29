@@ -91,7 +91,7 @@ graphics stack, and git is driven through its own CLI.
 
 ## The terminal
 
-Any terminal works. Telling ++ctrl+shift+s++ from ++ctrl+s++ needs the kitty
-keyboard protocol — Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later have
-it. Without it the editor says so in the status bar, and the `Ctrl+Shift`
-chords can be rebound in [settings](../guides/settings.md).
+Any terminal works: the default keys are function keys and plain `Ctrl`
+chords, which every terminal sends. Where the kitty keyboard protocol is
+there — Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later — the agent in
+the pane gets it too.

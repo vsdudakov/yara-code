@@ -8,7 +8,7 @@ description: Project search and the command palette in Yara Code — Ctrl+Shift+
 
 ![Project search](../assets/shots/search.svg)
 
-++ctrl+shift+f++ opens SEARCH PROJECT. Type; every line containing the
+++f3++ opens SEARCH PROJECT. Type; every line containing the
 text, in any file under the project, is listed as `path:line  text`. The
 footer counts matches and files and names what was left out —
 `search_exclude` in [settings](settings.md), `target`, `node_modules` and
@@ -20,7 +20,7 @@ hundred hits.
 
 ![The command palette](../assets/shots/palette.svg)
 
-++ctrl+shift+p++ opens the COMMAND PALETTE: every command with its chord on
+++f5++ opens the COMMAND PALETTE: every command with its chord on
 the right, found by a few letters — `tf` for Toggle Files. ++enter++ runs
 it. The menus (++f10++ for File, ++shift+f1++ for Help) hold the same
 commands in the order a menu bar would.

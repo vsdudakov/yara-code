@@ -1772,6 +1772,11 @@ impl App {
             Command::ScrubForward if self.focus == Focus::Files => {}
             Command::FollowLive | Command::ToggleView if self.focus == Focus::Files => {}
             Command::Changes => self.overlay = Some(Overlay::Changes(0)),
+            // A task is its folders, so the first thing a task without any
+            // needs is one.
+            Command::NewTab if self.project().is_none() => {
+                self.overlay = Some(Overlay::OpenFolder(String::new()))
+            }
             Command::NewTab => self.overlay = Some(Overlay::NewTab(String::new())),
             Command::RenameTab => self.overlay = Some(Overlay::RenameTab(String::new())),
             Command::CloseTab => {

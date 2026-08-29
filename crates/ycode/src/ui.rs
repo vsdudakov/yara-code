@@ -605,7 +605,13 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let lines = if rows.is_empty() {
-        vec![Line::styled("  open a folder: ycode <path>", dim)]
+        vec![Line::styled(
+            format!(
+                "  nothing yet — {} open a folder, or ycode <path>",
+                app.hint(Command::OpenFolder)
+            ),
+            dim,
+        )]
     } else {
         rows
     };

@@ -1359,3 +1359,28 @@ fn a_task_watches_folders_that_are_no_repository_at_all() {
     assert!(frame(&mut app)[0].contains(" second look  [+]"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_new_task_without_a_project_asks_for_a_folder() {
+    let repo = Repo::new("yara-frame-newtask-empty");
+    let mut app = App::with_settings(None, Settings::default(), Theme::default());
+    app.handle_key(key(KeyCode::F(7)));
+    assert!(
+        text(&mut app).contains("OPEN FOLDER"),
+        "a task needs a folder first"
+    );
+    let config = std::env::temp_dir().join(format!("yara-newtask-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    for c in repo.0.to_string_lossy().chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&config);
+    assert_eq!(app.project(), Some(repo.0.as_path()));
+    assert_eq!(
+        app.sessions.len(),
+        1,
+        "it opened here rather than in a new tab"
+    );
+}

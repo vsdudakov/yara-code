@@ -519,6 +519,24 @@ fn files_open_in_the_editor_type_save_and_close_back_to_follow() {
     app.handle_key(ctrl('s'));
     let all = text(&mut app);
     assert!(all.contains("✓ saved"), "{all}");
+    // The editor's own chords still reach the editor from a file: the tree
+    // opens, the palette opens, a plain letter is typing.
+    app.handle_key(ctrl('b'));
+    assert!(!app.show_sidebar, "the tree hid, from inside the file");
+    app.handle_key(ctrl('b'));
+    assert!(app.show_sidebar && app.focus == Focus::Files);
+    app.focus = Focus::Editor;
+    app.handle_key(key(KeyCode::F(5)));
+    assert!(matches!(app.overlay, Some(Overlay::Palette(..))));
+    app.handle_key(key(KeyCode::Esc));
+    let before = app.editor.as_ref().unwrap().text.clone();
+    app.handle_key(key(KeyCode::Char('v')));
+    assert_ne!(
+        app.editor.as_ref().unwrap().text,
+        before,
+        "a letter is typing"
+    );
+    app.handle_key(ctrl('z'));
     assert!(std::fs::read_to_string(repo.0.join("src/main.rs"))
         .unwrap()
         .starts_with("f\nfn main"));

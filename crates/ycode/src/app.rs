@@ -1731,18 +1731,12 @@ impl App {
             }
         }
         if self.focus == Focus::Editor {
-            let editors_own = matches!(
-                command,
-                Some(
-                    Command::Save
-                        | Command::Close
-                        | Command::Quit
-                        | Command::Undo
-                        | Command::Redo
-                        | Command::Copy
-                        | Command::Paste
-                )
-            ) || command.is_some_and(|_| shell_has_no_use_for(&chord));
+            // In a file, every key is typing but Escape, which closes it,
+            // and the bound Ctrl and Alt chords and function keys, which
+            // are the editor's wherever the keyboard is.
+            let editors_own = command == Some(Command::Close)
+                || (command.is_some()
+                    && (chord.mods.ctrl || chord.mods.alt || shell_has_no_use_for(&chord)));
             if !editors_own {
                 self.edit_key(key, &chord);
                 return;

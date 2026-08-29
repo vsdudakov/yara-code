@@ -220,6 +220,8 @@ pub struct App {
     /// The RECENT row the start page's cursor is on.
     pub start_row: usize,
     pub hits: Hits,
+    /// The editor caret is drawn on alternate ticks.
+    pub caret_on: bool,
     pub updates: Updates,
     usage_poller: Poller,
     /// The agents' figures and how many seconds old they are.
@@ -508,6 +510,7 @@ impl App {
             overlay: None,
             start_row: 0,
             hits: Hits::default(),
+            caret_on: true,
             updates: Updates::default(),
             usage_poller: Poller::default(),
             usage: None,
@@ -568,6 +571,13 @@ impl App {
             Ok(pty) => self.agent = Some(pty),
             Err(e) => self.note = Some(e),
         }
+    }
+
+    /// One step of the caret's blink; a key press lands it on again so the
+    /// caret is there when it has just moved.
+    pub fn blink(&mut self) {
+        self.caret_on = !self.caret_on;
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Takes the dirty flag, so a frame is drawn once per change.
@@ -752,6 +762,7 @@ impl App {
 
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.note = None;
+        self.caret_on = true;
         let Some(chord) = chord_of(key) else { return };
         let closes = self.settings.command(&chord) == Some(Command::Close);
         match self.overlay.clone() {

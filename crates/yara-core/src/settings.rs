@@ -142,6 +142,8 @@ pub struct Settings {
     pub show_sidebar: bool,
     /// Edits shown on the timeline strip before it windows around the cursor.
     pub timeline_ticks: usize,
+    /// One step of the editor caret's blink, in milliseconds; 0 keeps it on.
+    pub cursor_blink_ms: u64,
     /// How often the working tree is looked at for the agent's edits, in
     /// milliseconds.
     pub refresh_ms: u64,
@@ -182,6 +184,7 @@ impl Default for Settings {
             sidebar_width: 30,
             show_sidebar: false,
             timeline_ticks: 12,
+            cursor_blink_ms: 500,
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
@@ -357,6 +360,9 @@ impl Settings {
   // Edits on the timeline strip before it windows around the current one.
   "timeline_ticks": {timeline_ticks},
 
+  // One step of the editor caret's blink, in milliseconds; 0 keeps it on.
+  "cursor_blink_ms": {cursor_blink_ms},
+
   // How often the working tree is checked for the agent's edits, in
   // milliseconds, and the branch CHANGES are measured against ("" = the one
   // the main working copy has checked out).
@@ -405,6 +411,7 @@ impl Settings {
             sidebar_width = json(&self.sidebar_width),
             show_sidebar = json(&self.show_sidebar),
             timeline_ticks = json(&self.timeline_ticks),
+            cursor_blink_ms = json(&self.cursor_blink_ms),
             refresh_ms = json(&self.refresh_ms),
             base_branch = json(&self.base_branch),
             worktrees_dir = json(&self.worktrees_dir),
@@ -601,6 +608,7 @@ mod tests {
             "\"sidebar_width\"",
             "\"show_sidebar\"",
             "\"timeline_ticks\"",
+            "\"cursor_blink_ms\"",
             "\"refresh_ms\"",
             "\"base_branch\"",
             "\"worktrees_dir\"",

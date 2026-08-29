@@ -494,6 +494,15 @@ fn files_open_in_the_editor_type_save_and_close_back_to_follow() {
     assert!(all.contains("src/main.rs") && all.contains("Rust"), "{all}");
     assert!(all.contains("    1  fn main() {"));
     assert!(!all.contains("main.rs ●"), "clean");
+    // The caret is a drawn cell that blinks with the app's own clock.
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let (cx, cy) = (app.hits.editor.x, app.hits.editor.y);
+    let lit = terminal.backend().buffer()[(cx, cy)].bg;
+    assert_eq!(lit, ycode::theme::color(app.theme.ui.cursor));
+    app.blink();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_ne!(terminal.backend().buffer()[(cx, cy)].bg, lit);
 
     // Typing goes into the file — `f` is not follow's here.
     app.handle_key(key(KeyCode::Char('f')));

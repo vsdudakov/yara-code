@@ -76,12 +76,18 @@ fn main() -> io::Result<()> {
 
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> io::Result<()> {
     let refresh_every = Duration::from_millis(app.settings.refresh_ms.max(100));
+    let blink_every = Duration::from_millis(app.settings.cursor_blink_ms);
     let mut last_refresh = Instant::now();
+    let mut last_blink = Instant::now();
     let mut redraw = true;
     while !app.should_quit {
         if last_refresh.elapsed() >= refresh_every {
             app.refresh();
             last_refresh = Instant::now();
+        }
+        if !blink_every.is_zero() && last_blink.elapsed() >= blink_every {
+            app.blink();
+            last_blink = Instant::now();
         }
         app.collect();
         if redraw || app.take_dirty() {

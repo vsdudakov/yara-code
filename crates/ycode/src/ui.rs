@@ -1061,11 +1061,15 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::from(Span::styled(format!("{number:>5}  "), dim)));
     }
     frame.render_widget(Paragraph::new(lines), body);
-    if focused && line >= top {
+    // The caret is drawn rather than the terminal's: a terminal's own
+    // cursor stops blinking under the agent's constant redraws.
+    if focused && line >= top && app.caret_on {
         let x = body.x + 7 + col as u16;
         let y = body.y + (line - top) as u16;
         if x < body.right() && y < body.bottom() {
-            frame.set_cursor_position((x, y));
+            let cell = &mut frame.buffer_mut()[(x, y)];
+            cell.set_bg(color(ui.cursor));
+            cell.set_fg(color(ui.bg));
         }
     }
     app.scroll = new_scroll;

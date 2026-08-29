@@ -276,9 +276,52 @@ pub fn unified(old: &str, new: &str) -> String {
 #[derive(Default)]
 pub struct Watcher {
     seen: Option<BTreeMap<String, String>>,
+    /// The working tree's files and their modification times as of the last
+    /// poll, so git is only asked when something on disk actually moved.
+    fingerprint: Option<u64>,
+}
+
+/// Every file under `root` with when it was last written, folded into one
+/// number. Cheap next to a git process: no process at all.
+fn fingerprint(root: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if name == ".git" || name == "target" || name == "node_modules" {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(path);
+            } else {
+                path.hash(&mut hasher);
+                meta.len().hash(&mut hasher);
+                if let Ok(modified) = meta.modified() {
+                    modified.hash(&mut hasher);
+                }
+            }
+        }
+    }
+    hasher.finish()
 }
 
 impl Watcher {
+    /// Whether anything on disk moved since the last poll; the first look
+    /// counts as movement, so the stock is taken.
+    pub fn moved(&mut self, repo: &Repo) -> bool {
+        let now = fingerprint(&repo.root);
+        let moved = self.fingerprint != Some(now);
+        self.fingerprint = Some(now);
+        moved
+    }
+
     pub fn poll(&mut self, repo: &Repo) -> Vec<EditEvent> {
         let Ok(changes) = changes(repo) else {
             return Vec::new();
@@ -461,5 +504,10 @@ mod tests {
         let edits = watcher.poll(&repo);
         assert_eq!(edits.len(), 1);
         assert_eq!((edits[0].added(), edits[0].removed()), (1, 1));
+        // With nothing written since, nothing moved and git is not asked.
+        assert!(watcher.moved(&repo), "the first look takes stock");
+        assert!(!watcher.moved(&repo));
+        dir.file("b.txt", "new\n");
+        assert!(watcher.moved(&repo));
     }
 }

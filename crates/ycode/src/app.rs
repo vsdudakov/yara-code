@@ -839,6 +839,10 @@ impl App {
     pub fn refresh(&mut self) {
         for session in &mut self.sessions {
             let Some(repo) = &session.repo else { continue };
+            // Only a working tree that moved is worth a git process.
+            if !session.watcher.moved(repo) {
+                continue;
+            }
             for edit in session.watcher.poll(repo) {
                 session.follow.push(edit);
             }

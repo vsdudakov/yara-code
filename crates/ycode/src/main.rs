@@ -1,7 +1,7 @@
 //! The `ycode` command: the terminal editor, opened on the folder
 //! given on the command line or on no project at all.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -93,6 +93,10 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
         if redraw || app.take_dirty() {
             terminal.draw(|frame| ui::draw(frame, app))?;
             redraw = false;
+        }
+        if let Some(escape) = app.osc52.take() {
+            let mut out = io::stdout();
+            let _ = out.write_all(escape.as_bytes()).and_then(|_| out.flush());
         }
         if event::poll(IDLE)? {
             match event::read()? {

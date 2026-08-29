@@ -963,3 +963,48 @@ fn a_file_opened_from_the_tree_by_mouse_scrolls_both_ways_and_a_click_keeps_it_o
     assert!(app.editor.is_some(), "a click in the editor keeps it open");
     assert_eq!(app.focus, Focus::Editor);
 }
+
+#[test]
+fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-select");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.open_file(&repo.0.join("src/main.rs"));
+    frame(&mut app);
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let e = app.hits.editor;
+    app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x, e.y));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        e.x + 30,
+        e.y + 1,
+    ));
+    let painted = {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        terminal.backend().buffer()[(e.x + 2, e.y)].bg
+    };
+    assert_eq!(
+        painted,
+        ycode::theme::color(app.theme.ui.selected_bg),
+        "lit"
+    );
+    assert_eq!(
+        app.selected_text().as_deref(),
+        Some("fn main() {\n    let x = 1;")
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app.note.as_deref().unwrap().starts_with("copied 2 lines"));
+    assert!(app.selection.is_none());
+    // Typing drops a selection.
+    app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x, e.y));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), e.x + 3, e.y));
+    app.handle_key(key(KeyCode::Right));
+    assert!(app.selection.is_none());
+}

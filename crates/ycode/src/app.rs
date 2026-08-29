@@ -220,6 +220,13 @@ pub struct App {
     /// The RECENT row the start page's cursor is on.
     pub start_row: usize,
     pub hits: Hits,
+    /// The cells the mouse dragged over, as (column, row) corners, and the
+    /// text of the last frame they are read from.
+    pub selection: Option<((u16, u16), (u16, u16))>,
+    pub last_frame: Vec<String>,
+    /// An OSC 52 escape waiting to be written to the terminal — a copy made
+    /// where no clipboard tool answered.
+    pub osc52: Option<String>,
     /// The editor caret is drawn on alternate ticks.
     pub caret_on: bool,
     pub updates: Updates,
@@ -342,6 +349,68 @@ impl App {
         let _ = self.settings.save();
     }
 
+    /// The text the mouse dragged over, read off the last frame row by row,
+    /// trailing blanks dropped. In the file being edited the gutter is left
+    /// out, so what is copied is the code.
+    pub fn selected_text(&self) -> Option<String> {
+        let ((x0, y0), (x1, y1)) = self.selection?;
+        if (x0, y0) == (x1, y1) {
+            return None;
+        }
+        let (top, bottom) = (y0.min(y1), y0.max(y1));
+        let (left, right) = if y0 == y1 {
+            (x0.min(x1), x0.max(x1))
+        } else {
+            (0, u16::MAX)
+        };
+        let editor = self.hits.editor;
+        let in_editor = self.editor.is_some() && hit(editor, x0, y0) && hit(editor, x1, y1);
+        let lines: Vec<String> = (top..=bottom)
+            .filter_map(|y| {
+                let row: Vec<char> = self.last_frame.get(y as usize)?.chars().collect();
+                let from = if in_editor { editor.x.max(left) } else { left } as usize;
+                let to = if in_editor {
+                    (editor.right() - 1).min(right)
+                } else {
+                    right
+                } as usize;
+                let to = to.min(row.len().saturating_sub(1));
+                Some(
+                    row.get(from..=to)
+                        .unwrap_or(&[])
+                        .iter()
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string(),
+                )
+            })
+            .collect();
+        Some(lines.join("\n"))
+    }
+
+    fn copy(&mut self) {
+        let Some(text) = self.selected_text() else {
+            self.note = Some("nothing selected".into());
+            return;
+        };
+        if !yara_core::clipboard::copy(&text) {
+            self.osc52 = Some(yara_core::clipboard::osc52(&text));
+        }
+        self.note = Some(format!("copied {} lines", text.lines().count().max(1)));
+        self.selection = None;
+    }
+
+    fn paste(&mut self) {
+        let Some(text) = yara_core::clipboard::paste() else {
+            self.note = Some("nothing to paste".into());
+            return;
+        };
+        self.caret_moved = true;
+        if let Some(buffer) = self.editor.as_mut() {
+            buffer.insert(&text.replace("\r\n", "\n"));
+        }
+    }
+
     /// The wheel, over whatever is under it: the agent's own scrollback, the
     /// diff, the file being edited, the tree, a list.
     fn wheel(&mut self, up: bool, x: u16, y: u16) {
@@ -395,7 +464,17 @@ impl App {
         let up = match mouse.kind {
             MouseEventKind::ScrollUp => Some(true),
             MouseEventKind::ScrollDown => Some(false),
-            MouseEventKind::Down(MouseButton::Left) => None,
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((_, end)) = self.selection.as_mut() {
+                    *end = (x, y);
+                }
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // A press starts a selection; it becomes one when dragged.
+                self.selection = Some(((x, y), (x, y)));
+                None
+            }
             _ => return,
         };
         if let Some(up) = up {
@@ -510,6 +589,9 @@ impl App {
             overlay: None,
             start_row: 0,
             hits: Hits::default(),
+            selection: None,
+            last_frame: Vec::new(),
+            osc52: None,
             caret_on: true,
             updates: Updates::default(),
             usage_poller: Poller::default(),
@@ -763,6 +845,12 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) {
         self.note = None;
         self.caret_on = true;
+        // Typing drops a selection, as it does everywhere; a copy is the one
+        // key that wants it.
+        let chord_now = chord_of(key);
+        if chord_now.as_ref().and_then(|c| self.settings.command(c)) != Some(Command::Copy) {
+            self.selection = None;
+        }
         let Some(chord) = chord_of(key) else { return };
         let closes = self.settings.command(&chord) == Some(Command::Close);
         match self.overlay.clone() {
@@ -1023,6 +1111,12 @@ impl App {
         // function key, is the editor's, unless the settings say the agent
         // uses it itself.
         if self.focus == Focus::Agent {
+            // Ctrl+C with something selected is a copy; with nothing it
+            // stays the interrupt every program expects.
+            if command == Some(Command::Copy) && self.selected_text().is_some() {
+                self.copy();
+                return;
+            }
             let editors = command.is_some()
                 && (chord.mods.ctrl || chord.mods.alt || shell_has_no_use_for(&chord))
                 && !self.settings.agent_keys.contains(&chord);
@@ -1036,7 +1130,14 @@ impl App {
         if self.focus == Focus::Editor {
             let editors_own = matches!(
                 command,
-                Some(Command::Save | Command::Close | Command::Undo | Command::Redo)
+                Some(
+                    Command::Save
+                        | Command::Close
+                        | Command::Undo
+                        | Command::Redo
+                        | Command::Copy
+                        | Command::Paste
+                )
             ) || command.is_some_and(|_| shell_has_no_use_for(&chord));
             if !editors_own {
                 self.edit_key(key, &chord);
@@ -1118,6 +1219,8 @@ impl App {
                     b.redo()
                 }
             }
+            Command::Copy => self.copy(),
+            Command::Paste => self.paste(),
             Command::QuickOpen => self.overlay = Some(Overlay::QuickOpen(String::new(), 0)),
             Command::CommandPalette => self.overlay = Some(Overlay::Palette(String::new(), 0)),
             Command::SearchProject => {

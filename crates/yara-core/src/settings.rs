@@ -119,6 +119,8 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::RenameTab => "F2",
         Command::Undo => "Ctrl+Z",
         Command::Redo => "Ctrl+Y",
+        Command::Copy => "Ctrl+C",
+        Command::Paste => "Ctrl+V",
         Command::FollowLive => "F",
         Command::ScrubBack => "Left",
         Command::ScrubForward => "Right",
@@ -198,10 +200,12 @@ impl Default for Settings {
             .collect(),
             usage_commands: BTreeMap::new(),
             search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
-            agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+O", "Ctrl+W", "Ctrl+Y"]
-                .iter()
-                .filter_map(|c| c.parse().ok())
-                .collect(),
+            agent_keys: [
+                "Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+O", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V",
+            ]
+            .iter()
+            .filter_map(|c| c.parse().ok())
+            .collect(),
             keys: Keys::default(),
             recent_projects: Vec::new(),
             unreadable: false,

@@ -3,6 +3,7 @@
 //! module at a time, each with its tests; nothing here may depend on it.
 
 pub mod buffer;
+pub mod clipboard;
 pub mod command;
 pub mod follow;
 pub mod fuzzy;

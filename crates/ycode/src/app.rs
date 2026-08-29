@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use yara_core::buffer::Buffer;
 use yara_core::command::{self, Chord, Command, Key, FILE_MENU, HELP_MENU};
@@ -55,8 +55,15 @@ pub enum Overlay {
     /// A name being typed for a new file, made in the folder under the
     /// FILES cursor.
     NewFile(String),
-    /// A folder path being typed: it opens the task, or joins it.
-    AddFolder(String),
+    /// A name being typed for a new folder, made in the same place.
+    NewFolder(String),
+    /// Walking the filesystem for a folder to add: where the walk stands,
+    /// the row the cursor is on, and what has been typed to narrow it.
+    AddFolder {
+        dir: PathBuf,
+        row: usize,
+        filter: String,
+    },
     /// Go to file: what was typed, and the row the cursor is on.
     QuickOpen(String, usize),
     /// The command palette: what was typed, and the row the cursor is on.
@@ -75,6 +82,8 @@ pub enum Overlay {
     Themes(usize),
     /// The menu a right click on a tab drops: which tab, and the row.
     TabMenu(usize, usize),
+    /// The menu a right click in the tree drops, with the row it is on.
+    TreeMenu(usize),
     /// The file being edited has unsaved changes and is about to close:
     /// save it, drop it, or stay. `quit` when the whole editor is closing.
     CloseFile { quit: bool },
@@ -131,6 +140,9 @@ pub struct Updates {
 
 /// What a right click on a tab offers, in order.
 pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete worktree", "Close"];
+
+/// What a right click in the tree offers.
+pub const TREE_MENU: [Command; 2] = [Command::NewFile, Command::NewFolder];
 
 /// The menus in the order the header shows them.
 pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HELP_MENU)];
@@ -429,6 +441,33 @@ impl App {
         if self.autostart && self.agent.is_none() && self.project().is_some() {
             self.start_agent();
         }
+    }
+
+    /// The folders inside `dir` that the walk offers, those whose name
+    /// carries what has been typed first among them.
+    pub fn browse_entries(dir: &std::path::Path, filter: &str) -> Vec<PathBuf> {
+        let filter = filter.to_lowercase();
+        tree::list_dir(dir)
+            .into_iter()
+            .filter(|(_, is_dir)| *is_dir)
+            .map(|(path, _)| path)
+            .filter(|path| {
+                filter.is_empty()
+                    || path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains(&filter))
+            })
+            .collect()
+    }
+
+    /// Where a walk for a folder starts: beside the task's main folder, or
+    /// at home.
+    fn browse_from(&self) -> PathBuf {
+        self.project()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .or_else(yara_core::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"))
     }
 
     /// Adds a folder to the task: another repository's worktree, most
@@ -734,7 +773,22 @@ impl App {
                     .iter()
                     .find(|(r, _)| hit(*r, x, y))
                     .map(|(_, i)| *i);
-                self.overlay = tab.map(|tab| Overlay::TabMenu(tab, 0));
+                if let Some(tab) = tab {
+                    self.overlay = Some(Overlay::TabMenu(tab, 0));
+                } else if hit(self.hits.files, x, y) {
+                    // The row under the pointer is where a new file goes.
+                    let row = self
+                        .hits
+                        .file_rows
+                        .iter()
+                        .find(|(r, _)| hit(*r, x, y))
+                        .map(|(_, i)| *i);
+                    self.focus = Focus::Files;
+                    if let Some((tree, row)) = self.tree.as_mut().zip(row) {
+                        tree.selected = row;
+                    }
+                    self.overlay = Some(Overlay::TreeMenu(0));
+                }
                 return;
             }
             _ => return,
@@ -779,6 +833,16 @@ impl App {
                     }
                     Some(Overlay::TabMenu(tab, _)) => {
                         self.tab_menu_pick(tab, row);
+                        return;
+                    }
+                    Some(Overlay::TreeMenu(_)) => {
+                        self.overlay = None;
+                        self.execute(TREE_MENU[row.min(TREE_MENU.len() - 1)]);
+                        return;
+                    }
+                    Some(Overlay::AddFolder { dir, filter, .. }) => {
+                        self.overlay = Some(Overlay::AddFolder { dir, row, filter });
+                        self.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
                         return;
                     }
                     Some(Overlay::QuickOpen(q, _)) => Some(Overlay::QuickOpen(q, row)),
@@ -1159,7 +1223,7 @@ impl App {
 
     /// A new, empty file in the folder under the FILES cursor — or the
     /// project root — opened for editing. Nothing is overwritten.
-    fn new_file(&mut self, name: &str) {
+    fn new_entry(&mut self, name: &str, folder: bool) {
         if name.is_empty() {
             return;
         }
@@ -1192,12 +1256,20 @@ impl App {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        match std::fs::write(&path, "") {
+        let made = if folder {
+            std::fs::create_dir_all(&path)
+        } else {
+            std::fs::write(&path, "")
+        };
+        match made {
             Ok(()) => {
                 if let Some(tree) = self.tree.as_mut() {
                     tree.rebuild();
+                    tree.reveal(&path);
                 }
-                self.open_file(&path);
+                if !folder {
+                    self.open_file(&path);
+                }
             }
             Err(e) => self.note = Some(format!("{}: {e}", path.display())),
         }
@@ -1390,9 +1462,94 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::AddFolder {
+                dir,
+                row,
+                mut filter,
+            }) => {
+                let entries = Self::browse_entries(&dir, &filter);
+                let last = entries.len() + 1;
+                let go = |app: &mut Self, row: usize| match row {
+                    0 => {
+                        app.overlay = None;
+                        let path = dir.to_string_lossy().into_owned();
+                        app.add_folder(&path);
+                    }
+                    1 => {
+                        let up = dir.parent().unwrap_or(&dir).to_path_buf();
+                        app.overlay = Some(Overlay::AddFolder {
+                            dir: up,
+                            row: 0,
+                            filter: String::new(),
+                        });
+                    }
+                    n => {
+                        app.overlay = Some(Overlay::AddFolder {
+                            dir: entries[n - 2].clone(),
+                            row: 0,
+                            filter: String::new(),
+                        })
+                    }
+                };
+                match key.code {
+                    KeyCode::Up => {
+                        self.overlay = Some(Overlay::AddFolder {
+                            dir,
+                            row: row.saturating_sub(1),
+                            filter,
+                        })
+                    }
+                    KeyCode::Down => {
+                        self.overlay = Some(Overlay::AddFolder {
+                            dir,
+                            row: (row + 1).min(last),
+                            filter,
+                        })
+                    }
+                    KeyCode::Enter | KeyCode::Right => go(self, row.min(last)),
+                    KeyCode::Left => go(self, 1),
+                    _ if closes => self.overlay = None,
+                    KeyCode::Backspace => {
+                        if filter.pop().is_none() {
+                            go(self, 1);
+                        } else {
+                            self.overlay = Some(Overlay::AddFolder {
+                                dir,
+                                row: 2,
+                                filter,
+                            });
+                        }
+                    }
+                    KeyCode::Char(c) if !chord.mods.ctrl && !chord.mods.alt => {
+                        filter.push(c);
+                        self.overlay = Some(Overlay::AddFolder {
+                            dir,
+                            row: 2,
+                            filter,
+                        });
+                    }
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::Usage) => {
                 if closes {
                     self.overlay = None;
+                }
+                return;
+            }
+            Some(Overlay::TreeMenu(row)) => {
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::TreeMenu(row.saturating_sub(1))),
+                    KeyCode::Down => {
+                        self.overlay = Some(Overlay::TreeMenu((row + 1).min(TREE_MENU.len() - 1)))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        self.execute(TREE_MENU[row.min(TREE_MENU.len() - 1)]);
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
                 }
                 return;
             }
@@ -1495,13 +1652,13 @@ impl App {
                 Overlay::NewTab(mut text)
                 | Overlay::RenameTab(mut text)
                 | Overlay::NewFile(mut text)
-                | Overlay::AddFolder(mut text),
+                | Overlay::NewFolder(mut text),
             ) => {
                 let again = |text: String| match self.overlay.as_ref().unwrap() {
                     Overlay::NewTab(_) => Overlay::NewTab(text),
                     Overlay::RenameTab(_) => Overlay::RenameTab(text),
-                    Overlay::NewFile(_) => Overlay::NewFile(text),
-                    _ => Overlay::AddFolder(text),
+                    Overlay::NewFolder(_) => Overlay::NewFolder(text),
+                    _ => Overlay::NewFile(text),
                 };
                 match key.code {
                     KeyCode::Enter => {
@@ -1510,8 +1667,8 @@ impl App {
                         match which {
                             Overlay::NewTab(_) => self.new_tab(&text),
                             Overlay::RenameTab(_) => self.name = (!text.is_empty()).then_some(text),
-                            Overlay::NewFile(_) => self.new_file(&text),
-                            _ => self.add_folder(&text),
+                            Overlay::NewFolder(_) => self.new_entry(&text, true),
+                            _ => self.new_entry(&text, false),
                         }
                     }
                     _ if closes => self.overlay = None,
@@ -1699,7 +1856,14 @@ impl App {
             Command::HelpMenu => self.overlay = Some(Overlay::Menu(1, 0)),
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
             Command::NewFile => self.overlay = Some(Overlay::NewFile(String::new())),
-            Command::AddFolder => self.overlay = Some(Overlay::AddFolder(String::new())),
+            Command::NewFolder => self.overlay = Some(Overlay::NewFolder(String::new())),
+            Command::AddFolder => {
+                self.overlay = Some(Overlay::AddFolder {
+                    dir: self.browse_from(),
+                    row: 0,
+                    filter: String::new(),
+                })
+            }
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => self.open_file(&path),
                 Err(e) => self.note = Some(e.to_string()),
@@ -1778,9 +1942,7 @@ impl App {
             Command::Changes => self.overlay = Some(Overlay::Changes(0)),
             // A task is its folders, so the first thing a task without any
             // needs is one.
-            Command::NewTab if self.project().is_none() => {
-                self.overlay = Some(Overlay::AddFolder(String::new()))
-            }
+            Command::NewTab if self.project().is_none() => self.execute(Command::AddFolder),
             Command::NewTab => self.overlay = Some(Overlay::NewTab(String::new())),
             Command::RenameTab => self.overlay = Some(Overlay::RenameTab(String::new())),
             Command::CloseTab => {

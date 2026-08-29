@@ -89,6 +89,8 @@ impl<'de> Deserialize<'de> for Keys {
 pub fn default_chord(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::NewFile => "Ctrl+N",
+        // New Folder is the tree's own, on a right click.
+        Command::NewFolder => return None,
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
         Command::Settings => "F12",
@@ -507,6 +509,7 @@ mod tests {
                     | Command::SwapPanes
                     | Command::HelpMenu
                     | Command::AddFolder
+                    | Command::NewFolder
                     | Command::Documentation
             );
             assert_eq!(

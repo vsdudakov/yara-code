@@ -38,5 +38,6 @@ timeline too.
 
 ++ctrl+p++ finds a file by a few letters — `gd` finds `docs/guide.md` —
 and opens it. ++ctrl+n++ makes a new file, in the folder under the FILES
-cursor when the tree is open and at the root otherwise, and opens it.
-`File → Settings` opens `settings.json` the same way.
+cursor when the tree is open and at the root otherwise, and opens it; a
+right click in the tree offers **New File** and **New Folder** in the same
+place. `File → Settings` (++f12++) opens `settings.json` the same way.

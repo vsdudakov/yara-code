@@ -15,7 +15,7 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, ChangeRow, Focus, Folder, Hits, Overlay, View, MENUS, TAB_MENU};
+use crate::app::{App, ChangeRow, Focus, Folder, Hits, Overlay, View, MENUS, TAB_MENU, TREE_MENU};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -170,8 +170,12 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(Overlay::NewFile(text)) => {
             draw_prompt(frame, app, " NEW FILE ", "file name", &text, area)
         }
-        Some(Overlay::AddFolder(text)) => {
-            draw_prompt(frame, app, " ADD FOLDER ", "path of a folder", &text, area)
+        Some(Overlay::NewFolder(text)) => {
+            draw_prompt(frame, app, " NEW FOLDER ", "folder name", &text, area)
+        }
+        Some(Overlay::TreeMenu(row)) => draw_tree_menu(frame, app, row, area),
+        Some(Overlay::AddFolder { dir, row, filter }) => {
+            draw_browse(frame, app, &dir, row, &filter, area)
         }
         Some(Overlay::QuickOpen(query, row)) => draw_quick_open(frame, app, &query, row, area),
         Some(Overlay::Palette(query, row)) => draw_palette(frame, app, &query, row, area),
@@ -489,6 +493,33 @@ fn draw_usage(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The menu a right click in the tree drops, beside the tree.
+fn draw_tree_menu(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
+    let ui = app.theme.ui.clone();
+    let files = app.hits.files;
+    let width = 20u16.min(area.width);
+    let rect = Rect::new(
+        files.x.min(area.width.saturating_sub(width)),
+        (files.y + 1).min(area.height.saturating_sub(4)),
+        width,
+        TREE_MENU.len() as u16 + 2,
+    );
+    let block = Block::bordered()
+        .border_style(fg(ui.accent))
+        .style(base(&app.theme));
+    let inner = block.inner(rect);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let rows: Vec<Line> = TREE_MENU
+        .iter()
+        .map(|command| Line::raw(format!(" {}", command.label())))
+        .collect();
+    let lines = list_lines(app, rows, row, inner.height as usize);
+    app.hits.overlay = rect;
+    row_hits(app, inner, 0, TREE_MENU.len());
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 /// The menu a right click drops under a tab.
 fn draw_tab_menu(frame: &mut Frame, app: &mut App, tab: usize, row: usize, area: Rect) {
     let ui = app.theme.ui.clone();
@@ -668,6 +699,87 @@ fn draw_quick_open(frame: &mut Frame, app: &mut App, query: &str, row: usize, ar
         lines.push(Line::styled("  no such file", dim));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The walk for a folder to add: where it stands, what is inside, and the
+/// way back up.
+fn draw_browse(
+    frame: &mut Frame,
+    app: &mut App,
+    dir: &std::path::Path,
+    row: usize,
+    filter: &str,
+    area: Rect,
+) {
+    let ui = app.theme.ui.clone();
+    let dim = fg(ui.fg_dim);
+    let entries = App::browse_entries(dir, filter);
+    let inner = overlay_box(
+        frame,
+        app,
+        "ADD FOLDER",
+        72,
+        entries.len().min(12) as u16 + 4,
+        area,
+    );
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(" ", dim),
+            Span::styled(dir.display().to_string(), bold(ui.fg)),
+            Span::styled(format!("  {filter}"), fg(ui.accent)),
+            Span::styled("█", fg(ui.cursor)),
+        ]),
+        Line::raw(""),
+    ];
+    let mut rows = vec![
+        Line::from(vec![
+            Span::styled(" ＋ ", fg(ui.success)),
+            Span::raw(format!(
+                "add {}",
+                dir.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| dir.display().to_string())
+            )),
+        ]),
+        Line::styled(" ‥ up", dim),
+    ];
+    rows.extend(entries.iter().map(|path| {
+        Line::from(vec![
+            Span::styled(" ▸ ", dim),
+            Span::raw(
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+        ])
+    }));
+    let body_height = (inner.height as usize).saturating_sub(3);
+    let row = row.min(rows.len().saturating_sub(1));
+    let start = row.saturating_sub(body_height.saturating_sub(1));
+    lines.extend(list_lines(app, rows.clone(), row, body_height));
+    let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    row_hits(
+        app,
+        Rect::new(
+            list.x,
+            list.y + 2,
+            list.width,
+            list.height.saturating_sub(2),
+        ),
+        start,
+        rows.len(),
+    );
+    frame.render_widget(Paragraph::new(lines), list);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            format!(
+                " ⏎ open · type to narrow · {} close",
+                app.hint(Command::Close)
+            ),
+            dim,
+        )),
+        foot,
+    );
 }
 
 /// A one-line question in a box: what is being asked, and what has been

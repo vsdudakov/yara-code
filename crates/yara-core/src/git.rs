@@ -274,6 +274,10 @@ pub fn unified(old: &str, new: &str) -> String {
 /// number. Cheap next to reading them: no reading at all.
 fn fingerprint(root: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
+    // A folder the size of a home directory would cost a second a poll;
+    // past this many files the fingerprint is of what it managed to see.
+    const CAP: usize = 20_000;
+    let mut seen = 0usize;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -293,6 +297,10 @@ fn fingerprint(root: &Path) -> u64 {
                 meta.len().hash(&mut hasher);
                 if let Ok(modified) = meta.modified() {
                     modified.hash(&mut hasher);
+                }
+                seen += 1;
+                if seen == CAP {
+                    return hasher.finish();
                 }
             }
         }
@@ -332,7 +340,15 @@ impl Watcher {
                 .into_iter()
                 .map(|c| c.path)
                 .collect(),
-            None => tree::all_files(root),
+            // A folder outside git is read whole, so it is watched only
+            // while it is small enough to read.
+            None => {
+                let all = tree::all_files(root);
+                if all.len() > 2_000 {
+                    return Vec::new();
+                }
+                all
+            }
         };
         // A path put back the way it was is a change too, so what was seen
         // before is looked at again even when git no longer lists it.

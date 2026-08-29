@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub enum Command {
     // File.
     NewFile,
+    NewFolder,
     AddFolder,
     OpenRecent,
     Save,
@@ -59,6 +60,7 @@ impl Command {
     pub fn id(&self) -> &'static str {
         match self {
             Self::NewFile => "new_file",
+            Self::NewFolder => "new_folder",
             Self::AddFolder => "add_folder",
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
@@ -105,6 +107,7 @@ impl Command {
     pub fn label(&self) -> &'static str {
         match self {
             Self::NewFile => "New File",
+            Self::NewFolder => "New Folder",
             Self::AddFolder => "Add Folder to Task…",
             Self::OpenRecent => "Open Recent…",
             Self::Save => "Save",
@@ -146,6 +149,7 @@ impl Command {
 
 pub const ALL: &[Command] = &[
     Command::NewFile,
+    Command::NewFolder,
     Command::AddFolder,
     Command::OpenRecent,
     Command::Save,
@@ -191,8 +195,6 @@ pub const FILE_MENU: Menu = &[
     None,
     Some(Command::NewTab),
     Some(Command::AddFolder),
-    None,
-    Some(Command::NewFile),
     None,
     Some(Command::Settings),
     None,
@@ -506,7 +508,6 @@ mod tests {
                 Command::OpenRecent,
                 Command::NewTab,
                 Command::AddFolder,
-                Command::NewFile,
                 Command::Settings,
                 Command::Quit
             ]

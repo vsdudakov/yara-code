@@ -1197,12 +1197,29 @@ fn a_task_holds_a_folder_of_every_repository_it_touches() {
         Theme::default(),
     );
     app.focus = Focus::Follow;
+    // The walk starts beside the task's folder; type to narrow, Enter to
+    // step in, Enter on the first row to add what the walk stands on.
     app.execute(yara_core::command::Command::AddFolder);
-    for c in frontend.0.to_string_lossy().chars() {
+    assert!(matches!(app.overlay, Some(Overlay::AddFolder { .. })));
+    let name = frontend
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    for c in name.chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
+    let all = text(&mut app);
+    assert!(
+        all.contains("ADD FOLDER") && all.contains(&format!("▸ {name}")),
+        "{all}"
+    );
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.folders.len(), 2);
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.folders.len(), 2, "{:?}", app.note);
 
     // An edit in either folder lands on the one timeline, named by its folder.
     backend.file("src/main.rs", "fn main() { serve() }\n");
@@ -1371,9 +1388,19 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
     );
     let config = std::env::temp_dir().join(format!("yara-newtask-config-{}", std::process::id()));
     std::env::set_var("YARA_CONFIG_DIR", &config);
-    for c in repo.0.to_string_lossy().chars() {
+    // Start the walk in the folder that holds the repository.
+    app.overlay = Some(Overlay::AddFolder {
+        dir: repo.0.parent().unwrap().to_path_buf(),
+        row: 0,
+        filter: String::new(),
+    });
+    let name = repo.0.file_name().unwrap().to_string_lossy().into_owned();
+    for c in name.chars() {
         app.handle_key(key(KeyCode::Char(c)));
     }
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::Enter));
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&config);
@@ -1409,4 +1436,61 @@ fn settings_open_over_the_start_page() {
     assert!(text(&mut app).contains("the terminal editor for the agent loop"));
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&config);
+}
+
+#[test]
+fn the_tree_makes_files_and_folders_from_a_right_click() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-treemenu");
+    let mut app = App::with_settings(
+        Some(repo.0.clone()),
+        Settings {
+            show_sidebar: true,
+            ..Settings::default()
+        },
+        Theme::default(),
+    );
+    app.refresh();
+    frame(&mut app);
+    let (row, _) = app.hits.file_rows[0]; // src
+    let right = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: row.x + 2,
+        row: row.y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(right);
+    let state = format!(
+        "{:?} files={:?} rows={:?}",
+        app.overlay,
+        app.hits.files,
+        app.hits.file_rows.first()
+    );
+    let all = text(&mut app);
+    assert!(
+        all.contains("New File") && all.contains("New Folder"),
+        "{state}\n{all}"
+    );
+    app.handle_key(key(KeyCode::Enter));
+    for c in "notes.md".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(
+        repo.0.join("src/notes.md").exists(),
+        "made where the cursor was"
+    );
+    assert_eq!(app.focus, Focus::Editor);
+    app.handle_key(key(KeyCode::Esc));
+
+    app.handle_mouse(right);
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(text(&mut app).contains("NEW FOLDER"));
+    for c in "assets".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert!(repo.0.join("src/assets").is_dir());
+    assert!(app.editor.is_none(), "a folder is not opened for editing");
 }

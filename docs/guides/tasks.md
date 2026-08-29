@@ -37,9 +37,9 @@ empty means a `<repo>-worktrees` folder beside the repository.
 ## Several folders, one task
 
 A feature that touches a backend and a frontend is one task with two
-folders. `File → Add Folder to Task…` takes a path — a worktree of another
-repository, or any folder at all — and from then on the task treats them as
-one:
+folders. `File → Add Folder to Task…` walks the filesystem — type to narrow
+the list, ++enter++ to step into a folder, ++enter++ on the first row to add
+the one the walk stands on — and from then on the task treats them as one:
 
 - the timeline carries the edits of both, each named by its folder —
   `frontend/src/app.js`;

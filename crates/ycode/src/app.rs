@@ -380,32 +380,20 @@ impl App {
         if (x0, y0) == (x1, y1) {
             return None;
         }
-        let (top, bottom) = (y0.min(y1), y0.max(y1));
+        let pane = self.selection_bounds()?;
+        let (top, bottom) = (y0.min(y1), y0.max(y1).min(pane.bottom().saturating_sub(1)));
         let (left, right) = if y0 == y1 {
             (x0.min(x1), x0.max(x1))
         } else {
-            (0, u16::MAX)
+            (pane.x, pane.right().saturating_sub(1))
         };
-        let editor = self.hits.editor;
-        let in_editor = self.editor.is_some() && hit(editor, x0, y0) && hit(editor, x1, y1);
+        let (left, right) = (left.max(pane.x), right.min(pane.right().saturating_sub(1)));
         let lines: Vec<String> = (top..=bottom)
             .filter_map(|y| {
                 let row: Vec<char> = self.last_frame.get(y as usize)?.chars().collect();
-                let from = if in_editor { editor.x.max(left) } else { left } as usize;
-                let to = if in_editor {
-                    (editor.right() - 1).min(right)
-                } else {
-                    right
-                } as usize;
-                let to = to.min(row.len().saturating_sub(1));
-                Some(
-                    row.get(from..=to)
-                        .unwrap_or(&[])
-                        .iter()
-                        .collect::<String>()
-                        .trim_end()
-                        .to_string(),
-                )
+                let to = (right as usize).min(row.len().saturating_sub(1));
+                let text: String = row.get(left as usize..=to).unwrap_or(&[]).iter().collect();
+                Some(text.trim_end().to_string())
             })
             .collect();
         Some(lines.join("\n"))
@@ -601,12 +589,33 @@ impl App {
         } else if hit(self.hits.agent, x, y) {
             self.focus = Focus::Agent;
         } else if hit(self.hits.follow, x, y) {
-            self.focus = if self.editor.is_some() {
-                Focus::Editor
+            if self.editor.is_some() {
+                self.focus = Focus::Editor;
+                if hit(self.hits.editor, x, y) {
+                    let line = self.scroll as usize + (y - self.hits.editor.y) as usize;
+                    let col = (x - self.hits.editor.x) as usize;
+                    self.caret_moved = true;
+                    if let Some(buffer) = self.editor.as_mut() {
+                        buffer.goto(line, col);
+                    }
+                }
             } else {
-                Focus::Follow
-            };
+                self.focus = Focus::Follow;
+            }
         }
+    }
+
+    /// The pane a selection lives in: it never crosses into the next one.
+    pub fn selection_bounds(&self) -> Option<Rect> {
+        let ((x, y), _) = self.selection?;
+        [
+            self.hits.editor,
+            self.hits.agent,
+            self.hits.follow,
+            self.hits.files,
+        ]
+        .into_iter()
+        .find(|r| hit(*r, x, y))
     }
 
     pub fn with_settings(project: Option<PathBuf>, settings: Settings, theme: Theme) -> Self {

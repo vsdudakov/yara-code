@@ -96,9 +96,9 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::Quit => "Ctrl+Q",
         Command::Documentation => "Shift+F12",
         Command::Help => "F1",
-        // Updating is a menu action; a key for it would only be pressed by
-        // accident.
-        Command::CheckForUpdates | Command::InstallUpdate => return None,
+        // Updating is a menu action and moving the panes a palette one; a
+        // key for either would only be pressed by accident.
+        Command::CheckForUpdates | Command::InstallUpdate | Command::SwapPanes => return None,
         Command::ToggleSidebar => "Ctrl+B",
         Command::Changes => "F4",
         Command::CommandPalette => "F5",
@@ -111,7 +111,6 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         // The keyboard's own key for moving between parts of a window, and
         // one no program in the agent pane is listening for.
         Command::NextPane => "F6",
-        Command::SwapPanes => "Shift+F6",
         Command::Close => "Esc",
         Command::NewTab => "F7",
         Command::CloseTab => "Ctrl+W",
@@ -497,7 +496,10 @@ mod tests {
     fn every_command_is_bound_out_of_the_box_and_no_chord_twice() {
         let settings = Settings::default();
         for command in ALL {
-            let unbound = matches!(command, Command::CheckForUpdates | Command::InstallUpdate);
+            let unbound = matches!(
+                command,
+                Command::CheckForUpdates | Command::InstallUpdate | Command::SwapPanes
+            );
             assert_eq!(
                 settings.chord(*command).is_none(),
                 unbound,

@@ -962,6 +962,18 @@ fn a_file_opened_from_the_tree_by_mouse_scrolls_both_ways_and_a_click_keeps_it_o
     ));
     assert!(app.editor.is_some(), "a click in the editor keeps it open");
     assert_eq!(app.focus, Focus::Editor);
+    // A click in the text puts the caret there: the fourth visible row, at
+    // its third column; the view does not jump.
+    frame(&mut app);
+    let (editor, top) = (app.hits.editor, app.scroll as usize);
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        editor.x + 3,
+        editor.y + 3,
+    ));
+    assert_eq!(app.editor.as_ref().unwrap().line_col(), (top + 3, 3));
+    frame(&mut app);
+    assert_eq!(app.scroll as usize, top);
 }
 
 #[test]
@@ -1010,7 +1022,7 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
 }
 
 #[test]
-fn shift_f6_moves_the_panes_to_the_other_side_and_the_seam_drags_the_width() {
+fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_width() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let config =
         std::env::temp_dir().join(format!("yara-frame-swap-config-{}", std::process::id()));
@@ -1018,11 +1030,11 @@ fn shift_f6_moves_the_panes_to_the_other_side_and_the_seam_drags_the_width() {
     let mut app = following(Settings::default());
     let rows = frame(&mut app);
     assert!(rows[1].find("AGENT").unwrap() < rows[1].find("FOLLOW").unwrap());
-    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+    app.execute(yara_core::command::Command::SwapPanes);
     let rows = frame(&mut app);
     assert!(rows[1].find("FOLLOW").unwrap() < rows[1].find("AGENT").unwrap());
     assert_eq!(app.settings.agent_side, Side::Right);
-    app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT));
+    app.execute(yara_core::command::Command::SwapPanes);
 
     let ev = |kind, x, y| MouseEvent {
         kind,

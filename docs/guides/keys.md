@@ -46,7 +46,6 @@ follow pane → agent. A click moves it too.
 | Go to File | ++ctrl+p++ |
 | File Menu / Help Menu | ++f10++ / ++shift+f1++ |
 | Switch Pane | ++f6++ |
-| Move Panes to the Other Side | ++shift+f6++ |
 | Copy / Paste | ++ctrl+c++ / ++ctrl+v++ |
 | Close | ++esc++ |
 | New Workspace… | ++f7++ |

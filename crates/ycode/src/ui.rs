@@ -76,31 +76,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// The cells the mouse dragged over, lit — and the frame's text kept, so a
 /// copy can read them back.
 fn draw_selection(frame: &mut Frame, app: &mut App) {
+    let pane = app.selection_bounds();
     let buffer = frame.buffer_mut();
     let area = buffer.area;
-    if let Some(((x0, y0), (x1, y1))) = app.selection {
+    if let (Some(((x0, y0), (x1, y1))), Some(pane)) = (app.selection, pane) {
         if (x0, y0) != (x1, y1) {
-            let (top, bottom) = (y0.min(y1), y0.max(y1));
+            let (top, bottom) = (y0.min(y1), y0.max(y1).min(pane.bottom().saturating_sub(1)));
             let (left, right) = if y0 == y1 {
                 (x0.min(x1), x0.max(x1))
             } else {
-                (0, area.width)
+                (pane.x, pane.right().saturating_sub(1))
             };
             let bg = color(app.theme.ui.selected_bg);
             for y in top..=bottom.min(area.height.saturating_sub(1)) {
-                let (from, to) = if y == top && y == bottom {
-                    (left, right)
-                } else if y == top {
-                    (
-                        x0.min(x1).max(if y0 < y1 { x0 } else { x1 }),
-                        area.width - 1,
-                    )
-                } else if y == bottom {
-                    (0, if y0 < y1 { x1 } else { x0 })
-                } else {
-                    (0, area.width - 1)
-                };
-                for x in from..=to.min(area.width.saturating_sub(1)) {
+                for x in left.max(pane.x)..=right.min(pane.right().saturating_sub(1)) {
                     buffer[(x, y)].set_bg(bg);
                 }
             }

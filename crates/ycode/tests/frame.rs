@@ -54,7 +54,7 @@ fn an_empty_session_shows_both_panes_and_waits_for_an_edit() {
     let mut app = App::new(Some("/work/demo".into()));
     let rows = frame(&mut app);
     assert!(
-        rows[0].contains("YARA  File  Help  │  demo  [+]"),
+        rows[0].contains("YCODE  File  Help  │  demo  [+]"),
         "{}",
         rows[0]
     );
@@ -685,7 +685,7 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
         all.contains("▸ /somewhere/else") && all.contains("⏎"),
         "{all}"
     );
-    assert!(all.contains("⏎ open project · ^P go to file · F1 keys"));
+    assert!(all.contains("⏎ open workspace · F7 new task · F1 keys"));
     assert!(!all.contains("FOLLOW"), "no panes without a project");
 
     let lock = std::env::temp_dir().join(format!("yara-frame-start-config-{}", std::process::id()));

@@ -633,16 +633,16 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
     let dim = fg(ui.fg_dim);
     const LOGO: [&str; 5] = [
-        "██╗   ██╗ █████╗ ██████╗  █████╗ ",
-        "╚██╗ ██╔╝██╔══██╗██╔══██╗██╔══██╗",
-        " ╚████╔╝ ███████║██████╔╝███████║",
-        "  ╚██╔╝  ██╔══██║██╔══██╗██╔══██║",
-        "   ██║   ██║  ██║██║  ██║██║  ██║",
+        "██╗   ██╗ ██████╗ ██████╗ ██████╗ ███████╗",
+        "╚██╗ ██╔╝██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+        " ╚████╔╝ ██║     ██║   ██║██║  ██║█████╗  ",
+        "  ╚██╔╝  ██║     ██║   ██║██║  ██║██╔══╝  ",
+        "   ██║   ╚██████╗╚██████╔╝██████╔╝███████╗",
     ];
     let recent = app.settings.recent_workspaces.clone();
     let box_height = recent.len().max(1) as u16 + 2;
     let height = LOGO.len() as u16 + 2 + box_height + 2;
-    let width = 60u16.min(area.width);
+    let width = 64u16.min(area.width);
     let top = area.y + area.height.saturating_sub(height) / 2;
     let left = area.x + (area.width - width) / 2;
     let mut lines: Vec<Line> = LOGO
@@ -696,9 +696,9 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
     };
     frame.render_widget(Paragraph::new(lines), inner);
     let hints = format!(
-        "{} open project · {} go to file · {} keys",
+        "{} open workspace · {} new task · {} keys",
         app.hint(Command::MarkReviewed),
-        app.hint(Command::QuickOpen),
+        app.hint(Command::NewTab),
         app.hint(Command::Help)
     );
     frame.render_widget(
@@ -867,7 +867,7 @@ fn draw_prompt(frame: &mut Frame, app: &mut App, title: &str, what: &str, text: 
 
 fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
-    let mut left = vec![Span::styled(" YARA ", bold(ui.accent))];
+    let mut left = vec![Span::styled(" YCODE ", bold(ui.accent))];
     let mut x = area.x + 6;
     for (i, (name, _)) in MENUS.iter().enumerate() {
         let open = matches!(app.overlay, Some(Overlay::Menu(m, _)) if m == i);

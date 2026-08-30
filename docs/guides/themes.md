@@ -1,14 +1,17 @@
 ---
-description: Themes and syntax colours in Yara Code — Dark Modern built in, any VS Code theme JSON dropped beside the settings, syntect grammars.
+description: Themes and syntax colours in Yara Code — Dark Modern, Monokai, Dracula, One Dark Pro, Tokyo Night and Nord built in, any VS Code theme JSON dropped beside the settings, syntect grammars.
 ---
 
 # Themes and syntax
 
-One theme ships: VS Code's **Dark Modern**, so the editor looks like the one
-beside it. Any other is a VS Code colour theme JSON — the file a theme
-extension carries under `themes/` — dropped into `~/.config/ycode/themes/`.
-Its `colors` drive the chrome and the agent pane's palette, its `tokenColors`
-the syntax; whatever it leaves out keeps Dark Modern's value.
+Six themes ship: VS Code's **Dark Modern**, so the editor looks like the one
+beside it, and the popular ones — **Monokai**, **Dracula**, **One Dark Pro**,
+**Tokyo Night** and **Nord** — each as the file its VS Code extension
+carries. Any other is a VS Code colour theme JSON — the file a theme
+extension carries under `themes/`, comments and all — dropped into
+`~/.config/ycode/themes/`. Its `colors` drive the chrome and the agent pane's
+palette, its `tokenColors` the syntax; a translucent colour is laid over the
+editor's ground, and whatever the file leaves out keeps Dark Modern's value.
 
 ++f9++ lists what is there and switches; the choice is saved as `theme`.
 

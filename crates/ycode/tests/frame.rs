@@ -1143,7 +1143,7 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
 }
 
 #[test]
-fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
+fn a_right_click_on_a_tab_renames_the_task_or_deletes_it() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let repo = Repo::new("yara-frame-tabmenu");
     let trees = repo.0.join("trees");
@@ -1177,10 +1177,7 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
     app.handle_mouse(right);
     let all = text(&mut app);
     assert!(
-        all.contains("Rename…")
-            && all.contains("Add Folder to Task…")
-            && all.contains("Delete Task")
-            && all.contains("Close"),
+        all.contains("Rename…") && all.contains("Delete Task") && all.contains("Close"),
         "{all}"
     );
     app.handle_key(key(KeyCode::Enter));
@@ -1192,7 +1189,6 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
     assert!(frame(&mut app)[0].contains(" main   pr 7  [+]"));
 
     app.handle_mouse(right);
-    app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.tasks.len(), 1, "the task's tab is gone");
@@ -1210,7 +1206,6 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
         row: tab.y,
         modifiers: KeyModifiers::NONE,
     });
-    app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.tasks.len(), 1);

@@ -141,7 +141,7 @@ pub struct Updates {
 }
 
 /// What a right click on a tab offers, in order.
-pub const TAB_MENU: [&str; 4] = ["Rename…", "Add Folder to Task…", "Delete Task", "Close"];
+pub const TAB_MENU: [&str; 3] = ["Rename…", "Delete Task", "Close"];
 
 /// What a right click in the tree offers.
 pub const TREE_MENU: [Command; 2] = [Command::NewFile, Command::NewFolder];
@@ -1279,7 +1279,6 @@ impl App {
         self.active = tab.min(self.tasks.len() - 1);
         match TAB_MENU[row.min(TAB_MENU.len() - 1)] {
             "Rename…" => self.execute(Command::RenameTab),
-            "Add Folder to Task…" => self.execute(Command::AddFolder),
             "Delete Task" => self.delete_task(),
             _ => self.execute(Command::CloseTab),
         }

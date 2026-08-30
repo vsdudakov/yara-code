@@ -26,7 +26,8 @@ saves a setting. `//` comments are allowed.
 | `base_branch` | `""` | What CHANGES measures against; empty means the main working copy's branch |
 | `worktrees_dir` | `""` | Where new tasks' worktrees go; empty means `<repo>-worktrees` beside the repository |
 | `usage_commands` | `{}` | A command per agent that prints its plan usage as JSON — see [Agent usage](usage.md) |
-| `search_exclude` | `["target", "node_modules", ".*"]` | What Search Project leaves out |
+| `ignore_folders` | `[".", "node_modules", "target", "dist", "build", "vendor", "venv"]` | Folders nobody works in: left out of the tree, Go to File, search and the watching. `"."` stands for every hidden folder |
+| `search_exclude` | `[]` | What Search Project leaves out on top of those, in VS Code's glob spelling |
 | `agent_keys` | `["Ctrl+R", "Ctrl+N", "Ctrl+Z"]` | Bound chords the agent keeps anyway |
 | `keys` | `{}` | Rebindings, command id to chord — see [Key bindings](keys.md) |
 | `recent_projects` | `[]` | Kept by the editor for the start page and ++ctrl+r++ |

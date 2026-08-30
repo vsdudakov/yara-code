@@ -270,24 +270,9 @@ pub fn unified(old: &str, new: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Folders whose contents are nobody's work: skipped by the walk that
-/// watches a folder outside git.
-const VENDOR: [&str; 10] = [
-    ".git",
-    "node_modules",
-    "target",
-    ".venv",
-    "venv",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".next",
-    "dist",
-];
-
 /// Every file under `root` with when it was last written, folded into one
 /// number. Cheap next to reading them: no reading at all.
-fn fingerprint(root: &Path) -> u64 {
+fn fingerprint(root: &Path, rules: &[String]) -> u64 {
     use std::hash::{Hash, Hasher};
     // A folder the size of a home directory would cost a second a poll;
     // past this many files the walk gives up and says so, so a caller does
@@ -302,7 +287,7 @@ fn fingerprint(root: &Path) -> u64 {
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if VENDOR.iter().any(|skip| name == *skip) {
+            if tree::ignored(rules, &name.to_string_lossy()) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -373,10 +358,10 @@ impl Watcher {
     /// look counts as movement, so the stock is taken. A repository is
     /// asked of git — a walk of a big working tree costs more than the one
     /// process does, and misses nothing git already knows.
-    pub fn moved(&mut self, root: &Path, repo: Option<&Repo>) -> bool {
+    pub fn moved(&mut self, root: &Path, repo: Option<&Repo>, rules: &[String]) -> bool {
         let now = match repo {
             Some(repo) => repo_fingerprint(repo),
-            None => fingerprint(root),
+            None => fingerprint(root, rules),
         };
         let moved = self.fingerprint != Some(now);
         self.fingerprint = Some(now);
@@ -386,7 +371,7 @@ impl Watcher {
     /// The edits made in `root` since the last poll. `repo` is the folder's
     /// repository when it has one — then only what differs from the base is
     /// watched, rather than every file in the folder.
-    pub fn poll(&mut self, root: &Path, repo: Option<&Repo>) -> Vec<EditEvent> {
+    pub fn poll(&mut self, root: &Path, repo: Option<&Repo>, rules: &[String]) -> Vec<EditEvent> {
         let mut paths: Vec<String> = match repo {
             Some(repo) => changes(repo)
                 .unwrap_or_default()
@@ -396,7 +381,7 @@ impl Watcher {
             // A folder outside git is read whole, so it is watched only
             // while it is small enough to read.
             None => {
-                let all = tree::all_files(root);
+                let all = tree::all_files_with(root, rules);
                 if all.len() > 2_000 {
                     return Vec::new();
                 }
@@ -470,15 +455,25 @@ mod tests {
         let dir = Dir::new("yara-watch-plain");
         dir.file("notes.md", "one\n");
         let mut watcher = Watcher::default();
-        assert!(watcher.poll(dir.path(), None).is_empty(), "stock taken");
+        assert!(
+            watcher
+                .poll(dir.path(), None, &tree::default_ignores())
+                .is_empty(),
+            "stock taken"
+        );
         dir.file("notes.md", "one\ntwo\n");
         dir.file("fresh.txt", "hello\n");
-        let edits = watcher.poll(dir.path(), None);
+        let edits = watcher.poll(dir.path(), None, &tree::default_ignores());
         assert_eq!(edits.len(), 2);
         assert_eq!(edits[0].path, dir.path().join("fresh.txt"));
         assert_eq!(edits[1].path, dir.path().join("notes.md"));
         assert_eq!((edits[1].added(), edits[1].removed()), (1, 0));
-        assert!(watcher.poll(dir.path(), None).is_empty(), "reported once");
+        assert!(
+            watcher
+                .poll(dir.path(), None, &tree::default_ignores())
+                .is_empty(),
+            "reported once"
+        );
     }
 
     #[test]
@@ -580,7 +575,8 @@ mod tests {
         let (dir, repo) = repo("yara-git-watch");
         let root = dir.path().to_path_buf();
         let mut watcher = Watcher::default();
-        let poll = |w: &mut Watcher| w.poll(&root, Some(&repo));
+        let rules = tree::default_ignores();
+        let poll = |w: &mut Watcher| w.poll(&root, Some(&repo), &rules);
         assert!(poll(&mut watcher).is_empty(), "the first poll takes stock");
         assert!(poll(&mut watcher).is_empty(), "nothing moved");
         // A clean file's first edit is measured from its committed version.
@@ -608,14 +604,14 @@ mod tests {
         assert_eq!((edits[0].added(), edits[0].removed()), (1, 1));
         // With nothing written since, nothing moved and git is not asked.
         assert!(
-            watcher.moved(&root, Some(&repo)),
+            watcher.moved(&root, Some(&repo), &rules),
             "the first look takes stock"
         );
-        assert!(!watcher.moved(&root, Some(&repo)));
+        assert!(!watcher.moved(&root, Some(&repo), &rules));
         dir.file("b.txt", "new\n");
-        assert!(watcher.moved(&root, Some(&repo)));
+        assert!(watcher.moved(&root, Some(&repo), &rules));
         // A second edit to a file git already lists is movement too.
         dir.file("b.txt", "new and more\n");
-        assert!(watcher.moved(&root, Some(&repo)));
+        assert!(watcher.moved(&root, Some(&repo), &rules));
     }
 }

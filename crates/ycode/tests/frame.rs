@@ -617,7 +617,10 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     let all = text(&mut app);
     assert!(all.contains("SEARCH PROJECT"), "{all}");
     assert!(all.contains(" src/main.rs:2  let x = 1;"), "{all}");
-    assert!(all.contains("1 matches in 1 files · exclude: target, node_modules, .*"));
+    assert!(
+        all.contains("1 matches in 1 files · skipping: ., node_modules"),
+        "{all}"
+    );
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.focus, Focus::Editor);
     assert_eq!(app.editor.as_ref().unwrap().line_col().0, 1);

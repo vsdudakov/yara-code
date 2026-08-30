@@ -328,11 +328,19 @@ fn draw_search(
         .collect();
     let mut lines = vec![query_line(app, "> ", query, "search…")];
     lines.extend(list_lines(app, rows, row, inner.height as usize - 2));
+    let excluded = if app.settings.search_exclude.is_empty() {
+        app.settings.ignore_folders.join(", ")
+    } else {
+        format!(
+            "{}, {}",
+            app.settings.ignore_folders.join(", "),
+            app.settings.search_exclude.join(", ")
+        )
+    };
     let footer = format!(
-        "{} matches in {} files · exclude: {}",
+        "{} matches in {} files · skipping: {excluded}",
         hits.len(),
-        files,
-        app.settings.search_exclude.join(", ")
+        files
     );
     let [list, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
     frame.render_widget(Paragraph::new(lines), list);

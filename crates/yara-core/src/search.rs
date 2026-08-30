@@ -17,14 +17,20 @@ pub struct Hit {
 
 /// What a search found, and how many files it found it in. Stops at `cap`
 /// hits so a common word cannot stall the editor.
-pub fn search(root: &Path, query: &str, exclude: &[String], cap: usize) -> (Vec<Hit>, usize) {
+pub fn search(
+    root: &Path,
+    query: &str,
+    ignore_folders: &[String],
+    exclude: &[String],
+    cap: usize,
+) -> (Vec<Hit>, usize) {
     let mut hits = Vec::new();
     let mut files = 0;
     if query.is_empty() {
         return (hits, files);
     }
     let needle = query.to_lowercase();
-    for path in tree::all_files(root) {
+    for path in tree::all_files_with(root, ignore_folders) {
         if glob::matches_any(exclude, &path) {
             continue;
         }
@@ -65,7 +71,8 @@ mod tests {
         dir.file("bin.dat", "\u{fffd}\x00total");
         std::fs::write(dir.path().join("raw.bin"), [0xff, 0xfe, b't']).unwrap();
         let exclude = vec!["target".to_string()];
-        let (hits, files) = search(dir.path(), "TOTAL", &exclude, 100);
+        let rules = tree::default_ignores();
+        let (hits, files) = search(dir.path(), "TOTAL", &rules, &exclude, 100);
         assert_eq!(files, 3);
         let found: Vec<(&str, usize, &str)> = hits
             .iter()
@@ -79,7 +86,11 @@ mod tests {
                 ("src/main.rs", 2, "let Total = 1;"),
             ]
         );
-        assert_eq!(search(dir.path(), "", &exclude, 100).0.len(), 0);
-        assert_eq!(search(dir.path(), "total", &[], 2).0.len(), 2, "capped");
+        assert_eq!(search(dir.path(), "", &rules, &exclude, 100).0.len(), 0);
+        assert_eq!(
+            search(dir.path(), "total", &rules, &[], 2).0.len(),
+            2,
+            "capped"
+        );
     }
 }

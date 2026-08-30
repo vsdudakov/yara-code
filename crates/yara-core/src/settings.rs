@@ -174,7 +174,12 @@ pub struct Settings {
     /// `usage.rs` — for the AGENT USAGE panel and the header chip, for those
     /// who have such a thing. Set, it is used instead of `usage_slash`.
     pub usage_commands: BTreeMap<String, String>,
-    /// What project search leaves out, in VS Code's glob spelling.
+    /// Folders nobody works in: left out of the tree, the finder, search
+    /// and the watching. A name matches a folder anywhere; a leading dot
+    /// on its own — "." — stands for every hidden folder.
+    pub ignore_folders: Vec<String>,
+    /// What project search leaves out on top of those, in VS Code's glob
+    /// spelling.
     pub search_exclude: Vec<String>,
     /// Chords the agent keeps even though the editor binds them, because
     /// the programs in that pane use them themselves.
@@ -213,7 +218,18 @@ impl Default for Settings {
             .map(|(a, c)| (a.to_string(), c.to_string()))
             .collect(),
             usage_commands: BTreeMap::new(),
-            search_exclude: ["target", "node_modules", ".*"].map(String::from).to_vec(),
+            ignore_folders: [
+                ".",
+                "node_modules",
+                "target",
+                "dist",
+                "build",
+                "vendor",
+                "venv",
+            ]
+            .map(String::from)
+            .to_vec(),
+            search_exclude: Vec::new(),
             agent_keys: [
                 "Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V",
             ]
@@ -258,6 +274,14 @@ pub fn strip_comments(text: &str) -> String {
 }
 
 impl Settings {
+    /// Whether a folder of this name is one nobody works in.
+    pub fn ignores(&self, name: &str) -> bool {
+        self.ignore_folders.iter().any(|rule| match rule.as_str() {
+            "." => name.starts_with('.'),
+            other => other == name,
+        })
+    }
+
     /// `$XDG_CONFIG_HOME/ycode/settings.json`, else `~/.config/ycode/...`.
     pub fn path() -> Option<PathBuf> {
         Some(crate::config_dir()?.join("settings.json"))
@@ -406,8 +430,13 @@ impl Settings {
   // is shown by Agent Usage (F8) instead, and as the chip in the header.
   "usage_commands": {usage_commands},
 
-  // What Search Project leaves out: a bare name matches a folder anywhere,
-  // "*.lock" a file, "src/**/gen" a path.
+  // Folders nobody works in, left out of the tree, Go to File, Search and
+  // the watching that feeds the timeline. A name matches a folder anywhere;
+  // "." on its own stands for every hidden folder.
+  "ignore_folders": {ignore_folders},
+
+  // What Search Project leaves out on top of those: a bare name matches a
+  // folder anywhere, "*.lock" a file, "src/**/gen" a path.
   "search_exclude": {search_exclude},
 
   // With the agent focused, its own keys and every unbound one reach it;
@@ -443,6 +472,7 @@ impl Settings {
             worktrees_dir = json(&self.worktrees_dir),
             agent_keys = json(&self.agent_keys),
             search_exclude = json(&self.search_exclude),
+            ignore_folders = json(&self.ignore_folders),
             usage_commands = json(&self.usage_commands),
             usage_slash = json(&self.usage_slash),
             keys = json(&self.keys),
@@ -498,6 +528,19 @@ mod erased {
 mod tests {
     use super::*;
     use crate::test_support::{Dir, ENV_LOCK};
+
+    #[test]
+    fn a_folder_nobody_works_in_is_known_by_name_or_by_its_dot() {
+        let settings = Settings::default();
+        assert!(settings.ignores(".git") && settings.ignores(".venv"));
+        assert!(settings.ignores("node_modules") && settings.ignores("target"));
+        assert!(!settings.ignores("src") && !settings.ignores("crates"));
+        let named: Settings = serde_json::from_str(r#"{"ignore_folders":["logs"]}"#).unwrap();
+        assert!(
+            named.ignores("logs") && !named.ignores(".git"),
+            "the list is the list"
+        );
+    }
 
     #[test]
     fn an_empty_file_still_gives_every_default() {
@@ -666,6 +709,7 @@ mod tests {
             "\"worktrees_dir\"",
             "\"agent_keys\"",
             "\"search_exclude\"",
+            "\"ignore_folders\"",
             "\"usage_commands\"",
             "\"usage_slash\"",
             "\"keys\"",

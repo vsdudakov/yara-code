@@ -16,14 +16,15 @@ pub struct Row {
 pub struct Tree {
     /// The workspace's folders, the main one first.
     pub roots: Vec<PathBuf>,
+    /// Whether a folder of this name is one nobody works in.
+    rules: Vec<String>,
     expanded: BTreeSet<PathBuf>,
     pub selected: usize,
     rows: Vec<Row>,
 }
 
-/// A folder's entries, folders first, `.git` and the editor's own folder
-/// left out.
-pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
+/// A folder's entries, folders first, the ones nobody works in left out.
+pub fn list_dir_with(dir: &Path, rules: &[String]) -> Vec<(PathBuf, bool)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -33,7 +34,12 @@ pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
             let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
             (e.path(), is_dir)
         })
-        .filter(|(p, _)| p.file_name().is_none_or(|n| n != ".git" && n != ".ycode"))
+        .filter(|(path, is_dir)| {
+            !is_dir
+                || path
+                    .file_name()
+                    .is_none_or(|n| !ignored(rules, &n.to_string_lossy()))
+        })
         .collect();
     out.sort_by(|(pa, da), (pb, db)| {
         db.cmp(da).then_with(|| {
@@ -45,15 +51,44 @@ pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
     out
 }
 
+/// Whether a folder of this name is one of the ones nobody works in. A
+/// rule of "." stands for every hidden folder; any other rule is a name.
+pub fn ignored(rules: &[String], name: &str) -> bool {
+    rules.iter().any(|rule| match rule.as_str() {
+        "." => name.starts_with('.'),
+        other => other == name,
+    })
+}
+
+/// The rules a caller with no settings to hand goes by.
+pub fn default_ignores() -> Vec<String> {
+    [
+        ".",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "vendor",
+        "venv",
+    ]
+    .map(String::from)
+    .to_vec()
+}
+
+/// A folder's entries with those rules.
+pub fn list_dir(dir: &Path) -> Vec<(PathBuf, bool)> {
+    list_dir_with(dir, &default_ignores())
+}
+
 /// Every file under `root`, relative and with forward slashes — what the
 /// file finder ranks. Stops at a generous cap so a huge tree cannot hang the
 /// editor.
-pub fn all_files(root: &Path) -> Vec<String> {
+pub fn all_files_with(root: &Path, rules: &[String]) -> Vec<String> {
     const CAP: usize = 20_000;
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for (path, is_dir) in list_dir(&dir) {
+        for (path, is_dir) in list_dir_with(&dir, rules) {
             if is_dir {
                 stack.push(path);
             } else if let Ok(rel) = path.strip_prefix(root) {
@@ -68,13 +103,24 @@ pub fn all_files(root: &Path) -> Vec<String> {
     out
 }
 
+/// Every file under `root` with the default rules.
+pub fn all_files(root: &Path) -> Vec<String> {
+    all_files_with(root, &default_ignores())
+}
+
 impl Tree {
     pub fn new(root: PathBuf) -> Self {
         Self::with_roots(vec![root])
     }
 
     pub fn with_roots(roots: Vec<PathBuf>) -> Self {
+        Self::with_roots_ignoring(roots, default_ignores())
+    }
+
+    /// The same, told which folders nobody works in.
+    pub fn with_roots_ignoring(roots: Vec<PathBuf>, rules: Vec<String>) -> Self {
         let mut tree = Self {
+            rules,
             // Folders past the first start open, so a folder just added is
             // not an empty row.
             expanded: roots.iter().skip(1).cloned().collect(),
@@ -114,7 +160,7 @@ impl Tree {
         let keep = self.selected_row().map(|r| r.path.clone());
         let mut rows = Vec::new();
         if self.roots.len() == 1 {
-            collect(&self.roots[0], 0, &self.expanded, &mut rows);
+            collect(&self.roots[0], 0, &self.expanded, &self.rules, &mut rows);
         } else {
             for root in &self.roots {
                 let open = self.expanded.contains(root);
@@ -125,7 +171,7 @@ impl Tree {
                     is_root: true,
                 });
                 if open {
-                    collect(root, 1, &self.expanded, &mut rows);
+                    collect(root, 1, &self.expanded, &self.rules, &mut rows);
                 }
             }
         }
@@ -171,8 +217,14 @@ impl Tree {
     }
 }
 
-fn collect(dir: &Path, depth: usize, expanded: &BTreeSet<PathBuf>, out: &mut Vec<Row>) {
-    for (path, is_dir) in list_dir(dir) {
+fn collect(
+    dir: &Path,
+    depth: usize,
+    expanded: &BTreeSet<PathBuf>,
+    rules: &[String],
+    out: &mut Vec<Row>,
+) {
+    for (path, is_dir) in list_dir_with(dir, rules) {
         let open = is_dir && expanded.contains(&path);
         out.push(Row {
             path: path.clone(),
@@ -181,7 +233,7 @@ fn collect(dir: &Path, depth: usize, expanded: &BTreeSet<PathBuf>, out: &mut Vec
             is_root: false,
         });
         if open {
-            collect(&path, depth + 1, expanded, out);
+            collect(&path, depth + 1, expanded, rules, out);
         }
     }
 }

@@ -265,8 +265,12 @@ impl Task {
             .map(|path| Folder::new(path.clone(), settings))
             .collect();
         Self {
-            tree: (!folders.is_empty())
-                .then(|| Tree::with_roots(folders.iter().map(|f| f.path.clone()).collect())),
+            tree: (!folders.is_empty()).then(|| {
+                Tree::with_roots_ignoring(
+                    folders.iter().map(|f| f.path.clone()).collect(),
+                    settings.ignore_folders.clone(),
+                )
+            }),
             folders,
             agent: None,
             terminal: None,
@@ -317,7 +321,8 @@ impl Task {
         }
         self.folders = kept;
         let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
-        self.tree = (!roots.is_empty()).then(|| Tree::with_roots(roots));
+        self.tree = (!roots.is_empty())
+            .then(|| Tree::with_roots_ignoring(roots, settings.ignore_folders.clone()));
     }
 
     /// The main folder: where the agent runs and what the chrome names.
@@ -1140,8 +1145,13 @@ impl App {
         let mut hits = Vec::new();
         let mut files = 0;
         for folder in &self.folders {
-            let (found, in_files) =
-                search::search(&folder.path, query, &self.settings.search_exclude, 500);
+            let (found, in_files) = search::search(
+                &folder.path,
+                query,
+                &self.settings.ignore_folders,
+                &self.settings.search_exclude,
+                500,
+            );
             files += in_files;
             let name = folder.name();
             hits.extend(found.into_iter().map(|mut hit| {
@@ -1225,14 +1235,22 @@ impl App {
     /// Looks at every session's working tree: new edits join its timeline,
     /// its CHANGES list is brought up to date. Called every `refresh_ms`.
     pub fn refresh(&mut self) {
+        let rules = self.settings.ignore_folders.clone();
         for session in &mut self.tasks {
             let mut edits = Vec::new();
             for folder in &mut session.folders {
                 // Only a folder that moved is worth reading, or asking git.
-                if !folder.watcher.moved(&folder.path, folder.repo.as_ref()) {
+                if !folder
+                    .watcher
+                    .moved(&folder.path, folder.repo.as_ref(), &rules)
+                {
                     continue;
                 }
-                edits.extend(folder.watcher.poll(&folder.path, folder.repo.as_ref()));
+                edits.extend(
+                    folder
+                        .watcher
+                        .poll(&folder.path, folder.repo.as_ref(), &rules),
+                );
                 if let Some(repo) = &folder.repo {
                     folder.changes = git::changes(repo).unwrap_or_default();
                 }
@@ -1385,18 +1403,21 @@ impl App {
         // Every folder's files, each named by its folder when there are
         // several, so a hit says which repository it is in.
         let several = self.folders.len() > 1;
+        let rules = self.settings.ignore_folders.clone();
         let files: Vec<String> = self
             .folders
             .iter()
             .flat_map(|folder| {
                 let name = folder.name();
-                tree::all_files(&folder.path).into_iter().map(move |path| {
-                    if several {
-                        format!("{name}/{path}")
-                    } else {
-                        path
-                    }
-                })
+                tree::all_files_with(&folder.path, &rules)
+                    .into_iter()
+                    .map(move |path| {
+                        if several {
+                            format!("{name}/{path}")
+                        } else {
+                            path
+                        }
+                    })
             })
             .collect();
         fuzzy::rank(query, files.iter().map(String::as_str))

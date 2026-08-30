@@ -1039,6 +1039,20 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
         app.selected_text().as_deref(),
         Some("fn main() {\n    let x = 1;")
     );
+    // The border is not text to take: the pane's own frame stays unlit,
+    // and so does the pane beside it.
+    let (border, elsewhere) = {
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        (
+            buffer[(app.hits.follow.x, e.y)].bg,
+            buffer[(app.hits.agent.x + 2, e.y)].bg,
+        )
+    };
+    let lit = ycode::theme::color(app.theme.ui.selected_bg);
+    assert_ne!(border, lit, "the pane's border");
+    assert_ne!(elsewhere, lit, "the pane beside it");
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.note.as_deref().unwrap().starts_with("copied 2 lines"));
     assert!(app.selection.is_none());

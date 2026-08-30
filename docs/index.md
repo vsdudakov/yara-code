@@ -44,8 +44,9 @@ with its own timeline; ++ctrl+l++ moves between them.
 
 ## And the small editor around it
 
-A file tree (++ctrl+b++), an editor with undo and syntax colours for fixing a
-line (++ctrl+s++, ++esc++), go to file (++ctrl+p++), project search
+A file tree (++ctrl+b++), a shell under the agent (++ctrl+t++), an editor
+with undo and syntax colours for fixing a line (++ctrl+s++, ++esc++), go to
+file (++ctrl+p++), project search
 (++f3++), a command palette (++f5++), ++f1++ for every
 key, and a commented `settings.json` that holds everything you might want
 different — the agent command, which side it sits on, its width, the keys.

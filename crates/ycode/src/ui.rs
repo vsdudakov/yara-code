@@ -74,7 +74,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.seam = seam;
     app.hits.body = body;
     app.hits.files = files;
-    app.hits.agent = agent;
     app.hits.follow = follow;
     if app.show_sidebar {
         draw_files(frame, app, files);
@@ -1007,6 +1006,16 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
+    // The shell, when it is open, takes the bottom of the agent's pane.
+    let (area, shell) = if app.terminal.is_some() {
+        let height = area.height * app.settings.terminal_height.clamp(10, 80) / 100;
+        let [agent, shell] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(height.max(3))]).areas(area);
+        (agent, Some(shell))
+    } else {
+        (area, None)
+    };
+    app.hits.agent = area;
     let ui = app.theme.ui.clone();
     let focused = app.focus == Focus::Agent;
     let block = Block::bordered()
@@ -1014,23 +1023,76 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
         .title(format!(" AGENT · {} ", app.agent_name()));
     let grid = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(shell) = shell {
+        draw_terminal(frame, app, shell);
+    }
     let theme = app.theme.clone();
     let Some(pty) = app.agent.as_mut() else {
         return;
     };
     pty.resize(grid.height, grid.width);
+    let (lines, cursor) = pty_lines(pty, grid, &ui, &theme);
+    frame.render_widget(Paragraph::new(lines), grid);
+    if let (true, Some((row, col))) = (focused, cursor) {
+        if row < grid.height && col < grid.width {
+            frame.set_cursor_position((grid.x + col, grid.y + row));
+        }
+    }
+}
 
-    // Paint the screen cell by cell, merging runs that share a style.
-    let (lines, cursor) = pty.with_screen(|screen| {
+/// The shell under the agent: the same grid, its own title.
+fn draw_terminal(frame: &mut Frame, app: &mut App, area: Rect) {
+    app.hits.terminal = area;
+    let ui = app.theme.ui.clone();
+    let theme = app.theme.clone();
+    let focused = app.focus == Focus::Terminal;
+    let name = app
+        .settings
+        .shell
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .or_else(|| std::env::var("SHELL").ok())
+        .unwrap_or_else(|| "sh".into());
+    let name = std::path::Path::new(&name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or(name);
+    let block = Block::bordered()
+        .border_style(fg(if focused { ui.fg_dim } else { ui.border }))
+        .title(format!(" TERMINAL · {name} "));
+    let grid = block.inner(area);
+    frame.render_widget(block, area);
+    let Some(pty) = app.terminal.as_mut() else {
+        return;
+    };
+    pty.resize(grid.height, grid.width);
+    let (lines, cursor) = pty_lines(pty, grid, &ui, &theme);
+    frame.render_widget(Paragraph::new(lines), grid);
+    if let (true, Some((row, col))) = (focused, cursor) {
+        if row < grid.height && col < grid.width {
+            frame.set_cursor_position((grid.x + col, grid.y + row));
+        }
+    }
+}
+
+/// A pty's screen as lines, and where its cursor is.
+fn pty_lines<'a>(
+    pty: &yara_core::pty::Pty,
+    grid: Rect,
+    ui: &Ui,
+    theme: &Theme,
+) -> (Vec<Line<'a>>, Option<(u16, u16)>) {
+    pty.with_screen(|screen| {
         let lines: Vec<Line> = (0..grid.height)
             .map(|row| {
                 let mut spans: Vec<Span> = Vec::new();
                 for col in 0..grid.width {
                     let (text, style) = match screen.cell(row, col) {
                         Some(cell) if !cell.contents().is_empty() => {
-                            (cell.contents(), cell_style(cell, &ui, &theme))
+                            (cell.contents(), cell_style(cell, ui, theme))
                         }
-                        Some(cell) => (" ".to_string(), cell_style(cell, &ui, &theme)),
+                        Some(cell) => (" ".to_string(), cell_style(cell, ui, theme)),
                         None => (" ".to_string(), on(ui.fg, ui.bg)),
                     };
                     match spans.last_mut() {
@@ -1044,13 +1106,7 @@ fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
         let cursor =
             (!screen.hide_cursor() && screen.scrollback() == 0).then(|| screen.cursor_position());
         (lines, cursor)
-    });
-    frame.render_widget(Paragraph::new(lines), grid);
-    if let (true, Some((row, col))) = (focused, cursor) {
-        if row < grid.height && col < grid.width {
-            frame.set_cursor_position((grid.x + col, grid.y + row));
-        }
-    }
+    })
 }
 
 /// One cell's colours and attributes as a ratatui style.

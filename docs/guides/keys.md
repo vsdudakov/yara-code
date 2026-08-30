@@ -37,6 +37,7 @@ follow pane → agent. A click moves it too.
 | Quit | ++ctrl+q++ |
 | Key Bindings | ++f1++ |
 | Toggle Files | ++ctrl+b++ |
+| Terminal | ++ctrl+t++ |
 | Changes | ++f4++ |
 | Command Palette | ++f5++ |
 | Search Project | ++f3++ |

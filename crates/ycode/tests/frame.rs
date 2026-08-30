@@ -1594,3 +1594,55 @@ fn a_workspace_holds_the_folders_and_its_tasks_work_in_worktrees_of_them() {
     std::env::remove_var("YARA_CONFIG_DIR");
     let _ = std::fs::remove_dir_all(&config);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_terminal_opens_under_the_agent_and_takes_the_keys() {
+    let settings = Settings {
+        agent: "cat".into(),
+        shell: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = following(settings);
+    let rows = frame(&mut app);
+    assert!(
+        !rows.join("\n").contains("TERMINAL"),
+        "closed to begin with"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert_eq!(app.focus, Focus::Terminal);
+    let rows = frame(&mut app);
+    let agent_row = rows.iter().position(|r| r.contains("AGENT · cat")).unwrap();
+    let shell_row = rows
+        .iter()
+        .position(|r| r.contains("TERMINAL · cat"))
+        .unwrap();
+    assert!(agent_row < shell_row, "the shell sits under the agent");
+
+    // Keys go to the shell while it has them.
+    for c in "hello".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    let start = std::time::Instant::now();
+    let mut screen = String::new();
+    while start.elapsed().as_secs() < 5 && screen.matches("hello").count() < 2 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        screen = app.terminal.as_ref().unwrap().with_screen(|s| s.contents());
+    }
+    assert_eq!(
+        screen.matches("hello").count(),
+        2,
+        "cat echoed it: {screen:?}"
+    );
+    // F6 walks agent → terminal → follow, and Ctrl+T closes the shell.
+    app.handle_key(key(KeyCode::F(6)));
+    assert_eq!(app.focus, Focus::Follow);
+    app.handle_key(key(KeyCode::F(6)));
+    assert_eq!(app.focus, Focus::Agent);
+    app.handle_key(key(KeyCode::F(6)));
+    assert_eq!(app.focus, Focus::Terminal);
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    assert!(app.terminal.is_none() && app.focus == Focus::Agent);
+    assert!(!text(&mut app).contains("TERMINAL"));
+}

@@ -106,6 +106,7 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         | Command::RemoveFolder
         | Command::Documentation => return None,
         Command::ToggleSidebar => "Ctrl+B",
+        Command::ToggleTerminal => "Ctrl+T",
         Command::Changes => "F4",
         Command::CommandPalette => "F5",
         Command::SearchProject => "F3",
@@ -149,6 +150,10 @@ pub struct Settings {
     /// The FILES sidebar, in columns, and whether it is open at start.
     pub sidebar_width: u16,
     pub show_sidebar: bool,
+    /// The shell the terminal runs; empty means `$SHELL`, or `sh`.
+    pub shell: String,
+    /// The terminal's share of the agent pane's height, in percent.
+    pub terminal_height: u16,
     /// Edits shown on the timeline strip before it windows around the cursor.
     pub timeline_ticks: usize,
     /// One step of the editor caret's blink, in milliseconds; 0 keeps it on.
@@ -192,6 +197,8 @@ impl Default for Settings {
             agent_width: 42,
             sidebar_width: 30,
             show_sidebar: false,
+            shell: String::new(),
+            terminal_height: 40,
             timeline_ticks: 12,
             cursor_blink_ms: 500,
             refresh_ms: 500,
@@ -368,6 +375,11 @@ impl Settings {
   "sidebar_width": {sidebar_width},
   "show_sidebar": {show_sidebar},
 
+  // The terminal under the agent (Ctrl+T): the shell it runs ("" = $SHELL)
+  // and its share of that pane's height, in percent.
+  "shell": {shell},
+  "terminal_height": {terminal_height},
+
   // Edits on the timeline strip before it windows around the current one.
   "timeline_ticks": {timeline_ticks},
 
@@ -422,6 +434,8 @@ impl Settings {
             agent_width = json(&self.agent_width),
             sidebar_width = json(&self.sidebar_width),
             show_sidebar = json(&self.show_sidebar),
+            shell = json(&self.shell),
+            terminal_height = json(&self.terminal_height),
             timeline_ticks = json(&self.timeline_ticks),
             cursor_blink_ms = json(&self.cursor_blink_ms),
             refresh_ms = json(&self.refresh_ms),
@@ -643,6 +657,8 @@ mod tests {
             "\"agent_width\"",
             "\"sidebar_width\"",
             "\"show_sidebar\"",
+            "\"shell\"",
+            "\"terminal_height\"",
             "\"timeline_ticks\"",
             "\"cursor_blink_ms\"",
             "\"refresh_ms\"",

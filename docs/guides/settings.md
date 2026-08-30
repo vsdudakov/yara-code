@@ -19,6 +19,8 @@ saves a setting. `//` comments are allowed.
 | `agent_width` | `42` | The agent pane's share of the width, in percent; dragging the seam between the panes sets it |
 | `sidebar_width` | `30` | The FILES tree, in columns |
 | `show_sidebar` | `false` | Whether FILES is open at start |
+| `shell` | `""` | The shell ++ctrl+t++ runs under the agent; empty means `$SHELL` |
+| `terminal_height` | `40` | That terminal's share of the agent pane's height, in percent |
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |
 | `refresh_ms` | `500` | How often the working tree is looked at |
 | `base_branch` | `""` | What CHANGES measures against; empty means the main working copy's branch |

@@ -29,6 +29,8 @@ use crate::keys::chord_of;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
     Agent,
+    /// The shell under the agent, when it is open.
+    Terminal,
     Follow,
     Files,
     /// A file open in place of the follow pane; only Save, Close, Undo and
@@ -108,6 +110,8 @@ pub struct Hits {
     pub files: Rect,
     pub file_rows: Vec<(Rect, usize)>,
     pub agent: Rect,
+    /// The shell under the agent, while it is open.
+    pub terminal: Rect,
     pub follow: Rect,
     /// The blank column between the agent and the follow pane; dragging
     /// it resizes them.
@@ -234,6 +238,8 @@ pub enum ChangeRow {
 pub struct Task {
     pub folders: Vec<Folder>,
     pub agent: Option<Pty>,
+    /// A shell of the task's own, under the agent, while it is open.
+    pub terminal: Option<Pty>,
     pub follow: Follow,
     /// A file's whole diff opened from CHANGES, shown in place of the
     /// timeline's current edit until the follow keys are used again.
@@ -263,6 +269,7 @@ impl Task {
                 .then(|| Tree::with_roots(folders.iter().map(|f| f.path.clone()).collect())),
             folders,
             agent: None,
+            terminal: None,
             follow: Follow::default(),
             pinned: None,
             view: View::Diff,
@@ -1084,6 +1091,8 @@ impl App {
             self.execute(Command::MarkReviewed);
         } else if hit(self.hits.files, x, y) {
             self.focus = Focus::Files;
+        } else if hit(self.hits.terminal, x, y) {
+            self.focus = Focus::Terminal;
         } else if hit(self.hits.agent, x, y) {
             self.focus = Focus::Agent;
         } else if hit(self.hits.follow, x, y) {
@@ -1159,6 +1168,33 @@ impl App {
 
     /// Runs the agent from the settings in the session's folder — or where
     /// the editor was started, with no project. A failure is a note.
+    /// Opens the shell under the agent, or closes it. It runs where the
+    /// agent runs, and is started the first time it is asked for.
+    fn toggle_terminal(&mut self) {
+        if self.terminal.is_some() {
+            self.terminal = None;
+            self.focus = Focus::Agent;
+            return;
+        }
+        let cwd = self
+            .project()
+            .map(|p| p.to_path_buf())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let shell = match self.settings.shell.trim() {
+            "" => std::env::var("SHELL").unwrap_or_else(|_| "sh".into()),
+            named => named.to_string(),
+        };
+        let dirty = self.dirty.clone();
+        match Pty::spawn(&shell, &cwd, move || dirty.store(true, Ordering::Relaxed)) {
+            Ok(pty) => {
+                self.terminal = Some(pty);
+                self.focus = Focus::Terminal;
+            }
+            Err(e) => self.note = Some(e),
+        }
+    }
+
     pub fn start_agent(&mut self) {
         let cwd = self
             .project()
@@ -1831,7 +1867,7 @@ impl App {
         // and every chord nobody bound. A bound Ctrl or Alt chord, or a
         // function key, is the editor's, unless the settings say the agent
         // uses it itself.
-        if self.focus == Focus::Agent {
+        if self.focus == Focus::Agent || self.focus == Focus::Terminal {
             // Ctrl+C with something selected is a copy; with nothing it
             // stays the interrupt every program expects.
             if command == Some(Command::Copy) && self.selected_text().is_some() {
@@ -1842,7 +1878,12 @@ impl App {
                 && (chord.mods.ctrl || chord.mods.alt || shell_has_no_use_for(&chord))
                 && !self.settings.agent_keys.contains(&chord);
             if !editors {
-                if let Some(pty) = self.agent.as_mut() {
+                let pty = if self.focus == Focus::Terminal {
+                    self.terminal.as_mut()
+                } else {
+                    self.agent.as_mut()
+                };
+                if let Some(pty) = pty {
                     pty.send_key(&chord.key, chord.mods);
                 }
                 return;
@@ -1928,13 +1969,16 @@ impl App {
             }
             Command::NextPane => {
                 let has_editor = self.editor.is_some();
+                let has_terminal = self.terminal.is_some();
                 self.focus = match self.focus {
-                    Focus::Agent if self.show_sidebar => Focus::Files,
-                    Focus::Agent | Focus::Files if has_editor => Focus::Editor,
-                    Focus::Agent | Focus::Files => Focus::Follow,
+                    Focus::Agent if has_terminal => Focus::Terminal,
+                    Focus::Agent | Focus::Terminal if self.show_sidebar => Focus::Files,
+                    Focus::Agent | Focus::Terminal | Focus::Files if has_editor => Focus::Editor,
+                    Focus::Agent | Focus::Terminal | Focus::Files => Focus::Follow,
                     Focus::Follow | Focus::Editor => Focus::Agent,
                 }
             }
+            Command::ToggleTerminal => self.toggle_terminal(),
             Command::Save => self.save(),
             Command::Undo => {
                 self.caret_moved = true;

@@ -1,4 +1,4 @@
-.PHONY: build run lint format test coverage coverage-html shots docs docs-serve docs-install clean
+.PHONY: build run lint format test coverage coverage-html icons shots docs docs-serve docs-install clean
 
 # Everything the CI gate runs, in one target.
 lint:
@@ -26,6 +26,10 @@ build:
 
 run:
 	cargo run --release --bin ycode -- $(ARGS)
+
+# The application icon, in the colours the editor ships with. Needs Pillow.
+icons:
+	python3 packaging/icons.py
 
 # The documentation's screenshots, drawn by the editor itself into SVG.
 shots:

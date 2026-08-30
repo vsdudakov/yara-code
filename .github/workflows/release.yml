@@ -36,7 +36,7 @@ jobs:
           - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -63,7 +63,7 @@ jobs:
           Compress-Archive -Path $staging -DestinationPath "$staging.zip"
           (Get-FileHash "$staging.zip" -Algorithm SHA256).Hash.ToLower() + "  $staging.zip" `
             | Out-File -Encoding ascii "$staging.zip.sha256"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ycode-${{ matrix.target }}
           path: |
@@ -82,7 +82,7 @@ jobs:
           - { os: ubuntu-22.04, arch: amd64 }
           - { os: ubuntu-22.04-arm, arch: arm64 }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install the packagers
@@ -100,7 +100,7 @@ jobs:
           cd dist
           for f in *.deb *.rpm; do shasum -a 256 "$f" > "$f.sha256"; done
           ls -l
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ycode-linux-packages-${{ matrix.arch }}
           path: dist/*
@@ -110,7 +110,7 @@ jobs:
     needs: [build, linux-packages]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -130,8 +130,8 @@ jobs:
     # when the secret is absent, so a fork's release still works.
     if: ${{ github.event_name == 'push' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v6
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -187,8 +187,8 @@ jobs:
     # fork's release still works.
     if: ${{ github.event_name == 'push' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v6
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

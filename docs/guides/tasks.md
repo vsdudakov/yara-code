@@ -56,6 +56,12 @@ folders, and one task across both:
   across both;
 - the status bar shows the main folder's branch and `+1 folders`.
 
+A folder that holds repositories rather than being one — a bench of related
+projects, `backend/`, `frontend/`, `python-orbis/` side by side — is followed
+through each of them: every repository inside it, two levels deep, is watched
+in its own right, heads its own section in CHANGES, and names the edits that
+come from it. The bench itself is watched for the loose files around them.
+
 An agent that sets up a worktree of its own inside one of the task's
 folders — `.worktrees/the-branch`, say — is followed there without being
 asked: the worktree joins the task, its edits land on the same timeline

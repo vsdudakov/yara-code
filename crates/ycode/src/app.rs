@@ -264,18 +264,9 @@ pub struct Task {
 
 impl Task {
     fn new(paths: &[PathBuf], settings: &Settings) -> Self {
-        let folders: Vec<Folder> = paths
-            .iter()
-            .map(|path| Folder::new(path.clone(), settings))
-            .collect();
-        Self {
-            tree: (!folders.is_empty()).then(|| {
-                Tree::with_roots_ignoring(
-                    folders.iter().map(|f| f.path.clone()).collect(),
-                    settings.ignore_folders.clone(),
-                )
-            }),
-            folders,
+        let mut task = Self {
+            tree: None,
+            folders: Vec::new(),
             agent: None,
             terminal: None,
             follow: Follow::default(),
@@ -285,7 +276,9 @@ impl Task {
             caret_moved: true,
             editor: None,
             name: None,
-        }
+        };
+        task.resync(paths, settings);
+        task
     }
 
     /// What the task calls its worktrees, as a folder name: its own name,
@@ -307,6 +300,7 @@ impl Task {
         let slug = self.slug();
         let mut kept: Vec<Folder> = Vec::new();
         self.folders.retain(|f| !f.nested);
+        let mut wanted: Vec<PathBuf> = Vec::new();
         for path in workspace {
             let path = match (&slug, git::open(path, "")) {
                 (Some(slug), Some(repo)) => {
@@ -319,15 +313,33 @@ impl Task {
                 }
                 _ => path.clone(),
             };
+            wanted.push(path);
+        }
+        // A folder that holds repositories rather than being one — a bench
+        // of related projects — is followed through each of them.
+        let mut found: Vec<PathBuf> = Vec::new();
+        for path in &wanted {
+            if git::open(path, "").is_none() {
+                found.extend(git::discover_repos(path));
+            }
+        }
+        for path in found {
+            if !wanted.contains(&path) {
+                wanted.push(path);
+            }
+        }
+        for path in wanted {
             match self.folders.iter().position(|f| f.path == path) {
                 Some(i) => kept.push(self.folders.remove(i)),
                 None => kept.push(Folder::new(path, settings)),
             }
         }
         self.folders = kept;
-        let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
-        self.tree = (!roots.is_empty())
-            .then(|| Tree::with_roots_ignoring(roots, settings.ignore_folders.clone()));
+        // The tree shows the workspace's folders, not the repositories
+        // found inside them: those are already rows in it.
+        self.tree = (!workspace.is_empty()).then(|| {
+            Tree::with_roots_ignoring(workspace.to_vec(), settings.ignore_folders.clone())
+        });
     }
 
     /// The main folder: where the agent runs and what the chrome names.
@@ -1284,16 +1296,24 @@ impl App {
                 {
                     continue;
                 }
-                edits.extend(
-                    folder
-                        .watcher
-                        .poll(&folder.path, folder.repo.as_ref(), &rules),
-                );
+                let found = folder
+                    .watcher
+                    .poll(&folder.path, folder.repo.as_ref(), &rules);
+                edits.extend(found.into_iter().map(|edit| (folder.path.clone(), edit)));
                 if let Some(repo) = &folder.repo {
                     folder.changes = git::changes(repo).unwrap_or_default();
                 }
             }
-            for edit in edits {
+            // A repository inside a plain folder is watched in its own
+            // right; the folder around it does not report those files
+            // again.
+            for (from, edit) in edits {
+                if session
+                    .folder_of(&edit.path)
+                    .is_some_and(|f| f.path != from)
+                {
+                    continue;
+                }
                 session.follow.push(edit);
             }
         }

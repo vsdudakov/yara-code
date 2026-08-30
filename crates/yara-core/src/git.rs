@@ -123,6 +123,44 @@ pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, Stri
     Ok(path.canonicalize().unwrap_or(path))
 }
 
+/// The repositories inside `root` — a folder that holds several of them,
+/// as a bench of related projects often is. Two levels deep, so a worktree
+/// under `.worktrees/` is found as well as a plain `backend/`.
+pub fn discover_repos(root: &Path) -> Vec<PathBuf> {
+    const VENDOR: [&str; 6] = ["node_modules", "target", "dist", "build", "vendor", "venv"];
+    let mut found = Vec::new();
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_none_or(|n| n != ".git" && !VENDOR.iter().any(|v| n == *v))
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    for child in children(root) {
+        if child.join(".git").exists() {
+            found.push(child);
+            continue;
+        }
+        // A folder of worktrees is not a repository itself; what is inside
+        // it may be.
+        for grandchild in children(&child) {
+            if grandchild.join(".git").exists() {
+                found.push(grandchild);
+            }
+        }
+    }
+    found
+}
+
 /// The linked worktrees of the repository — every working copy but the
 /// main one — as folders.
 pub fn worktrees(repo: &Repo) -> Vec<PathBuf> {
@@ -541,6 +579,42 @@ mod tests {
         assert_eq!(explicit.base, repo.base);
         let missing = open(&wt, "no-such-branch").unwrap();
         assert_eq!(missing.base, "HEAD", "an unknown base falls back to HEAD");
+    }
+
+    #[test]
+    fn the_repositories_inside_a_folder_of_them_are_found() {
+        let dir = Dir::new("yara-git-bench");
+        let (backend, _) = {
+            let path = dir.path().join("backend");
+            std::fs::create_dir_all(&path).unwrap();
+            for args in [
+                vec!["init", "-q", "-b", "main"],
+                vec!["config", "user.email", "t@t"],
+                vec!["config", "user.name", "t"],
+            ] {
+                git(&path, &args).unwrap();
+            }
+            std::fs::write(path.join("a.txt"), "one\n").unwrap();
+            git(&path, &["add", "."]).unwrap();
+            git(&path, &["commit", "-q", "-m", "first"]).unwrap();
+            (path.clone(), open(&path, "").unwrap())
+        };
+        std::fs::create_dir_all(dir.path().join("notes")).unwrap();
+        let repo = open(&backend, "main").unwrap();
+        let nested = dir.path().join(".worktrees/backend-task");
+        worktree_add(&repo, &dir.path().join(".worktrees"), "backend-task").unwrap();
+
+        let found = discover_repos(dir.path());
+        assert!(found.contains(&backend), "{found:?}");
+        assert!(
+            found.iter().any(|p| p.ends_with("backend-task")),
+            "a worktree two levels down: {found:?}"
+        );
+        assert!(nested.is_dir());
+        assert!(
+            !found.iter().any(|p| p.ends_with("notes")),
+            "not a repository"
+        );
     }
 
     #[test]

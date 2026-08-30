@@ -1688,3 +1688,66 @@ fn a_worktree_the_agent_makes_inside_a_folder_is_followed_too() {
     app.refresh();
     assert_eq!(app.folders.len(), 1);
 }
+
+#[test]
+fn a_folder_of_repositories_is_followed_through_each_of_them() {
+    // A bench: one folder holding several repositories, and a worktree of
+    // one of them under .worktrees, as an agent sets up.
+    let bench = std::env::temp_dir().join(format!("yara-frame-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&bench);
+    std::fs::create_dir_all(&bench).unwrap();
+    let bench = bench.canonicalize().unwrap();
+    let make = |name: &str| {
+        let path = bench.join(name);
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "t@t"],
+            vec!["config", "user.name", "t"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(&args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::write(path.join("src/main.rs"), "fn main() {}\n").unwrap();
+        for args in [vec!["add", "."], vec!["commit", "-q", "-m", "first"]] {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(&args)
+                .status()
+                .unwrap();
+        }
+        path
+    };
+    let backend = make("backend");
+    let frontend = make("frontend");
+    let mut app = App::with_workspace(vec![bench.clone()], Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    assert!(app.repo().is_none(), "the bench itself is no repository");
+    assert_eq!(app.folders.len(), 3, "the bench and the two repositories");
+
+    std::fs::write(backend.join("src/main.rs"), "fn main() { serve() }\n").unwrap();
+    std::fs::write(frontend.join("src/main.rs"), "fn main() { draw() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.follow.len(), 2);
+    let all = text(&mut app);
+    assert!(all.contains("frontend/src/main.rs"), "{all}");
+    assert!(all.contains("+ fn main() { draw() }"), "{all}");
+    app.handle_key(key(KeyCode::Left));
+    assert!(text(&mut app).contains("backend/src/main.rs"));
+
+    // CHANGES heads each repository it found.
+    app.handle_key(key(KeyCode::F(4)));
+    let all = text(&mut app);
+    assert!(
+        all.contains(" backend ") && all.contains(" frontend "),
+        "{all}"
+    );
+    let _ = std::fs::remove_dir_all(&bench);
+}

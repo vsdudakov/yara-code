@@ -270,12 +270,28 @@ pub fn unified(old: &str, new: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Folders whose contents are nobody's work: skipped by the walk that
+/// watches a folder outside git.
+const VENDOR: [&str; 10] = [
+    ".git",
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".next",
+    "dist",
+];
+
 /// Every file under `root` with when it was last written, folded into one
 /// number. Cheap next to reading them: no reading at all.
 fn fingerprint(root: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
     // A folder the size of a home directory would cost a second a poll;
-    // past this many files the fingerprint is of what it managed to see.
+    // past this many files the walk gives up and says so, so a caller does
+    // not take a partial answer for the whole truth.
     const CAP: usize = 20_000;
     let mut seen = 0usize;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -286,7 +302,7 @@ fn fingerprint(root: &Path) -> u64 {
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name == ".git" || name == "target" || name == "node_modules" {
+            if VENDOR.iter().any(|skip| name == *skip) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
@@ -300,8 +316,40 @@ fn fingerprint(root: &Path) -> u64 {
                 }
                 seen += 1;
                 if seen == CAP {
-                    return hasher.finish();
+                    // Too big to watch this way; every poll counts as movement
+                    // rather than pretending the folder is still.
+                    return rand_like();
                 }
+            }
+        }
+    }
+    hasher.finish()
+}
+
+/// A number that differs every time, for a folder too big to fingerprint.
+fn rand_like() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// What git says has changed, and when those files were last written: the
+/// whole of what a repository's watcher needs, and one process to get it.
+fn repo_fingerprint(repo: &Repo) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Untracked folders are left collapsed: naming every file inside one
+    // is what makes a status slow on a big working tree.
+    let status = git(&repo.root, &["status", "--porcelain"]).unwrap_or_default();
+    status.hash(&mut hasher);
+    for line in status.lines() {
+        let path = line.get(3..).unwrap_or("").trim_matches('"');
+        if let Ok(meta) = std::fs::metadata(repo.root.join(path)) {
+            meta.len().hash(&mut hasher);
+            if let Ok(modified) = meta.modified() {
+                modified.hash(&mut hasher);
             }
         }
     }
@@ -321,10 +369,15 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    /// Whether anything in `root` moved since the last look; the first look
-    /// counts as movement, so the stock is taken.
-    pub fn moved(&mut self, root: &Path) -> bool {
-        let now = fingerprint(root);
+    /// Whether anything in the folder moved since the last look; the first
+    /// look counts as movement, so the stock is taken. A repository is
+    /// asked of git — a walk of a big working tree costs more than the one
+    /// process does, and misses nothing git already knows.
+    pub fn moved(&mut self, root: &Path, repo: Option<&Repo>) -> bool {
+        let now = match repo {
+            Some(repo) => repo_fingerprint(repo),
+            None => fingerprint(root),
+        };
         let moved = self.fingerprint != Some(now);
         self.fingerprint = Some(now);
         moved
@@ -554,9 +607,15 @@ mod tests {
         assert_eq!(edits.len(), 1);
         assert_eq!((edits[0].added(), edits[0].removed()), (1, 1));
         // With nothing written since, nothing moved and git is not asked.
-        assert!(watcher.moved(&root), "the first look takes stock");
-        assert!(!watcher.moved(&root));
+        assert!(
+            watcher.moved(&root, Some(&repo)),
+            "the first look takes stock"
+        );
+        assert!(!watcher.moved(&root, Some(&repo)));
         dir.file("b.txt", "new\n");
-        assert!(watcher.moved(&root));
+        assert!(watcher.moved(&root, Some(&repo)));
+        // A second edit to a file git already lists is movement too.
+        dir.file("b.txt", "new and more\n");
+        assert!(watcher.moved(&root, Some(&repo)));
     }
 }

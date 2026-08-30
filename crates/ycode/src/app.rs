@@ -1229,7 +1229,7 @@ impl App {
             let mut edits = Vec::new();
             for folder in &mut session.folders {
                 // Only a folder that moved is worth reading, or asking git.
-                if !folder.watcher.moved(&folder.path) {
+                if !folder.watcher.moved(&folder.path, folder.repo.as_ref()) {
                     continue;
                 }
                 edits.extend(folder.watcher.poll(&folder.path, folder.repo.as_ref()));

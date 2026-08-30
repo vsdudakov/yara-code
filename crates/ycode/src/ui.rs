@@ -58,7 +58,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // A blank column between the tree and the pane beside it as well, so
     // the tree has the same seam to drag as the agent does.
     let tree_gap = Constraint::Length(u16::from(app.show_sidebar));
+    let narrow = app.settings.narrow_width;
     let (files, agent, follow, seam, tree_seam) = match app.settings.agent_side {
+        // Too narrow to share — a phone over SSH — and the panes take turns:
+        // the one with the keyboard has it all, Next Pane brings up another.
+        _ if narrow > 0 && body.width < narrow => {
+            let none = Rect::default();
+            match app.focus {
+                Focus::Files if app.show_sidebar => (body, none, none, none, none),
+                Focus::Agent | Focus::Terminal => (none, body, none, none, none),
+                _ => (none, none, body, none, none),
+            }
+        }
         Side::Left => {
             let [agent, seam, follow, tree_seam, files] =
                 Layout::horizontal([agent, gap, Constraint::Min(0), tree_gap, sidebar]).areas(body);
@@ -75,11 +86,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     app.hits.body = body;
     app.hits.files = files;
     app.hits.follow = follow;
-    if app.show_sidebar {
+    if app.show_sidebar && files.width > 0 {
         draw_files(frame, app, files);
     }
-    draw_agent(frame, app, agent);
-    draw_follow(frame, app, follow);
+    if agent.width > 0 {
+        draw_agent(frame, app, agent);
+    }
+    if follow.width > 0 {
+        draw_follow(frame, app, follow);
+    }
     draw_status(frame, app, status);
     draw_overlay(frame, app, area);
     draw_hover(frame, app);
@@ -916,13 +931,19 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         x += pair.iter().map(Span::width).sum::<usize>() as u16;
     }
-    let right_x = area.right().saturating_sub(right.width() as u16);
-    if app.usage_chip().is_some() {
+    let left = Line::from(left);
+    // The agent's state is the first thing to go where there is no room:
+    // the pane's own title says it too.
+    let fits = left.width() + right.width() <= area.width as usize;
+    if fits && app.usage_chip().is_some() {
+        let right_x = area.right().saturating_sub(right.width() as u16);
         let w = right.spans[0].width() as u16;
         app.hits.usage = Rect::new(right_x, area.y, w, 1);
     }
-    frame.render_widget(Paragraph::new(Line::from(left)), area);
-    frame.render_widget(Paragraph::new(right.right_aligned()), area);
+    frame.render_widget(Paragraph::new(left), area);
+    if fits {
+        frame.render_widget(Paragraph::new(right.right_aligned()), area);
+    }
 }
 
 fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -1610,10 +1631,12 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
             while !hints.is_empty() && hints.join("  ").len() + 2 + version.len() > room {
                 hints.remove(0);
             }
-            Line::from(vec![
-                Span::styled(format!("{}  ", hints.join("  ")), dim),
-                Span::styled(version, chip),
-            ])
+            let hints = if hints.is_empty() {
+                " ".into()
+            } else {
+                format!("{}  ", hints.join("  "))
+            };
+            Line::from(vec![Span::styled(hints, dim), Span::styled(version, chip)])
         }
     };
     let room = (area.width as usize)
@@ -1633,8 +1656,11 @@ fn draw_status(frame: &mut Frame, app: &mut App, area: Rect) {
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Length(width as u16), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(Line::from(left)), left_area);
-    // The hints are the least of it: they are cut before anything else is.
-    frame.render_widget(Paragraph::new(right.right_aligned()), right_area);
+    // The hints are the least of it: they are cut before anything else is,
+    // and the version goes with them rather than run into the counter.
+    if app.note.is_some() || right.width() <= right_area.width as usize {
+        frame.render_widget(Paragraph::new(right.right_aligned()), right_area);
+    }
 }
 
 /// Fits a row into `room` by cutting the one span that can be cut — a path,

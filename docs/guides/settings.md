@@ -18,6 +18,7 @@ saves a setting. `//` comments are allowed.
 | `agent_width` | `42` | The agent pane's share of the width, in percent; dragging the seam between the panes sets it |
 | `sidebar_width` | `30` | The FILES tree, in columns; its own seam drags it too |
 | `show_sidebar` | `false` | Whether FILES is open at start |
+| `narrow_width` | `80` | Under this many columns — a phone over SSH, a narrow split — the panes take turns: the one with the keyboard fills the body and ++f6++ brings up the next; `0` keeps them side by side at any width |
 | `shell` | `""` | The shell ++ctrl+t++ runs under the agent; empty means `$SHELL` |
 | `terminal_height` | `40` | That terminal's share of the agent pane's height, in percent |
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |

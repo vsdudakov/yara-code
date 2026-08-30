@@ -150,6 +150,10 @@ pub struct Settings {
     /// The FILES sidebar, in columns, and whether it is open at start.
     pub sidebar_width: u16,
     pub show_sidebar: bool,
+    /// Under this many columns — a phone, a split — the panes take turns:
+    /// the one with the keyboard has the whole body; 0 keeps them side by
+    /// side at any width.
+    pub narrow_width: u16,
     /// The shell the terminal runs; empty means `$SHELL`, or `sh`.
     pub shell: String,
     /// The terminal's share of the agent pane's height, in percent.
@@ -205,6 +209,7 @@ impl Default for Settings {
             agent_width: 42,
             sidebar_width: 30,
             show_sidebar: false,
+            narrow_width: 80,
             shell: String::new(),
             terminal_height: 40,
             timeline_ticks: 12,
@@ -405,6 +410,11 @@ impl Settings {
   "sidebar_width": {sidebar_width},
   "show_sidebar": {show_sidebar},
 
+  // Under this many columns the panes take turns instead of sharing the
+  // width: the one with the keyboard fills the body, and Next Pane brings
+  // up another. 0 keeps them side by side at any width.
+  "narrow_width": {narrow_width},
+
   // The terminal under the agent (Ctrl+T): the shell it runs ("" = $SHELL)
   // and its share of that pane's height, in percent.
   "shell": {shell},
@@ -473,6 +483,7 @@ impl Settings {
             agent_width = json(&self.agent_width),
             sidebar_width = json(&self.sidebar_width),
             show_sidebar = json(&self.show_sidebar),
+            narrow_width = json(&self.narrow_width),
             shell = json(&self.shell),
             terminal_height = json(&self.terminal_height),
             timeline_ticks = json(&self.timeline_ticks),
@@ -711,6 +722,7 @@ mod tests {
             "\"agent_width\"",
             "\"sidebar_width\"",
             "\"show_sidebar\"",
+            "\"narrow_width\"",
             "\"shell\"",
             "\"terminal_height\"",
             "\"timeline_ticks\"",

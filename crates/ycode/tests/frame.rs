@@ -4,6 +4,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use yara_core::command::Command;
 use yara_core::follow::EditEvent;
 use yara_core::settings::{Settings, Side};
 use yara_core::theme::Theme;
@@ -1879,4 +1880,68 @@ fn the_tree_marks_a_changed_folder_and_the_open_file_and_the_editor_blames_the_l
     app.settings.blame = false;
     app.handle_mouse(ev(MouseEventKind::Moved, e.x + 2, e.y));
     assert!(app.blame.is_none());
+}
+
+fn frame_wide(app: &mut App, width: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn a_narrow_terminal_shows_one_pane_at_a_time_and_next_pane_brings_up_the_other() {
+    let mut app = App::new(Some("/work/demo".into()));
+    let rows = frame_wide(&mut app, 48);
+    assert!(rows[1].contains("AGENT · claude"), "{}", rows[1]);
+    assert!(
+        !rows[1].contains("FOLLOW"),
+        "the follow pane waits its turn: {}",
+        rows[1]
+    );
+    assert_eq!(rows[1].chars().count(), 48);
+    assert!(
+        rows[1].ends_with('┐'),
+        "the agent has the whole width: {}",
+        rows[1]
+    );
+    assert!(
+        !rows[0].contains("exited"),
+        "the agent's state gives way to the tabs: {}",
+        rows[0]
+    );
+    app.execute(Command::NextPane);
+    let rows = frame_wide(&mut app, 48);
+    assert!(rows[1].contains("FOLLOW · LIVE"), "{}", rows[1]);
+    assert!(!rows[1].contains("AGENT"), "{}", rows[1]);
+    app.execute(Command::ToggleSidebar);
+    let rows = frame_wide(&mut app, 48);
+    assert!(rows[1].contains("FILES"), "{}", rows[1]);
+    assert!(!rows[1].contains("FOLLOW"), "{}", rows[1]);
+    let status = &rows[11];
+    assert!(
+        status.contains("no edits yet") && !status.contains("yetv"),
+        "the version leaves before it runs into the counter: {status}"
+    );
+}
+
+#[test]
+fn narrow_width_zero_keeps_the_panes_side_by_side_at_any_width() {
+    let settings = Settings {
+        narrow_width: 0,
+        ..Settings::default()
+    };
+    let mut app = App::with_settings(Some("/work/demo".into()), settings, Theme::default());
+    let rows = frame_wide(&mut app, 48);
+    assert!(
+        rows[1].contains("AGENT") && rows[1].contains("FOLLOW"),
+        "{}",
+        rows[1]
+    );
 }

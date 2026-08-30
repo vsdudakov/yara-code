@@ -173,10 +173,25 @@ pub fn dark_modern() -> Theme {
 const IMPORTS: &str = "entity.name.namespace, entity.name.module, support.other.namespace, \
                        meta.path, variable.other.module, entity.name.import";
 
-/// The one theme that ships: VS Code's, so the editor looks like the one
-/// beside it. Any other is a VS Code theme JSON in the user's themes folder.
+/// The themes that ship: VS Code's own, so the editor looks like the one
+/// beside it, and a handful of the popular ones, each carried as the same
+/// VS Code JSON a user would drop in the themes folder, fetched and
+/// flattened by `packaging/themes.py`.
 pub fn builtin() -> Vec<Theme> {
-    vec![dark_modern()]
+    let bundled = [
+        include_str!("../assets/themes/monokai.json"),
+        include_str!("../assets/themes/dracula.json"),
+        include_str!("../assets/themes/one-dark-pro.json"),
+        include_str!("../assets/themes/tokyo-night.json"),
+        include_str!("../assets/themes/nord.json"),
+    ];
+    std::iter::once(dark_modern())
+        .chain(
+            bundled
+                .iter()
+                .map(|json| from_vscode_json(json, "Bundled").expect("the bundled themes parse")),
+        )
+        .collect()
 }
 
 /// Where user themes live: `~/.config/ycode/themes`, beside the settings.
@@ -220,6 +235,11 @@ pub fn from_vscode_file(path: &Path) -> Result<Theme, String> {
 }
 
 fn parse_hex(s: &str) -> Option<Rgb> {
+    parse_hex_alpha(s).map(|(rgb, _)| rgb)
+}
+
+/// A colour and its alpha, 255 when the value carries none.
+fn parse_hex_alpha(s: &str) -> Option<(Rgb, u8)> {
     let digits: Vec<char> = s.trim().trim_start_matches('#').chars().collect();
     // Read by char and never by byte, so a stray non-ASCII character in a
     // theme file is a bad colour, not a panic.
@@ -229,24 +249,55 @@ fn parse_hex(s: &str) -> Option<Rgb> {
     let hex = |a: char, b: char| u8::from_str_radix(&format!("{a}{b}"), 16).ok();
     match digits.len() {
         3 => Some((
-            hex(digits[0], digits[0])?,
-            hex(digits[1], digits[1])?,
-            hex(digits[2], digits[2])?,
+            (
+                hex(digits[0], digits[0])?,
+                hex(digits[1], digits[1])?,
+                hex(digits[2], digits[2])?,
+            ),
+            255,
         )),
         6 | 8 => Some((
-            hex(digits[0], digits[1])?,
-            hex(digits[2], digits[3])?,
-            hex(digits[4], digits[5])?,
+            (
+                hex(digits[0], digits[1])?,
+                hex(digits[2], digits[3])?,
+                hex(digits[4], digits[5])?,
+            ),
+            if digits.len() == 8 {
+                hex(digits[6], digits[7])?
+            } else {
+                255
+            },
         )),
         _ => None,
     }
 }
 
+/// Whether text reads on that ground: the two at least a third of the
+/// luminance range apart.
+fn legible(fg: Rgb, bg: Rgb) -> bool {
+    let luma = |c: Rgb| (299 * c.0 as i32 + 587 * c.1 as i32 + 114 * c.2 as i32) / 1000;
+    (luma(fg) - luma(bg)).abs() >= 85
+}
+
+/// The colour laid over the ground at that alpha: a terminal cell has no
+/// transparency, so the blend VS Code would show is done here.
+fn over(color: Rgb, alpha: u8, ground: Rgb) -> Rgb {
+    let mix =
+        |c: u8, g: u8| ((c as u32 * alpha as u32 + g as u32 * (255 - alpha as u32)) / 255) as u8;
+    (
+        mix(color.0, ground.0),
+        mix(color.1, ground.1),
+        mix(color.2, ground.2),
+    )
+}
+
 /// Reads a VS Code colour-theme JSON: `colors` drives the chrome and the
 /// terminal palette, `tokenColors` the syntax. Anything the file omits keeps
-/// Dark Modern's value.
+/// Dark Modern's value. The `//` comments VS Code's own theme files carry
+/// are allowed.
 pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(&crate::settings::strip_comments(text)).map_err(|e| e.to_string())?;
     let light = value.get("type").and_then(|v| v.as_str()) == Some("light");
     let mut theme = dark_modern();
     theme.dark = !light;
@@ -256,31 +307,85 @@ pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, String
         .unwrap_or(fallback_name)
         .to_string();
 
+    let colors = &value["colors"];
     let get = |key: &str| {
-        value["colors"]
+        colors
             .get(key)
             .and_then(|v| v.as_str())
-            .and_then(parse_hex)
+            .and_then(parse_hex_alpha)
     };
+    // The ground first, since every translucent colour is laid over it.
+    if let Some((bg, _)) = get("editor.background") {
+        theme.ui.bg = bg;
+    }
+    let bg = theme.ui.bg;
     let ui = &mut theme.ui;
-    for (slot, key) in [
-        (&mut ui.bg, "editor.background"),
-        (&mut ui.fg, "editor.foreground"),
-        (&mut ui.fg_dim, "descriptionForeground"),
-        (&mut ui.border, "panel.border"),
-        (&mut ui.accent, "focusBorder"),
-        (&mut ui.accent_dim, "textLink.foreground"),
-        (&mut ui.accent_bg, "diffEditor.removedLineBackground"),
-        (&mut ui.success, "gitDecoration.addedResourceForeground"),
-        (&mut ui.success_dim, "terminal.ansiBrightGreen"),
-        (&mut ui.success_bg, "diffEditor.insertedLineBackground"),
-        (&mut ui.selected_bg, "list.activeSelectionBackground"),
-        (&mut ui.hover_bg, "list.hoverBackground"),
-        (&mut ui.match_bg, "editor.findMatchHighlightBackground"),
-        (&mut ui.cursor, "editorCursor.foreground"),
+    // Each role with the key VS Code names it by, and the nearest key a
+    // theme is likely to set when it leaves that one to VS Code's defaults.
+    for (slot, keys) in [
+        (&mut ui.fg, &["editor.foreground", "foreground"][..]),
+        (
+            &mut ui.fg_dim,
+            &["editorLineNumber.foreground", "descriptionForeground"],
+        ),
+        (&mut ui.border, &["panel.border", "editorGroup.border"]),
+        // The link colour rather than the focus border, which many themes
+        // keep as quiet as the panel border; the live pane must read.
+        (&mut ui.accent, &["textLink.foreground", "focusBorder"]),
+        (
+            &mut ui.accent_dim,
+            &[
+                "textLink.activeForeground",
+                "textLink.foreground",
+                "focusBorder",
+            ],
+        ),
+        (
+            &mut ui.accent_bg,
+            &[
+                "diffEditor.removedLineBackground",
+                "diffEditor.removedTextBackground",
+            ],
+        ),
+        (
+            &mut ui.success,
+            &[
+                "gitDecoration.addedResourceForeground",
+                "terminal.ansiGreen",
+            ],
+        ),
+        (&mut ui.success_dim, &["terminal.ansiBrightGreen"]),
+        (
+            &mut ui.success_bg,
+            &[
+                "diffEditor.insertedLineBackground",
+                "diffEditor.insertedTextBackground",
+            ],
+        ),
+        (&mut ui.selected_bg, &["list.activeSelectionBackground"]),
+        (&mut ui.hover_bg, &["list.hoverBackground"]),
+        (
+            &mut ui.match_bg,
+            &[
+                "editor.findMatchHighlightBackground",
+                "editor.findMatchBackground",
+            ],
+        ),
+        (
+            &mut ui.cursor,
+            &["editorCursor.foreground", "editor.foreground"],
+        ),
     ] {
-        if let Some(c) = get(key) {
-            *slot = c;
+        if let Some((color, alpha)) = keys.iter().find_map(|key| get(key)) {
+            *slot = over(color, alpha, bg);
+        }
+    }
+    // A selected row keeps the ordinary foreground, so a theme whose active
+    // selection is as bright as its text (VS Code paints it with its own
+    // foreground) falls back to the quieter inactive selection.
+    if !legible(ui.fg, ui.selected_bg) {
+        if let Some((color, alpha)) = get("list.inactiveSelectionBackground") {
+            ui.selected_bg = over(color, alpha, bg);
         }
     }
     const ANSI: [&str; 16] = [
@@ -302,7 +407,7 @@ pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, String
         "BrightWhite",
     ];
     for (slot, name) in theme.ansi.iter_mut().zip(ANSI) {
-        if let Some(c) = get(&format!("terminal.ansi{name}")) {
+        if let Some((c, _)) = get(&format!("terminal.ansi{name}")) {
             *slot = c;
         }
     }
@@ -347,9 +452,19 @@ mod tests {
     use crate::test_support::Dir;
 
     #[test]
-    fn dark_modern_is_the_one_theme_that_ships() {
+    fn dark_modern_ships_first_with_the_popular_themes_behind_it() {
         let names: Vec<String> = builtin().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, ["Dark Modern"]);
+        assert_eq!(
+            names,
+            [
+                "Dark Modern",
+                "Monokai",
+                "Dracula",
+                "One Dark Pro",
+                "Tokyo Night",
+                "Nord"
+            ]
+        );
         assert_eq!(Theme::default().name, "Dark Modern");
         assert!(dark_modern().dark);
         assert_eq!(
@@ -357,6 +472,82 @@ mod tests {
             rgb(0x1F1F1F)
         );
         assert!(by_name(&builtin(), "Nope").is_none());
+    }
+
+    #[test]
+    fn every_bundled_theme_brings_its_own_ground_palette_and_syntax() {
+        let (dark, themes) = (dark_modern(), builtin());
+        for theme in themes.iter().skip(1) {
+            assert!(theme.dark, "{}", theme.name);
+            assert_ne!(theme.ui.bg, dark.ui.bg, "{}", theme.name);
+            assert_ne!(theme.ui.fg, dark.ui.fg, "{}", theme.name);
+            assert_ne!(theme.ui.success_bg, dark.ui.success_bg, "{}", theme.name);
+            assert_ne!(theme.ui.selected_bg, dark.ui.selected_bg, "{}", theme.name);
+            assert!(
+                legible(theme.ui.fg, theme.ui.selected_bg),
+                "{}: text reads on a selected row",
+                theme.name
+            );
+            assert_ne!(
+                theme.ui.accent, theme.ui.border,
+                "{}: the live border is told from the idle one",
+                theme.name
+            );
+            assert_ne!(theme.ansi, dark.ansi, "{}", theme.name);
+            assert_ne!(theme.tokens, dark.tokens, "{}", theme.name);
+        }
+        let monokai = by_name(&themes, "Monokai").unwrap();
+        assert_eq!(monokai.ui.bg, rgb(0x272822));
+        let keyword = monokai
+            .tokens
+            .iter()
+            .find(|t| t.scope == "keyword")
+            .unwrap();
+        assert_eq!(keyword.color, rgb(0xF92672));
+    }
+
+    #[test]
+    fn a_translucent_colour_is_laid_over_the_ground() {
+        let json = r##"{"colors": {
+            "editor.background": "#000000",
+            "diffEditor.insertedTextBackground": "#00ff0080",
+            "focusBorder": "#ffffff00",
+            "terminal.ansiRed": "#ff000000"
+        }}"##;
+        let theme = from_vscode_json(json, "x").unwrap();
+        assert_eq!(theme.ui.success_bg, (0, 128, 0), "half of the green");
+        assert_eq!(
+            theme.ui.accent,
+            (0, 0, 0),
+            "fully transparent is the ground"
+        );
+        assert_eq!(theme.ansi[1], (255, 0, 0), "the terminal has no alpha");
+        let bright = r##"{"colors": {
+            "editor.foreground": "#ffffff",
+            "list.activeSelectionBackground": "#eeeeee",
+            "list.inactiveSelectionBackground": "#333333"
+        }}"##;
+        assert_eq!(
+            from_vscode_json(bright, "x").unwrap().ui.selected_bg,
+            (0x33, 0x33, 0x33),
+            "a selection as bright as the text gives way to the inactive one"
+        );
+        assert_eq!(
+            from_vscode_json(r##"{"colors": {"foreground": "#abcdef"}}"##, "x")
+                .unwrap()
+                .ui
+                .fg,
+            (0xAB, 0xCD, 0xEF),
+            "the nearest key stands in"
+        );
+    }
+
+    #[test]
+    fn a_theme_file_may_carry_the_comments_vs_code_writes() {
+        let json = "// the original palette\n{\"name\": \"Noted\", // trailing\n\"colors\": {\"editor.background\": \"#123456\"}}";
+        let theme = from_vscode_json(json, "x").unwrap();
+        assert_eq!(theme.name, "Noted");
+        assert_eq!(theme.ui.bg, (0x12, 0x34, 0x56));
     }
 
     #[test]
@@ -392,7 +583,11 @@ mod tests {
         assert!(!theme.dark, "type: light");
         assert_eq!(theme.ui.bg, (250, 250, 250));
         assert_eq!(theme.ui.fg, (16, 16, 16));
-        assert_eq!(theme.ui.success_bg, (0xE6, 0xFF, 0xEC), "alpha is dropped");
+        assert_eq!(
+            theme.ui.success_bg,
+            over((0xE6, 0xFF, 0xEC), 0x80, (250, 250, 250)),
+            "alpha is blended onto the ground"
+        );
         assert_eq!(theme.ansi[1], (255, 0, 0));
         // Untouched keys keep Dark Modern's value.
         assert_eq!(theme.ui.border, dark_modern().ui.border);
@@ -461,7 +656,7 @@ mod tests {
         dir.file("themes/notes.txt", "not a theme");
         let themes = load_all();
         std::env::remove_var("YARA_CONFIG_DIR");
-        assert_eq!(themes.len(), 2);
+        assert_eq!(themes.len(), builtin().len() + 1);
         assert_eq!(by_name(&themes, "Dark Modern").unwrap().ui.bg, (0, 0, 0));
         assert!(by_name(&themes, "Extra").is_some());
     }

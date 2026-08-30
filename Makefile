@@ -1,4 +1,4 @@
-.PHONY: build run lint format test coverage coverage-html icons shots docs docs-serve docs-install clean
+.PHONY: build run lint format test coverage coverage-html icons themes shots docs docs-serve docs-install clean
 
 # Everything the CI gate runs, in one target.
 lint:
@@ -30,6 +30,10 @@ run:
 # The application icon, in the colours the editor ships with. Needs Pillow.
 icons:
 	python3 packaging/icons.py
+
+# The bundled themes, fetched afresh from where each is published.
+themes:
+	python3 packaging/themes.py
 
 # The documentation's screenshots, drawn by the editor itself into SVG.
 shots:

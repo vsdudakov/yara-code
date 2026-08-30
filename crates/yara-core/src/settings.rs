@@ -384,8 +384,10 @@ impl Settings {
 // default applies. Lines starting with // are comments; the editor writes the
 // file afresh, with these comments, whenever it saves a setting.
 {{
-  // Colour theme: {themes}, or the name of any VS Code theme JSON dropped in
-  // the themes/ folder beside this file.
+  // Colour theme, one of those built in:
+  //   {themes}
+  // or the name of any VS Code theme JSON dropped in the themes/ folder
+  // beside this file.
   "theme": {theme},
 
   // The command that runs in the AGENT pane.

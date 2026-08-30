@@ -3,7 +3,7 @@
 //! the keys — lives here rather than in the code.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -103,6 +103,7 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         | Command::SwapPanes
         | Command::HelpMenu
         | Command::AddFolder
+        | Command::RemoveFolder
         | Command::Documentation => return None,
         Command::ToggleSidebar => "Ctrl+B",
         Command::Changes => "F4",
@@ -174,8 +175,8 @@ pub struct Settings {
     /// the programs in that pane use them themselves.
     pub agent_keys: Vec<Chord>,
     pub keys: Keys,
-    /// Recently opened project folders, most recent first.
-    pub recent_projects: Vec<PathBuf>,
+    /// Workspaces opened before, newest first: each is its list of folders.
+    pub recent_workspaces: Vec<Vec<PathBuf>>,
     /// The file could not be read. Nothing is written over it until it can:
     /// a save would replace the user's file, typo and all, with defaults.
     #[serde(skip)]
@@ -213,7 +214,7 @@ impl Default for Settings {
             .filter_map(|c| c.parse().ok())
             .collect(),
             keys: Keys::default(),
-            recent_projects: Vec::new(),
+            recent_workspaces: Vec::new(),
             unreadable: false,
         }
     }
@@ -410,8 +411,9 @@ impl Settings {
 {reference}
   "keys": {keys},
 
-  // Folders offered by File → Open Recent, newest first. Kept by the editor.
-  "recent_projects": {recent_projects}
+  // Workspaces offered by File → Open Recent, newest first, each the list of
+  // folders it holds. Kept by the editor.
+  "recent_workspaces": {recent_workspaces}
 }}
 "#,
             theme = json(&self.theme),
@@ -430,7 +432,7 @@ impl Settings {
             usage_commands = json(&self.usage_commands),
             usage_slash = json(&self.usage_slash),
             keys = json(&self.keys),
-            recent_projects = json(&self.recent_projects),
+            recent_workspaces = json(&self.recent_workspaces),
             docs = crate::DOCUMENTATION,
         )
     }
@@ -441,11 +443,15 @@ impl Settings {
         std::fs::metadata(Self::path()?).ok()?.modified().ok()
     }
 
-    /// Records a project in the recent list, newest first, capped at 15.
-    pub fn push_recent(&mut self, root: &Path) {
-        self.recent_projects.retain(|p| p != root);
-        self.recent_projects.insert(0, root.to_path_buf());
-        self.recent_projects.truncate(15);
+    /// Records a workspace — its folders — in the recent list, newest
+    /// first, capped at 15. A workspace with no folders is not one yet.
+    pub fn push_recent(&mut self, folders: &[PathBuf]) {
+        if folders.is_empty() {
+            return;
+        }
+        self.recent_workspaces.retain(|w| w != folders);
+        self.recent_workspaces.insert(0, folders.to_vec());
+        self.recent_workspaces.truncate(15);
     }
 
     pub fn chord(&self, command: Command) -> Option<&Chord> {
@@ -509,6 +515,7 @@ mod tests {
                     | Command::SwapPanes
                     | Command::HelpMenu
                     | Command::AddFolder
+                    | Command::RemoveFolder
                     | Command::NewFolder
                     | Command::Documentation
             );
@@ -580,20 +587,30 @@ mod tests {
     #[test]
     fn the_recent_list_is_newest_first_deduped_and_capped() {
         let mut settings = Settings::default();
+        let one = |i: usize| vec![PathBuf::from(format!("/p/{i}"))];
         for i in 0..20 {
-            settings.push_recent(&PathBuf::from(format!("/p/{i}")));
+            settings.push_recent(&one(i));
         }
-        settings.push_recent(&PathBuf::from("/p/10"));
-        assert_eq!(settings.recent_projects.len(), 15);
-        assert_eq!(settings.recent_projects[0], PathBuf::from("/p/10"));
-        assert_eq!(settings.recent_projects[1], PathBuf::from("/p/19"));
+        settings.push_recent(&one(10));
+        assert_eq!(settings.recent_workspaces.len(), 15);
+        assert_eq!(settings.recent_workspaces[0], one(10));
+        assert_eq!(settings.recent_workspaces[1], one(19));
         assert_eq!(
             settings
-                .recent_projects
+                .recent_workspaces
                 .iter()
-                .filter(|p| p.ends_with("10"))
+                .filter(|w| **w == one(10))
                 .count(),
             1
+        );
+        // A workspace of several folders is one entry, folders and all.
+        let two = vec![PathBuf::from("/a"), PathBuf::from("/b")];
+        settings.push_recent(&two);
+        assert_eq!(settings.recent_workspaces[0], two);
+        settings.push_recent(&[]);
+        assert_eq!(
+            settings.recent_workspaces[0], two,
+            "nothing is not a workspace"
         );
     }
 
@@ -617,7 +634,7 @@ mod tests {
             .keys
             .map
             .insert("save".into(), "Ctrl+D".parse().unwrap());
-        settings.recent_projects.push(PathBuf::from("/tmp/p"));
+        settings.push_recent(&[PathBuf::from("/tmp/p")]);
         let text = settings.to_commented_json();
         for key in [
             "\"theme\"",
@@ -636,7 +653,7 @@ mod tests {
             "\"usage_commands\"",
             "\"usage_slash\"",
             "\"keys\"",
-            "\"recent_projects\"",
+            "\"recent_workspaces\"",
         ] {
             let at = text
                 .find(key)
@@ -678,7 +695,7 @@ mod tests {
         std::fs::write(&path, broken).unwrap();
         let (mut settings, complaint) = Settings::load();
         assert!(complaint.unwrap().contains("not be written over"));
-        settings.push_recent(dir.path());
+        settings.push_recent(&[dir.path().to_path_buf()]);
         assert!(settings.save().is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
         std::env::remove_var("YARA_CONFIG_DIR");

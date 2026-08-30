@@ -80,6 +80,8 @@ pub enum Overlay {
     Usage,
     /// The themes, with the row the cursor is on.
     Themes(usize),
+    /// The workspace's folders, to take one out.
+    Folders(usize),
     /// The menu a right click on a tab drops: which tab, and the row.
     TabMenu(usize, usize),
     /// The menu a right click in the tree drops, with the row it is on.
@@ -200,6 +202,25 @@ impl Folder {
     }
 }
 
+/// Where a task's own worktree of a repository lives: under the folder the
+/// settings name, or beside the repository, and called by the task.
+pub fn worktree_path(repo: &Repo, settings: &Settings, slug: &str) -> PathBuf {
+    let name = repo
+        .root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let base = match settings.worktrees_dir.as_str() {
+        "" => repo
+            .root
+            .parent()
+            .unwrap_or(&repo.root)
+            .join(format!("{name}-worktrees")),
+        dir => PathBuf::from(dir).join(&name),
+    };
+    base.join(slug)
+}
+
 /// A row of the CHANGES list: a folder's heading, or a file under it.
 #[derive(Clone, Debug)]
 pub enum ChangeRow {
@@ -207,9 +228,10 @@ pub enum ChangeRow {
     File(usize, Change),
 }
 
-/// One task: an agent, and the folders it works in — a worktree per
-/// repository, most often — with one timeline over them all.
-pub struct Session {
+/// One task: an agent, its own timeline, and the folders it works in —
+/// the workspace's folders, or a worktree of each where the task has one of
+/// its own.
+pub struct Task {
     pub folders: Vec<Folder>,
     pub agent: Option<Pty>,
     pub follow: Follow,
@@ -230,11 +252,11 @@ pub struct Session {
     pub name: Option<String>,
 }
 
-impl Session {
-    fn new(project: Option<PathBuf>, settings: &Settings) -> Self {
-        let folders: Vec<Folder> = project
-            .into_iter()
-            .map(|path| Folder::new(path, settings))
+impl Task {
+    fn new(paths: &[PathBuf], settings: &Settings) -> Self {
+        let folders: Vec<Folder> = paths
+            .iter()
+            .map(|path| Folder::new(path.clone(), settings))
             .collect();
         Self {
             tree: (!folders.is_empty())
@@ -249,6 +271,46 @@ impl Session {
             editor: None,
             name: None,
         }
+    }
+
+    /// What the task calls its worktrees, as a folder name: its own name,
+    /// with spaces and slashes made dashes. `None` while it is unnamed —
+    /// then the task works in the workspace's folders themselves.
+    pub fn slug(&self) -> Option<String> {
+        let name = self.name.as_ref()?;
+        let parts: Vec<&str> = name
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|p| !p.is_empty())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("-"))
+    }
+
+    /// Points the task at the workspace's folders again — where it has a
+    /// worktree of its own for one, that worktree stands in its place.
+    /// Folders it already watches are kept, watchers and all.
+    fn resync(&mut self, workspace: &[PathBuf], settings: &Settings) {
+        let slug = self.slug();
+        let mut kept: Vec<Folder> = Vec::new();
+        for path in workspace {
+            let path = match (&slug, git::open(path, "")) {
+                (Some(slug), Some(repo)) => {
+                    let mine = worktree_path(&repo, settings, slug);
+                    if mine.is_dir() {
+                        mine
+                    } else {
+                        path.clone()
+                    }
+                }
+                _ => path.clone(),
+            };
+            match self.folders.iter().position(|f| f.path == path) {
+                Some(i) => kept.push(self.folders.remove(i)),
+                None => kept.push(Folder::new(path, settings)),
+            }
+        }
+        self.folders = kept;
+        let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
+        self.tree = (!roots.is_empty()).then(|| Tree::with_roots(roots));
     }
 
     /// The main folder: where the agent runs and what the chrome names.
@@ -359,10 +421,13 @@ impl Session {
 }
 
 pub struct App {
+    /// The workspace: the folders the project is made of. Tasks work in
+    /// these, or in worktrees of their own for them.
+    pub workspace: Vec<PathBuf>,
     pub settings: Settings,
     pub theme: Theme,
     pub syntax: Syntax,
-    pub sessions: Vec<Session>,
+    pub tasks: Vec<Task>,
     pub active: usize,
     /// Set by an agent's reader thread when there is something new to draw.
     pub dirty: Arc<AtomicBool>,
@@ -403,15 +468,15 @@ pub struct App {
 /// The active session is what nearly everything is about; the app reads as
 /// it, so `app.follow` is the timeline in front.
 impl Deref for App {
-    type Target = Session;
-    fn deref(&self) -> &Session {
-        &self.sessions[self.active]
+    type Target = Task;
+    fn deref(&self) -> &Task {
+        &self.tasks[self.active]
     }
 }
 
 impl DerefMut for App {
-    fn deref_mut(&mut self) -> &mut Session {
-        &mut self.sessions[self.active]
+    fn deref_mut(&mut self) -> &mut Task {
+        &mut self.tasks[self.active]
     }
 }
 
@@ -419,6 +484,49 @@ impl App {
     /// An app on the built-in defaults; `load` reads the user's files.
     pub fn new(project: Option<PathBuf>) -> Self {
         Self::with_settings(project, Settings::default(), Theme::default())
+    }
+
+    /// An app on one folder, with one task in it.
+    pub fn with_settings(project: Option<PathBuf>, settings: Settings, theme: Theme) -> Self {
+        Self::with_workspace(project.into_iter().collect(), settings, theme)
+    }
+
+    /// An app on a workspace of folders, with one task in it.
+    pub fn with_workspace(folders: Vec<PathBuf>, settings: Settings, theme: Theme) -> Self {
+        // A path as the user typed it — `.`, most often — is not the name
+        // the chrome should show.
+        let workspace: Vec<PathBuf> = folders
+            .into_iter()
+            .map(|p| p.canonicalize().unwrap_or(p))
+            .collect();
+        Self {
+            tasks: vec![Task::new(&workspace, &settings)],
+            workspace,
+            active: 0,
+            show_sidebar: settings.show_sidebar,
+            settings,
+            syntax: Syntax::new(&theme),
+            theme,
+            dirty: Arc::new(AtomicBool::new(true)),
+            focus: Focus::Agent,
+            overlay: None,
+            start_row: 0,
+            hits: Hits::default(),
+            selection: None,
+            resizing: None,
+            hover: None,
+            autostart: false,
+            dragging_tab: None,
+            last_frame: Vec::new(),
+            osc52: None,
+            caret_on: true,
+            updates: Updates::default(),
+            usage_poller: Poller::default(),
+            usage: None,
+            themes: theme::builtin(),
+            note: None,
+            should_quit: false,
+        }
     }
 
     /// The user's settings and themes, with a complaint about the settings
@@ -470,34 +578,112 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("/"))
     }
 
-    /// Adds a folder to the task: another repository's worktree, most
-    /// often, though any folder is welcome.
+    /// Opens a workspace: its folders, one task in them, the recent list
+    /// updated so the start page remembers it.
+    pub fn open_workspace(&mut self, folders: Vec<PathBuf>) {
+        let folders: Vec<PathBuf> = folders
+            .into_iter()
+            .map(|p| p.canonicalize().unwrap_or(p))
+            .filter(|p| p.is_dir())
+            .collect();
+        if folders.is_empty() {
+            self.note = Some("none of those folders is there any more".into());
+            return;
+        }
+        self.workspace = folders;
+        self.tasks = vec![Task::new(&self.workspace, &self.settings)];
+        self.active = 0;
+        self.settings.push_recent(&self.workspace.clone());
+        let _ = self.settings.save();
+        self.start_agent();
+        self.refresh();
+        self.focus = Focus::Agent;
+    }
+
+    /// Adds a folder to the workspace: another repository, or any folder
+    /// the work touches. Every task takes it up — with its own worktree of
+    /// it where the task has one.
     fn add_folder(&mut self, path: &str) {
         let path = PathBuf::from(expand_home(path.trim()));
         if !path.is_dir() {
             self.note = Some(format!("{} is not a folder", path.display()));
             return;
         }
-        let folder = Folder::new(path, &self.settings);
-        if self.folders.iter().any(|f| f.path == folder.path) {
-            self.note = Some("that folder is already in this task".into());
+        let path = path.canonicalize().unwrap_or(path);
+        if self.workspace.contains(&path) {
+            self.note = Some("that folder is already in this workspace".into());
             return;
         }
-        // The first folder is what opens the task, and worth remembering.
-        let first = self.folders.is_empty();
-        let path = folder.path.clone();
-        self.folders.push(folder);
+        let first = self.workspace.is_empty();
+        self.workspace.push(path);
+        self.resync_tasks();
+        self.settings.push_recent(&self.workspace.clone());
+        let _ = self.settings.save();
         if first {
-            self.settings.push_recent(&path);
-            let _ = self.settings.save();
             self.start_agent();
             self.focus = Focus::Agent;
         }
-        let roots: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
-        match self.tree.as_mut() {
-            Some(tree) => tree.set_roots(roots),
-            None => self.tree = Some(Tree::with_roots(roots)),
+        self.refresh();
+    }
+
+    /// Takes a folder out of the workspace, and out of every task with it.
+    fn remove_folder(&mut self, index: usize) {
+        if index >= self.workspace.len() {
+            return;
         }
+        let gone = self.workspace.remove(index);
+        self.resync_tasks();
+        self.settings.push_recent(&self.workspace.clone());
+        let _ = self.settings.save();
+        self.note = Some(format!("{} left the workspace", gone.display()));
+    }
+
+    /// Points every task at the workspace's folders again.
+    fn resync_tasks(&mut self) {
+        let workspace = self.workspace.clone();
+        let settings = self.settings.clone();
+        for task in &mut self.tasks {
+            task.resync(&workspace, &settings);
+        }
+    }
+
+    /// A new task, named by the user: a worktree of that name for every
+    /// folder of the workspace that is a repository, the folder itself for
+    /// every folder that is not, and an agent of its own over them.
+    fn new_tab(&mut self, name: &str) {
+        if self.workspace.is_empty() {
+            self.note = Some("a task needs a folder to work in".into());
+            return;
+        }
+        let mut task = Task::new(&[], &self.settings);
+        task.name = Some(name.trim().to_string());
+        let Some(slug) = task.slug() else {
+            self.note = Some("a task needs a name".into());
+            return;
+        };
+        let mut paths = Vec::new();
+        for folder in &self.workspace.clone() {
+            match git::open(folder, &self.settings.base_branch) {
+                Some(repo) => {
+                    let dir = worktree_path(&repo, &self.settings, &slug);
+                    let parent = dir.parent().unwrap_or(&dir).to_path_buf();
+                    match git::worktree_add(&repo, &parent, &slug) {
+                        Ok(path) => paths.push(path),
+                        Err(e) => {
+                            self.note = Some(e);
+                            return;
+                        }
+                    }
+                }
+                // A folder outside git is shared: there is no branch of it
+                // to make.
+                None => paths.push(folder.clone()),
+            }
+        }
+        task.resync(&paths, &self.settings);
+        self.tasks.push(task);
+        self.active = self.tasks.len() - 1;
+        self.start_agent();
         self.refresh();
     }
 
@@ -730,8 +916,8 @@ impl App {
                     .find(|(r, _)| hit(*r, x, y))
                     .map(|(_, i)| *i);
                 if let Some(to) = over.filter(|to| *to != from) {
-                    let session = self.sessions.remove(from);
-                    self.sessions.insert(to, session);
+                    let session = self.tasks.remove(from);
+                    self.tasks.insert(to, session);
                     self.active = to;
                     self.dragging_tab = Some(to);
                     self.dirty.store(true, Ordering::Relaxed);
@@ -822,13 +1008,17 @@ impl App {
                         return;
                     }
                     Some(Overlay::Recent(_)) => {
-                        if let Some(path) = self.settings.recent_projects.get(row).cloned() {
-                            self.open_project(path);
+                        if let Some(folders) = self.settings.recent_workspaces.get(row).cloned() {
+                            self.open_workspace(folders);
                         }
                         None
                     }
                     Some(Overlay::Themes(_)) => {
                         self.set_theme(row);
+                        None
+                    }
+                    Some(Overlay::Folders(_)) => {
+                        self.remove_folder(row);
                         None
                     }
                     Some(Overlay::TabMenu(tab, _)) => {
@@ -926,58 +1116,6 @@ impl App {
         .find(|r| hit(*r, x, y))
     }
 
-    pub fn with_settings(project: Option<PathBuf>, settings: Settings, theme: Theme) -> Self {
-        // The path as the user typed it — `.`, most often — is not the name
-        // the header should show.
-        let project = project.map(|p| p.canonicalize().unwrap_or(p));
-        Self {
-            sessions: vec![Session::new(project, &settings)],
-            active: 0,
-            show_sidebar: settings.show_sidebar,
-            settings,
-            syntax: Syntax::new(&theme),
-            theme,
-            dirty: Arc::new(AtomicBool::new(true)),
-            focus: Focus::Agent,
-            overlay: None,
-            start_row: 0,
-            hits: Hits::default(),
-            selection: None,
-            resizing: None,
-            hover: None,
-            autostart: false,
-            dragging_tab: None,
-            last_frame: Vec::new(),
-            osc52: None,
-            caret_on: true,
-            updates: Updates::default(),
-            usage_poller: Poller::default(),
-            usage: None,
-            themes: theme::builtin(),
-            note: None,
-            should_quit: false,
-        }
-    }
-
-    /// Opens a project: in this tab when it has none, else in a new one. The
-    /// folder joins the recent list, which is saved so the start page
-    /// remembers it.
-    pub fn open_project(&mut self, path: PathBuf) {
-        let path = path.canonicalize().unwrap_or(path);
-        let session = Session::new(Some(path.clone()), &self.settings);
-        if self.project().is_none() {
-            self.sessions[self.active] = session;
-        } else {
-            self.sessions.push(session);
-            self.active = self.sessions.len() - 1;
-        }
-        self.settings.push_recent(&path);
-        let _ = self.settings.save();
-        self.start_agent();
-        self.refresh();
-        self.focus = Focus::Agent;
-    }
-
     /// The commands the palette offers for what was typed, best first.
     pub fn palette_hits(&self, query: &str) -> Vec<Command> {
         let commands: Vec<Command> = command::palette().collect();
@@ -1051,7 +1189,7 @@ impl App {
     /// Looks at every session's working tree: new edits join its timeline,
     /// its CHANGES list is brought up to date. Called every `refresh_ms`.
     pub fn refresh(&mut self) {
-        for session in &mut self.sessions {
+        for session in &mut self.tasks {
             let mut edits = Vec::new();
             for folder in &mut session.folders {
                 // Only a folder that moved is worth reading, or asking git.
@@ -1138,7 +1276,7 @@ impl App {
     /// One of the tab menu's rows, chosen for `tab`.
     fn tab_menu_pick(&mut self, tab: usize, row: usize) {
         self.overlay = None;
-        self.active = tab.min(self.sessions.len() - 1);
+        self.active = tab.min(self.tasks.len() - 1);
         match TAB_MENU[row.min(TAB_MENU.len() - 1)] {
             "Rename…" => self.execute(Command::RenameTab),
             "Add Folder to Task…" => self.execute(Command::AddFolder),
@@ -1284,54 +1422,6 @@ impl App {
                 }
             }
             Err(e) => self.note = Some(format!("{}: {e}", path.display())),
-        }
-    }
-
-    /// A new task, named by the user: a worktree of the current repository
-    /// on a branch of that name where there is a repository, and the same
-    /// folders over again where there is not — either way its own agent and
-    /// its own timeline.
-    fn new_tab(&mut self, name: &str) {
-        let Some(repo) = self.repo().cloned() else {
-            let folders: Vec<PathBuf> = self.folders.iter().map(|f| f.path.clone()).collect();
-            let Some(first) = folders.first().cloned() else {
-                self.note = Some("open a folder first".into());
-                return;
-            };
-            let mut session = Session::new(Some(first), &self.settings);
-            for path in folders.into_iter().skip(1) {
-                session.folders.push(Folder::new(path, &self.settings));
-            }
-            session.name = Some(name.trim().to_string());
-            self.sessions.push(session);
-            self.active = self.sessions.len() - 1;
-            self.start_agent();
-            self.refresh();
-            return;
-        };
-        let dir = match self.settings.worktrees_dir.as_str() {
-            "" => {
-                let folder = repo
-                    .root
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned());
-                repo.root
-                    .parent()
-                    .unwrap_or(&repo.root)
-                    .join(format!("{}-worktrees", folder.unwrap_or_default()))
-            }
-            dir => PathBuf::from(dir),
-        };
-        match git::worktree_add(&repo, &dir, name) {
-            Ok(path) => {
-                let mut session = Session::new(Some(path), &self.settings);
-                session.name = Some(name.trim().to_string());
-                self.sessions.push(session);
-                self.active = self.sessions.len() - 1;
-                self.start_agent();
-                self.refresh();
-            }
-            Err(e) => self.note = Some(e),
         }
     }
 
@@ -1598,6 +1688,22 @@ impl App {
                 }
                 return;
             }
+            Some(Overlay::Folders(row)) => {
+                match key.code {
+                    KeyCode::Up => self.overlay = Some(Overlay::Folders(row.saturating_sub(1))),
+                    KeyCode::Down => {
+                        let last = self.workspace.len().saturating_sub(1);
+                        self.overlay = Some(Overlay::Folders((row + 1).min(last)))
+                    }
+                    KeyCode::Enter => {
+                        self.overlay = None;
+                        self.remove_folder(row);
+                    }
+                    _ if closes => self.overlay = None,
+                    _ => {}
+                }
+                return;
+            }
             Some(Overlay::Themes(row)) => {
                 match key.code {
                     KeyCode::Up => self.overlay = Some(Overlay::Themes(row.saturating_sub(1))),
@@ -1617,13 +1723,13 @@ impl App {
                 match key.code {
                     KeyCode::Up => self.overlay = Some(Overlay::Recent(row.saturating_sub(1))),
                     KeyCode::Down => {
-                        let last = self.settings.recent_projects.len().saturating_sub(1);
+                        let last = self.settings.recent_workspaces.len().saturating_sub(1);
                         self.overlay = Some(Overlay::Recent((row + 1).min(last)))
                     }
                     KeyCode::Enter => {
                         self.overlay = None;
-                        if let Some(path) = self.settings.recent_projects.get(row).cloned() {
-                            self.open_project(path);
+                        if let Some(folders) = self.settings.recent_workspaces.get(row).cloned() {
+                            self.open_workspace(folders);
                         }
                     }
                     _ if closes => self.overlay = None,
@@ -1707,13 +1813,14 @@ impl App {
             && self.editor.is_none()
             && command.is_none_or(|c| c == Command::MarkReviewed)
         {
-            let last = self.settings.recent_projects.len().saturating_sub(1);
+            let last = self.settings.recent_workspaces.len().saturating_sub(1);
             match key.code {
                 KeyCode::Up => self.start_row = self.start_row.saturating_sub(1),
                 KeyCode::Down => self.start_row = (self.start_row + 1).min(last),
                 KeyCode::Enter => {
-                    if let Some(path) = self.settings.recent_projects.get(self.start_row).cloned() {
-                        self.open_project(path);
+                    let chosen = self.settings.recent_workspaces.get(self.start_row).cloned();
+                    if let Some(folders) = chosen {
+                        self.open_workspace(folders);
                     }
                 }
                 _ => {}
@@ -1799,7 +1906,7 @@ impl App {
             Command::Quit => {
                 // Any workspace with an unsaved file asks before the editor goes.
                 let dirty = self
-                    .sessions
+                    .tasks
                     .iter()
                     .position(|s| s.editor.as_ref().is_some_and(|b| b.modified()));
                 match dirty {
@@ -1863,6 +1970,10 @@ impl App {
             Command::OpenRecent => self.overlay = Some(Overlay::Recent(0)),
             Command::NewFile => self.overlay = Some(Overlay::NewFile(String::new())),
             Command::NewFolder => self.overlay = Some(Overlay::NewFolder(String::new())),
+            Command::RemoveFolder if self.workspace.is_empty() => {
+                self.note = Some("this workspace has no folders yet".into())
+            }
+            Command::RemoveFolder => self.overlay = Some(Overlay::Folders(0)),
             Command::AddFolder => {
                 self.overlay = Some(Overlay::AddFolder {
                     dir: self.browse_from(),
@@ -1952,19 +2063,19 @@ impl App {
             Command::NewTab => self.overlay = Some(Overlay::NewTab(String::new())),
             Command::RenameTab => self.overlay = Some(Overlay::RenameTab(String::new())),
             Command::CloseTab => {
-                if self.sessions.len() > 1 {
-                    self.sessions.remove(self.active);
-                    self.active = self.active.min(self.sessions.len() - 1);
+                if self.tasks.len() > 1 {
+                    self.tasks.remove(self.active);
+                    self.active = self.active.min(self.tasks.len() - 1);
                 } else {
                     self.should_quit = true;
                 }
             }
             Command::NextTab => {
-                self.active = (self.active + 1) % self.sessions.len();
+                self.active = (self.active + 1) % self.tasks.len();
                 self.ensure_agent();
             }
             Command::PrevTab => {
-                self.active = (self.active + self.sessions.len() - 1) % self.sessions.len();
+                self.active = (self.active + self.tasks.len() - 1) % self.tasks.len();
                 self.ensure_agent();
             }
             Command::Close if self.editor.is_some() => {

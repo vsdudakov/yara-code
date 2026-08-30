@@ -1,22 +1,30 @@
 ---
-description: Tasks in Yara Code — one agent per task in its own git worktree, each with a tab, a timeline and a name of your choosing.
+description: Workspaces and tasks in Yara Code — a workspace is the folders you work in, a task is a tab with an agent, its own worktrees and its own timeline.
 ---
 
-# Tasks
+# Workspaces and tasks
 
-A task is an agent and the folders it works in
-— a git worktree per repository, most often — with one timeline and one
-CHANGES over them all. The tabs in the header are the tasks.
+Two levels, and the difference is worth holding on to.
 
-![Naming a new task](../assets/shots/new-tab.svg)
+**A workspace is what you work on**: a list of folders — repositories,
+usually, but any folder will do. It is the `File` menu's business:
 
-++f7++ — or `[+]` in the header, or `File → New Task…` —
-asks for a name. The name becomes the tab, and, with spaces and slashes made
-dashes, the branch and the folder: `git worktree add -b logout-flow
-<worktrees_dir>/logout-flow`. An agent starts there, and the keyboard goes to
-it.
+| | |
+| --- | --- |
+| Open Recent Workspace… | ++ctrl+r++ — every workspace opened before, its folders and all |
+| Add Folder to Workspace… | walks the filesystem: type to narrow, ++enter++ to step in, ++enter++ on the first row to add the folder the walk stands on |
+| Remove Folder… | the workspace's folders; ++enter++ takes one out |
+
+**A task is what an agent is doing**: a tab, with its own agent, its own
+timeline and its own CHANGES. Every task works in the workspace's folders —
+or in a worktree of its own for each of them.
 
 ![Two tasks](../assets/shots/tabs.svg)
+
+++f7++ — or `[+]` in the header, or `File → New Task…` — asks for a name.
+For every folder of the workspace that is a repository it makes a worktree on
+a branch of that name; folders that are not repositories are shared as they
+are. An agent starts in the result, and the tab is called by the name.
 
 | | Key |
 | --- | --- |
@@ -24,24 +32,22 @@ it.
 | Next / previous | ++ctrl+l++ / ++ctrl+k++, or click the tab |
 | Rename | ++f2++, or a right click on the tab |
 | Delete the task | a right click on the tab — its worktrees go, their branches stay |
-| Add a folder | a right click on the tab, or the palette |
+| Close the tab | ++ctrl+w++ — the agent stops, the worktrees stay |
 | Reorder | drag a tab along the strip |
-| Close | ++ctrl+w++ — the agent stops; the worktree stays for git |
 
-The first task, the one without a name of its own, is called by its
-pull request when `gh` is installed and the branch has one (`#42 Fix the
-login redirect`), else by its branch, else by its folder.
+The first task, the one without a name of its own, works in the workspace's
+folders themselves. It is called by its pull request when `gh` is installed
+and the branch has one (`#42 Fix the login redirect`), else by its branch,
+else by the folder.
 
-Where the worktrees go is `worktrees_dir` in [settings](settings.md):
-empty means a `<repo>-worktrees` folder beside the repository.
+Where a task's worktrees go is `worktrees_dir` in [settings](settings.md):
+empty means a `<repo>-worktrees` folder beside each repository, and a folder
+named there holds one folder per repository so two repositories never collide.
 
 ## Several folders, one task
 
-A feature that touches a backend and a frontend is one task with two
-folders. **Add Folder to Task…** — a right click on the tab, or the palette —
-walks the filesystem — type to narrow
-the list, ++enter++ to step into a folder, ++enter++ on the first row to add
-the one the walk stands on — and from then on the task treats them as one:
+A feature that touches a backend and a frontend is one workspace with two
+folders, and one task across both:
 
 - the timeline carries the edits of both, each named by its folder —
   `frontend/src/app.js`;
@@ -50,8 +56,6 @@ the one the walk stands on — and from then on the task treats them as one:
   across both;
 - the status bar shows the main folder's branch and `+1 folders`.
 
-A folder that is not a repository is watched all the same: its files are
-read rather than asked of git, and their edits land on the timeline like any
-other. CHANGES has nothing to say about it, and says so.
-
-The first folder is the main one: the agent runs there, and it names the tab.
+A folder that is not a repository is watched all the same: its files are read
+rather than asked of git, and their edits land on the timeline like any other.
+CHANGES has nothing to say about it, and says so.

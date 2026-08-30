@@ -437,24 +437,29 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     app.handle_key(key(KeyCode::Char('n')));
     assert!(text(&mut app).contains("task/login█"));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.tasks.len(), 2);
     assert_eq!(app.active, 1);
     assert_eq!(app.repo().unwrap().branch, "task-login");
     let rows = frame(&mut app);
     assert!(rows[0].contains(" main   task/login  [+]"), "{}", rows[0]);
     assert!(rows[0].contains("● cat — running"), "an agent of its own");
-    assert!(repo.0.join("trees/task-login/src/main.rs").exists());
+    let repo_name = repo.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(repo
+        .0
+        .join(format!("trees/{repo_name}/task-login/src/main.rs"))
+        .exists());
 
     // Each tab keeps its own timeline: an edit in the worktree lands only
     // in the tab that watches it.
     std::fs::write(
-        repo.0.join("trees/task-login/src/main.rs"),
+        repo.0
+            .join(format!("trees/{repo_name}/task-login/src/main.rs")),
         "fn main() {}\n",
     )
     .unwrap();
     app.refresh();
     assert_eq!(app.follow.len(), 1);
-    assert_eq!(app.sessions[0].follow.len(), 0);
+    assert_eq!(app.tasks[0].follow.len(), 0);
 
     app.handle_key(key(KeyCode::F(2)));
     for c in "PR 42".chars() {
@@ -469,7 +474,7 @@ fn a_new_tab_is_an_agent_in_a_worktree_of_its_own_and_tabs_are_named_by_their_wo
     app.handle_key(with_ctrl('l'));
     assert_eq!(app.active, 1);
     app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
-    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.tasks.len(), 1);
     assert!(!app.should_quit);
     app.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
     assert!(app.should_quit, "closing the last tab is quitting");
@@ -630,7 +635,7 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     let rows = frame(&mut app);
     assert!(rows[1].contains("┌ File "), "{}", rows[1]);
     assert!(
-        rows[2].contains("Open Recent…") && rows[2].contains("^R"),
+        rows[2].contains("Open Recent Workspace…") && rows[2].contains("^R"),
         "{}",
         rows[2]
     );
@@ -649,7 +654,7 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
     app.handle_key(key(KeyCode::Esc));
 
     // Ctrl+R lists recent projects.
-    app.settings.push_recent(&repo.0);
+    app.settings.push_recent(std::slice::from_ref(&repo.0));
     app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     let all = text(&mut app);
     assert!(
@@ -664,8 +669,8 @@ fn the_palette_search_keys_menus_and_recent_open_and_do_their_work() {
 fn the_start_page_lists_recent_projects_and_enter_opens_one() {
     let repo = Repo::new("yara-frame-start");
     let mut settings = Settings::default();
-    settings.push_recent(&repo.0);
-    settings.push_recent(std::path::Path::new("/somewhere/else"));
+    settings.push_recent(std::slice::from_ref(&repo.0));
+    settings.push_recent(&[std::path::PathBuf::from("/somewhere/else")]);
     let mut app = App::with_settings(None, settings, Theme::default());
     let all = text(&mut app);
     assert!(
@@ -688,7 +693,8 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
     let _ = std::fs::remove_dir_all(&lock);
     assert_eq!(app.project(), Some(repo.0.as_path()));
     assert_eq!(
-        app.settings.recent_projects[0], repo.0,
+        app.settings.recent_workspaces[0],
+        vec![repo.0.clone()],
         "moved to the front"
     );
     let all = text(&mut app);
@@ -1148,7 +1154,7 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
     let mut app = App::with_settings(Some(repo.0.clone()), settings, Theme::default());
     app.focus = Focus::Follow;
     assert_eq!(
-        app.sessions.len(),
+        app.tasks.len(),
         1,
         "one workspace, whatever worktrees exist"
     );
@@ -1157,7 +1163,7 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.tasks.len(), 2);
     let rows = frame(&mut app);
     assert!(rows[0].contains(" main   review  [+]"), "{}", rows[0]);
 
@@ -1189,8 +1195,12 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 1, "the task's tab is gone");
-    assert!(!trees.join("review").exists(), "and so is its worktree");
+    assert_eq!(app.tasks.len(), 1, "the task's tab is gone");
+    let repo_name = repo.0.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        !trees.join(&repo_name).join("review").exists(),
+        "and so is its worktree"
+    );
     // The repository itself is not a worktree to delete.
     frame(&mut app);
     let (tab, _) = app.hits.tabs[0];
@@ -1203,7 +1213,7 @@ fn a_right_click_on_a_tab_renames_the_task_adds_a_folder_or_deletes_it() {
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(app.tasks.len(), 1);
     assert!(app.note.as_deref().unwrap().contains("no worktree"));
 }
 
@@ -1394,7 +1404,7 @@ fn a_task_watches_folders_that_are_no_repository_at_all() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.sessions.len(), 2);
+    assert_eq!(app.tasks.len(), 2);
     assert_eq!(app.project(), Some(dir.as_path()));
     assert!(frame(&mut app)[0].contains(" second look  [+]"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1429,7 +1439,7 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
     let _ = std::fs::remove_dir_all(&config);
     assert_eq!(app.project(), Some(repo.0.as_path()));
     assert_eq!(
-        app.sessions.len(),
+        app.tasks.len(),
         1,
         "it opened here rather than in a new tab"
     );
@@ -1516,4 +1526,76 @@ fn the_tree_makes_files_and_folders_from_a_right_click() {
     app.handle_key(key(KeyCode::Enter));
     assert!(repo.0.join("src/assets").is_dir());
     assert!(app.editor.is_none(), "a folder is not opened for editing");
+}
+
+#[test]
+fn a_workspace_holds_the_folders_and_its_tasks_work_in_worktrees_of_them() {
+    let backend = Repo::new("yara-frame-ws-backend");
+    let frontend = Repo::new("yara-frame-ws-frontend");
+    let trees = backend.0.join("trees");
+    let settings = Settings {
+        worktrees_dir: trees.to_string_lossy().into_owned(),
+        ..Settings::default()
+    };
+    let config = std::env::temp_dir().join(format!("yara-ws-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let mut app = App::with_workspace(vec![backend.0.clone()], settings, Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+
+    // A folder joins the workspace, and every task takes it up.
+    app.overlay = Some(Overlay::AddFolder {
+        dir: frontend.0.parent().unwrap().to_path_buf(),
+        // The row the typing would have left the cursor on: the first
+        // folder the filter kept.
+        row: 2,
+        filter: frontend
+            .0
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    });
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.workspace.len(), 2, "{:?}", app.note);
+    assert_eq!(app.folders.len(), 2, "the task works in both");
+
+    // A task of its own gets a worktree of every repository in it.
+    app.handle_key(key(KeyCode::F(7)));
+    for c in "login flow".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tasks.len(), 2);
+    assert_eq!(app.folders.len(), 2);
+    for folder in &app.folders {
+        assert!(
+            folder.path.starts_with(&trees),
+            "{} {:?}",
+            folder.path.display(),
+            app.note
+        );
+        assert_eq!(folder.repo.as_ref().unwrap().branch, "login-flow");
+    }
+    assert_eq!(
+        app.tasks[0].folders[0].path, backend.0,
+        "the first task stays put"
+    );
+
+    // Taking a folder out of the workspace takes it from every task.
+    app.execute(yara_core::command::Command::RemoveFolder);
+    let all = text(&mut app);
+    assert!(all.contains("WORKSPACE FOLDERS"), "{all}");
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.workspace.len(), 1);
+    assert_eq!(app.folders.len(), 1);
+    assert_eq!(app.tasks[0].folders.len(), 1);
+    // The workspace is what the recent list remembers.
+    assert_eq!(app.settings.recent_workspaces[0], app.workspace);
+    std::env::remove_var("YARA_CONFIG_DIR");
+    let _ = std::fs::remove_dir_all(&config);
 }

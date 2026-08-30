@@ -53,8 +53,8 @@ fn main() {
 
     // The start page, with a couple of projects remembered.
     let mut settings = Settings::default();
-    settings.push_recent(Path::new("/Users/you/code/checkout"));
-    settings.push_recent(Path::new("/Users/you/code/yara-code"));
+    settings.push_recent(&[PathBuf::from("/Users/you/code/checkout")]);
+    settings.push_recent(&[PathBuf::from("/Users/you/code/yara-code")]);
     let mut app = App::with_settings(None, settings.clone(), Theme::default());
     shot(&out, "start", &mut app);
 

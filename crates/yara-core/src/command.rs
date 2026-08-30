@@ -14,6 +14,7 @@ pub enum Command {
     NewFile,
     NewFolder,
     AddFolder,
+    RemoveFolder,
     OpenRecent,
     Save,
     Settings,
@@ -62,6 +63,7 @@ impl Command {
             Self::NewFile => "new_file",
             Self::NewFolder => "new_folder",
             Self::AddFolder => "add_folder",
+            Self::RemoveFolder => "remove_folder",
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
             Self::Settings => "settings",
@@ -108,8 +110,9 @@ impl Command {
         match self {
             Self::NewFile => "New File",
             Self::NewFolder => "New Folder",
-            Self::AddFolder => "Add Folder to Task…",
-            Self::OpenRecent => "Open Recent…",
+            Self::AddFolder => "Add Folder to Workspace…",
+            Self::RemoveFolder => "Remove Folder…",
+            Self::OpenRecent => "Open Recent Workspace…",
             Self::Save => "Save",
             Self::Settings => "Settings",
             Self::Quit => "Quit",
@@ -151,6 +154,7 @@ pub const ALL: &[Command] = &[
     Command::NewFile,
     Command::NewFolder,
     Command::AddFolder,
+    Command::RemoveFolder,
     Command::OpenRecent,
     Command::Save,
     Command::Settings,
@@ -192,6 +196,9 @@ pub type Menu = &'static [Option<Command>];
 
 pub const FILE_MENU: Menu = &[
     Some(Command::OpenRecent),
+    None,
+    Some(Command::AddFolder),
+    Some(Command::RemoveFolder),
     None,
     Some(Command::NewTab),
     None,
@@ -505,6 +512,8 @@ mod tests {
             entries,
             [
                 Command::OpenRecent,
+                Command::AddFolder,
+                Command::RemoveFolder,
                 Command::NewTab,
                 Command::Settings,
                 Command::Quit

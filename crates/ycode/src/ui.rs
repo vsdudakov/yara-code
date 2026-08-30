@@ -158,6 +158,7 @@ fn draw_overlay(frame: &mut Frame, app: &mut App, area: Rect) {
     match app.overlay.clone() {
         Some(Overlay::Usage) => draw_usage(frame, app, area),
         Some(Overlay::Themes(row)) => draw_themes(frame, app, row, area),
+        Some(Overlay::Folders(row)) => draw_folders(frame, app, row, area),
         Some(Overlay::CloseFile { .. }) => draw_close_file(frame, app, area),
         Some(Overlay::TabMenu(tab, row)) => draw_tab_menu(frame, app, tab, row, area),
         Some(Overlay::Changes(row)) => draw_changes(frame, app, row, area),
@@ -421,7 +422,7 @@ fn draw_menu(frame: &mut Frame, app: &mut App, menu: usize, row: usize, area: Re
 }
 
 fn draw_recent(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
-    let recent = app.settings.recent_projects.clone();
+    let recent = app.settings.recent_workspaces.clone();
     let inner = overlay_box(
         frame,
         app,
@@ -432,8 +433,8 @@ fn draw_recent(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
     );
     let rows: Vec<Line> = recent
         .iter()
-        .map(|p| {
-            let mut spans = [Span::raw(" "), Span::raw(p.display().to_string())];
+        .map(|folders| {
+            let mut spans = [Span::raw(" "), Span::raw(workspace_label(folders))];
             shorten(&mut spans, 1, inner.width as usize);
             Line::from(spans.to_vec())
         })
@@ -566,6 +567,34 @@ fn draw_close_file(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// The workspace's folders, to take one out of it.
+fn draw_folders(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
+    let dim = fg(app.theme.ui.fg_dim);
+    let folders = app.workspace.clone();
+    let inner = overlay_box(
+        frame,
+        app,
+        "WORKSPACE FOLDERS",
+        72,
+        folders.len() as u16 + 1,
+        area,
+    );
+    let rows: Vec<Line> = folders
+        .iter()
+        .map(|path| Line::raw(format!(" {}", path.display())))
+        .collect();
+    let mut lines = list_lines(app, rows, row, inner.height as usize - 1);
+    lines.push(Line::styled(
+        format!(
+            " ⏎ take out of the workspace · {} close",
+            app.hint(Command::Close)
+        ),
+        dim,
+    ));
+    row_hits(app, inner, 0, folders.len());
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 /// The themes to pick from, the current one under the cursor to begin with.
 fn draw_themes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
     let names: Vec<String> = app.themes.iter().map(|t| t.name.clone()).collect();
@@ -581,6 +610,17 @@ fn draw_themes(frame: &mut Frame, app: &mut App, row: usize, area: Rect) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// A workspace as a list names it: its main folder, and how many more.
+fn workspace_label(folders: &[std::path::PathBuf]) -> String {
+    let Some(first) = folders.first() else {
+        return String::new();
+    };
+    match folders.len() {
+        1 => first.display().to_string(),
+        n => format!("{} +{}", first.display(), n - 1),
+    }
+}
+
 /// The start page: the logotype, the tagline, RECENT and the key hints.
 fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
     let ui = app.theme.ui.clone();
@@ -592,7 +632,7 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
         "  ╚██╔╝  ██╔══██║██╔══██╗██╔══██║",
         "   ██║   ██║  ██║██║  ██║██║  ██║",
     ];
-    let recent = app.settings.recent_projects.clone();
+    let recent = app.settings.recent_workspaces.clone();
     let box_height = recent.len().max(1) as u16 + 2;
     let height = LOGO.len() as u16 + 2 + box_height + 2;
     let width = 60u16.min(area.width);
@@ -623,8 +663,8 @@ fn draw_start(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows: Vec<Line> = recent
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            let mut spans = [Span::raw(p.display().to_string())];
+        .map(|(i, folders)| {
+            let mut spans = [Span::raw(workspace_label(folders))];
             shorten(&mut spans, 0, (inner.width as usize).saturating_sub(5));
             let name = spans[0].content.to_string();
             if i == app.start_row {
@@ -839,7 +879,7 @@ fn draw_header(frame: &mut Frame, app: &mut App, area: Rect) {
     // The tabs: one agent in one worktree each, and the way to another.
     left.push(Span::styled(" │ ", fg(ui.fg_dim)));
     let tabs_from = left.len();
-    for (i, session) in app.sessions.iter().enumerate() {
+    for (i, session) in app.tasks.iter().enumerate() {
         let title = format!(" {} ", session.title());
         left.push(if i == app.active {
             Span::styled(title, on(ui.bg, ui.accent).add_modifier(Modifier::BOLD))

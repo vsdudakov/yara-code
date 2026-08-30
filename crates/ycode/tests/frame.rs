@@ -1056,11 +1056,58 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.note.as_deref().unwrap().starts_with("copied 2 lines"));
     assert!(app.selection.is_none());
+    // A drag that starts in the gutter takes the code, not the numbers.
+    app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x - 4, e.y));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        e.x + 3,
+        e.y + 1,
+    ));
+    assert_eq!(
+        app.selected_text().as_deref(),
+        Some("fn main() {\n    let x = 1;")
+    );
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_ne!(
+        terminal.backend().buffer()[(e.x - 2, e.y)].bg,
+        lit,
+        "the gutter"
+    );
     // Typing drops a selection.
     app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x, e.y));
     app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), e.x + 3, e.y));
     app.handle_key(key(KeyCode::Right));
     assert!(app.selection.is_none());
+    // A drag down a pane that wears its own frame lights the text inside
+    // and leaves the frame alone: not the title row, not either edge.
+    let a = app.hits.agent;
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        a.x + 2,
+        a.y + 2,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        a.x + 5,
+        a.y + 4,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(a.x + 1, a.y + 3)].bg, lit, "the text inside");
+    assert_eq!(
+        buffer[(a.right() - 2, a.y + 3)].bg,
+        lit,
+        "out to the last column"
+    );
+    for (x, y, what) in [
+        (a.x, a.y + 3, "the left edge"),
+        (a.right() - 1, a.y + 3, "the right edge"),
+        (a.x + 2, a.y, "the title row"),
+    ] {
+        assert_ne!(buffer[(x, y)].bg, lit, "{what}");
+    }
 }
 
 #[test]
@@ -1764,4 +1811,72 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
         "{all}"
     );
     let _ = std::fs::remove_dir_all(&bench);
+}
+
+#[test]
+fn the_tree_marks_a_changed_folder_and_the_open_file_and_the_editor_blames_the_line_under_the_mouse(
+) {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-blame");
+    repo.file("src/main.rs", "fn main() {\n    let x = 2;\n}\n");
+    let mut app = App::with_settings(
+        Some(repo.0.clone()),
+        Settings {
+            show_sidebar: true,
+            agent_width: 20,
+            ..Settings::default()
+        },
+        Theme::default(),
+    );
+    app.refresh();
+    let all = text(&mut app);
+    assert!(
+        all.contains("▸ src ●"),
+        "the folder of a changed file: {all}"
+    );
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let (row, _) = app.hits.file_rows[0];
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        row.x + 3,
+        row.y,
+    ));
+    let all = text(&mut app);
+    assert!(all.contains("▫ main.rs ●"), "the changed file: {all}");
+    let (row, _) = app.hits.file_rows[1];
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        row.x + 3,
+        row.y,
+    ));
+    assert!(app.editor.is_some());
+    app.focus = Focus::Editor;
+    frame(&mut app);
+    // The first line is the commit's; the second was written since.
+    let e = app.hits.editor;
+    app.handle_mouse(ev(MouseEventKind::Moved, e.x + 2, e.y));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(row.x + 3, row.y)].bg,
+        ycode::theme::color(app.theme.ui.inactive_bg),
+        "the open file sits on the theme's quiet selection"
+    );
+    let all = text(&mut app);
+    assert!(all.contains("fn main() {   t, just now · first"), "{all}");
+    app.handle_mouse(ev(MouseEventKind::Moved, e.x + 2, e.y + 1));
+    let all = text(&mut app);
+    assert!(all.contains("let x = 2;   not committed yet"), "{all}");
+    assert!(!all.contains("· first"), "one line at a time: {all}");
+    // Off the text, nothing is said; and with the knob off, never.
+    app.handle_mouse(ev(MouseEventKind::Moved, e.x + 2, e.y + 10));
+    assert!(app.blame.is_none());
+    app.settings.blame = false;
+    app.handle_mouse(ev(MouseEventKind::Moved, e.x + 2, e.y));
+    assert!(app.blame.is_none());
 }

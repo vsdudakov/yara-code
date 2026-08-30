@@ -2,10 +2,12 @@
 //! session — one agent in one worktree, with its own timeline — and the
 //! app is the tabs plus what is shared: settings, theme, the keyboard.
 
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -258,6 +260,12 @@ pub struct Task {
     pub tree: Option<Tree>,
     /// A file open for editing, in the follow pane's place.
     pub editor: Option<Buffer>,
+    /// The line of the file under the mouse, counted from the top, and who
+    /// last committed it, for the editor to say at the end of the line.
+    pub blame: Option<(usize, String)>,
+    /// What git said of each line asked about, for as long as the file on
+    /// disk is what it was.
+    blames: HashMap<(PathBuf, usize), Option<git::Blame>>,
     /// A name the user gave the tab; otherwise it is named by its work.
     pub name: Option<String>,
 }
@@ -275,6 +283,8 @@ impl Task {
             scroll: 0,
             caret_moved: true,
             editor: None,
+            blame: None,
+            blames: HashMap::new(),
             name: None,
         };
         task.resync(paths, settings);
@@ -391,7 +401,11 @@ impl Task {
             return false;
         };
         let relative = relative.to_string_lossy().replace('\\', "/");
-        folder.changes.iter().any(|c| c.path == relative)
+        let inside = format!("{relative}/");
+        folder
+            .changes
+            .iter()
+            .any(|c| c.path == relative || c.path.starts_with(&inside))
     }
 
     /// The CHANGES list: a heading per folder when there are several, and
@@ -926,6 +940,7 @@ impl App {
         let (x, y) = (mouse.column, mouse.row);
         if self.hover != Some((x, y)) {
             self.hover = Some((x, y));
+            self.hover_blame();
             self.dirty.store(true, Ordering::Relaxed);
         }
         let up = match mouse.kind {
@@ -1135,17 +1150,36 @@ impl App {
         }
     }
 
-    /// The pane a selection lives in: it never crosses into the next one.
+    /// The pane a selection lives in: it never crosses into the next one,
+    /// and it stops short of the pane's own frame — the editor's rect is
+    /// already the text inside it, the others' still wear the border.
     pub fn selection_bounds(&self) -> Option<Rect> {
         let ((x, y), _) = self.selection?;
+        let inside = |r: Rect| {
+            Rect::new(
+                r.x + 1,
+                r.y + 1,
+                r.width.saturating_sub(2),
+                r.height.saturating_sub(2),
+            )
+        };
+        // In a file, the text is all there is to take: a drag that starts
+        // in the gutter or on the file's name still selects code, not line
+        // numbers.
+        let follow = if self.editor.is_some() {
+            self.hits.editor
+        } else {
+            inside(self.hits.follow)
+        };
         [
-            self.hits.editor,
-            self.hits.agent,
-            self.hits.follow,
-            self.hits.files,
+            (self.hits.editor, self.hits.editor),
+            (inside(self.hits.agent), inside(self.hits.agent)),
+            (inside(self.hits.follow), follow),
+            (inside(self.hits.files), inside(self.hits.files)),
         ]
         .into_iter()
-        .find(|r| hit(*r, x, y))
+        .find(|(landed, _)| hit(*landed, x, y))
+        .map(|(_, bounds)| bounds)
     }
 
     /// The commands the palette offers for what was typed, best first.
@@ -1451,6 +1485,60 @@ impl App {
             Ok(()) => format!("✓ saved {}", buffer.path.display()),
             Err(e) => format!("{}: {e}", buffer.path.display()),
         });
+        self.blames.clear();
+        self.blame = None;
+    }
+
+    /// Asks git who last committed the line the mouse is over, when it is
+    /// over a line of the file being edited. The file on disk is what is
+    /// blamed, so a line typed since the last save is nobody's yet.
+    fn hover_blame(&mut self) {
+        let line = self.hover.and_then(|(x, y)| {
+            let editor = self.hits.editor;
+            let buffer = self.editor.as_ref()?;
+            let line = self.scroll as usize + usize::from(y - editor.y);
+            // Not over a selection: what is copied is the frame's text,
+            // and the caption is not the file's.
+            (self.settings.blame
+                && !self.selection.is_some_and(|(from, to)| from != to)
+                && hit(editor, x, y)
+                && line < buffer.text.lines().count())
+            .then_some(line)
+        });
+        let Some(line) = line else {
+            self.blame = None;
+            return;
+        };
+        if self.blame.as_ref().is_some_and(|(at, _)| *at == line) {
+            return;
+        }
+        let path = self
+            .editor
+            .as_ref()
+            .map(|b| b.path.clone())
+            .unwrap_or_default();
+        let key = (path.clone(), line);
+        if !self.blames.contains_key(&key) {
+            let who = self
+                .folder_of(&path)
+                .and_then(|f| f.repo.as_ref())
+                .and_then(|repo| git::blame(repo, &path, line + 1));
+            self.blames.insert(key.clone(), who);
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let text = match &self.blames[&key] {
+            Some(who) => format!(
+                "{}, {} · {}",
+                who.author,
+                git::ago(who.time, now),
+                who.summary
+            ),
+            None => "not committed yet".into(),
+        };
+        self.blame = Some((line, text));
     }
 
     /// The files the finder offers for what was typed, best first.

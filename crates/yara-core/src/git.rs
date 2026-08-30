@@ -267,6 +267,69 @@ pub fn changes(repo: &Repo) -> Result<Vec<Change>, String> {
     Ok(out)
 }
 
+/// Who last touched a line, as `git blame` tells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blame {
+    pub author: String,
+    /// When, in seconds since the epoch.
+    pub time: u64,
+    pub summary: String,
+}
+
+/// The last commit to touch line `line` (counted from one) of `path`, with
+/// whitespace changes looked past. A line nobody has committed has none.
+pub fn blame(repo: &Repo, path: &Path, line: usize) -> Option<Blame> {
+    let range = format!("{line},{line}");
+    let out = git(
+        &repo.root,
+        &[
+            "blame",
+            "--porcelain",
+            "-w",
+            "-L",
+            &range,
+            "--",
+            &path.to_string_lossy(),
+        ],
+    )
+    .ok()?;
+    let mut lines = out.lines();
+    let hash = lines.next()?.split(' ').next()?;
+    if hash.chars().all(|c| c == '0') {
+        return None;
+    }
+    let mut blame = Blame {
+        author: String::new(),
+        time: 0,
+        summary: String::new(),
+    };
+    for l in lines {
+        if let Some(v) = l.strip_prefix("author ") {
+            blame.author = v.to_string();
+        } else if let Some(v) = l.strip_prefix("author-time ") {
+            blame.time = v.trim().parse().unwrap_or(0);
+        } else if let Some(v) = l.strip_prefix("summary ") {
+            blame.summary = v.to_string();
+        }
+    }
+    Some(blame)
+}
+
+/// How long ago `then` was, from `now`, the way a person says it.
+pub fn ago(then: u64, now: u64) -> String {
+    let seconds = now.saturating_sub(then);
+    let (count, unit) = match seconds {
+        s if s < 60 => return "just now".into(),
+        s if s < 3_600 => (s / 60, "minute"),
+        s if s < 86_400 => (s / 3_600, "hour"),
+        s if s < 30 * 86_400 => (s / 86_400, "day"),
+        s if s < 365 * 86_400 => (s / (30 * 86_400), "month"),
+        s => (s / (365 * 86_400), "year"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural} ago")
+}
+
 /// The unified diff of one path against the base; an untracked file reads
 /// as wholly added.
 pub fn file_diff(repo: &Repo, path: &str) -> Result<String, String> {
@@ -489,6 +552,21 @@ mod tests {
         git(dir.path(), &["commit", "-q", "-m", "first"]).unwrap();
         let repo = open(dir.path(), "").unwrap();
         (dir, repo)
+    }
+
+    #[test]
+    fn a_line_is_blamed_on_the_commit_that_wrote_it_and_an_unsaved_one_on_nobody() {
+        let (dir, repo) = repo("yara-blame");
+        let who = blame(&repo, Path::new("a.txt"), 2).unwrap();
+        assert_eq!((who.author.as_str(), who.summary.as_str()), ("t", "first"));
+        assert!(who.time > 0);
+        dir.file("a.txt", "one\ntwo\nthree\n");
+        assert_eq!(blame(&repo, Path::new("a.txt"), 3), None);
+        assert_eq!(blame(&repo, Path::new("missing.txt"), 1), None);
+        assert_eq!(ago(100, 130), "just now");
+        assert_eq!(ago(0, 3_600), "1 hour ago");
+        assert_eq!(ago(0, 3 * 86_400), "3 days ago");
+        assert_eq!(ago(0, 400 * 86_400), "1 year ago");
     }
 
     #[test]

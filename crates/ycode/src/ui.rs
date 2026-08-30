@@ -970,7 +970,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("  ".repeat(row.depth)),
                     Span::styled(format!("{glyph} "), fg(ui.fg_dim)),
                 ];
-                let changed = !row.is_dir && app.is_changed(&row.path);
+                let changed = app.is_changed(&row.path);
                 spans.push(Span::styled(
                     name,
                     fg(if changed { ui.accent_dim } else { ui.fg }),
@@ -982,7 +982,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                 if focused && i == tree.selected {
                     line = line.style(Style::new().bg(color(ui.selected_bg)));
                 } else if opened.as_deref() == Some(row.path.as_path()) {
-                    line = line.style(Style::new().bg(color(ui.accent_bg)));
+                    line = line.style(Style::new().bg(color(ui.inactive_bg)));
                 }
                 line
             })
@@ -1405,6 +1405,22 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     if (buffer.text.is_empty() || buffer.text.ends_with('\n')) && lines.len() < height {
         number += 1;
         lines.push(Line::from(Span::styled(format!("{number:>5}  "), dim)));
+    }
+    // Who last committed the line under the mouse, sat at its end in the
+    // room the line leaves — and left unsaid when there is none, or when a
+    // selection is being made, since a copy takes the frame's text.
+    let selecting = app.selection.is_some_and(|(from, to)| from != to);
+    if let (Some((at, who)), false) = (&app.blame, selecting) {
+        if let Some(row) = at.checked_sub(top).and_then(|i| lines.get_mut(i)) {
+            let room = (body.width as usize).saturating_sub(row.width() + 3);
+            if room >= 12 {
+                let who: String = who.chars().take(room).collect();
+                row.push_span(Span::styled(
+                    format!("   {who}"),
+                    dim.add_modifier(Modifier::ITALIC),
+                ));
+            }
+        }
     }
     frame.render_widget(Paragraph::new(lines), body);
     // The caret is drawn rather than the terminal's: a terminal's own

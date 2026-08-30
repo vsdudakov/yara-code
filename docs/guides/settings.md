@@ -22,6 +22,7 @@ saves a setting. `//` comments are allowed.
 | `terminal_height` | `40` | That terminal's share of the agent pane's height, in percent |
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |
 | `cursor_blink_ms` | `500` | One step of the editor caret's blink; `0` keeps it on |
+| `blame` | `true` | Whether the editor says, at the end of the line under the mouse, who last committed it and when |
 | `refresh_ms` | `500` | How often the folders are looked at |
 | `base_branch` | `""` | What CHANGES measures against; empty means the main working copy's branch |
 | `worktrees_dir` | `""` | Where a task's worktrees go; empty means `<repo>-worktrees` beside each repository |

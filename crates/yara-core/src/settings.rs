@@ -158,6 +158,9 @@ pub struct Settings {
     pub timeline_ticks: usize,
     /// One step of the editor caret's blink, in milliseconds; 0 keeps it on.
     pub cursor_blink_ms: u64,
+    /// Whether the editor says, at the end of the line under the mouse, who
+    /// last committed it.
+    pub blame: bool,
     /// How often the working tree is looked at for the agent's edits, in
     /// milliseconds.
     pub refresh_ms: u64,
@@ -206,6 +209,7 @@ impl Default for Settings {
             terminal_height: 40,
             timeline_ticks: 12,
             cursor_blink_ms: 500,
+            blame: true,
             refresh_ms: 500,
             base_branch: String::new(),
             worktrees_dir: String::new(),
@@ -412,6 +416,10 @@ impl Settings {
   // One step of the editor caret's blink, in milliseconds; 0 keeps it on.
   "cursor_blink_ms": {cursor_blink_ms},
 
+  // Whether the editor says, at the end of the line under the mouse, who
+  // last committed it and when.
+  "blame": {blame},
+
   // How often the working tree is checked for the agent's edits, in
   // milliseconds, and the branch CHANGES are measured against ("" = the one
   // the main working copy has checked out).
@@ -469,6 +477,7 @@ impl Settings {
             terminal_height = json(&self.terminal_height),
             timeline_ticks = json(&self.timeline_ticks),
             cursor_blink_ms = json(&self.cursor_blink_ms),
+            blame = json(&self.blame),
             refresh_ms = json(&self.refresh_ms),
             base_branch = json(&self.base_branch),
             worktrees_dir = json(&self.worktrees_dir),
@@ -706,6 +715,7 @@ mod tests {
             "\"terminal_height\"",
             "\"timeline_ticks\"",
             "\"cursor_blink_ms\"",
+            "\"blame\"",
             "\"refresh_ms\"",
             "\"base_branch\"",
             "\"worktrees_dir\"",

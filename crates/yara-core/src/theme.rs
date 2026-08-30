@@ -34,6 +34,9 @@ pub struct Ui {
     pub success_bg: Rgb,
     /// The row under the cursor in a list.
     pub selected_bg: Rgb,
+    /// The chosen row of a list the keyboard is not in: the open file, in
+    /// the tree.
+    pub inactive_bg: Rgb,
     /// The row under the mouse.
     pub hover_bg: Rgb,
     pub match_bg: Rgb,
@@ -124,6 +127,7 @@ pub fn dark_modern() -> Theme {
             success_dim: rgb(0x56D364),
             success_bg: rgb(0x1B3B22),
             selected_bg: rgb(0x04395E),
+            inactive_bg: rgb(0x37373D),
             hover_bg: rgb(0x2A2D2E),
             match_bg: rgb(0x724514),
             cursor: rgb(0xAEAFAD),
@@ -363,6 +367,7 @@ pub fn from_vscode_json(text: &str, fallback_name: &str) -> Result<Theme, String
             ],
         ),
         (&mut ui.selected_bg, &["list.activeSelectionBackground"]),
+        (&mut ui.inactive_bg, &["list.inactiveSelectionBackground"]),
         (&mut ui.hover_bg, &["list.hoverBackground"]),
         (
             &mut ui.match_bg,

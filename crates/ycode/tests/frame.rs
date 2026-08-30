@@ -548,7 +548,26 @@ fn files_open_in_the_editor_type_save_and_close_back_to_follow() {
     // The agent's edits are told apart from the user's own: the tree tints
     // what changed and the timeline shows the save.
     app.refresh();
-    assert!(text(&mut app).contains("main.rs ●"), "{}", text(&mut app));
+    let all = text(&mut app);
+    assert!(all.contains("main.rs ●"), "{all}");
+    assert!(all.contains("src ●"), "the folder above it too: {all}");
+    // The open file's row wears the list's selection colour, not the ground
+    // of a removed line: red says error, not "this one is open".
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let files = app.hits.files;
+    let opened = (0..files.height)
+        .map(|dy| files.y + dy)
+        .find(|&y| {
+            (files.x..files.right())
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+                .contains("main.rs")
+        })
+        .unwrap();
+    let bg = terminal.backend().buffer()[(files.x + 4, opened)].bg;
+    assert_eq!(bg, ycode::theme::color(app.theme.ui.selected_bg));
+    assert_ne!(bg, ycode::theme::color(app.theme.ui.accent_bg));
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.focus, Focus::Follow);
     assert!(text(&mut app).contains("FOLLOW · LIVE"));

@@ -383,6 +383,8 @@ impl Task {
     }
 
     /// Whether git has anything to say about a path — what tints the tree.
+    /// A folder counts as changed when anything under it is, so the mark
+    /// shows through collapsed folders too.
     pub fn is_changed(&self, path: &std::path::Path) -> bool {
         let Some(folder) = self.folder_of(path) else {
             return false;
@@ -391,7 +393,11 @@ impl Task {
             return false;
         };
         let relative = relative.to_string_lossy().replace('\\', "/");
-        folder.changes.iter().any(|c| c.path == relative)
+        let under = format!("{relative}/");
+        folder
+            .changes
+            .iter()
+            .any(|c| c.path == relative || c.path.starts_with(&under))
     }
 
     /// The CHANGES list: a heading per folder when there are several, and

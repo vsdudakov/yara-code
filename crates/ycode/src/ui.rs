@@ -970,7 +970,7 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw("  ".repeat(row.depth)),
                     Span::styled(format!("{glyph} "), fg(ui.fg_dim)),
                 ];
-                let changed = !row.is_dir && app.is_changed(&row.path);
+                let changed = app.is_changed(&row.path);
                 spans.push(Span::styled(
                     name,
                     fg(if changed { ui.accent_dim } else { ui.fg }),
@@ -978,11 +978,14 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
                 if changed {
                     spans.push(Span::styled(" ●", fg(ui.accent_dim)));
                 }
+                // The open file keeps the list's selection colour; the
+                // cursor row, when the tree has focus, is the same ground
+                // with its name in bold.
                 let mut line = Line::from(spans);
                 if focused && i == tree.selected {
-                    line = line.style(Style::new().bg(color(ui.selected_bg)));
+                    line = line.style(Style::new().bg(color(ui.selected_bg)).bold());
                 } else if opened.as_deref() == Some(row.path.as_path()) {
-                    line = line.style(Style::new().bg(color(ui.accent_bg)));
+                    line = line.style(Style::new().bg(color(ui.selected_bg)));
                 }
                 line
             })

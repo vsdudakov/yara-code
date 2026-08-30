@@ -68,20 +68,17 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
         b if b.is_empty() => "detached".to_string(),
         b => b,
     };
-    // The main working copy is the first worktree git lists; a folder that
-    // is not it is a linked worktree.
+    // The first worktree git lists is the main working copy, and its branch
+    // is what changes are measured against when the settings name none.
     let list = git(&root, &["worktree", "list", "--porcelain"]).unwrap_or_default();
     let mut entries = list.split("\n\n").filter(|e| !e.trim().is_empty());
     let main = entries.next().unwrap_or_default();
-    let main_path = main
-        .lines()
-        .find_map(|l| l.strip_prefix("worktree "))
-        .map(|p| {
-            PathBuf::from(p)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(p))
-        });
-    let worktree = (main_path.as_deref() != Some(&root))
+    // A linked worktree keeps a `.git` file pointing at the repository; the
+    // main working copy keeps the repository itself in a folder. That is a
+    // surer test than comparing paths, which git spells its own way.
+    let worktree = root
+        .join(".git")
+        .is_file()
         .then(|| root.file_name().map(|n| n.to_string_lossy().into_owned()))
         .flatten();
     let main_branch = if main_branch.is_empty() {
@@ -178,11 +175,7 @@ pub fn worktrees(repo: &Repo) -> Vec<PathBuf> {
     list.split("\n\n")
         .skip(1)
         .filter_map(|entry| entry.lines().find_map(|l| l.strip_prefix("worktree ")))
-        .map(|p| {
-            PathBuf::from(p)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(p))
-        })
+        .map(|p| canonical(&PathBuf::from(p)))
         .collect()
 }
 

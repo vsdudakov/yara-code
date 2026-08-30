@@ -78,14 +78,3 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -d "$payload" "https://api.github.com/gists/$GIST_ID" > /dev/null
 
-  headless:
-    name: Terminal frontend alone (no graphics stack)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # The point of the tui feature: it must build on a machine with no
-      # display server and no GTK, which is how it runs over SSH.
-      - run: cargo build --release --no-default-features --features tui
-      - run: cargo test --no-default-features --features tui

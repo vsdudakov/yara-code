@@ -211,6 +211,10 @@ jobs:
                 "$template" > "$out"
             cat "$out"
           done
+      - name: Attach the PKGBUILD to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PKGBUILD
       - name: Push it to the tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

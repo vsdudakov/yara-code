@@ -1322,20 +1322,19 @@ fn draw_editor(frame: &mut Frame, app: &mut App, area: Rect) {
     let dim = fg(ui.fg_dim);
     let focused = app.focus == Focus::Editor;
     let Some(buffer) = &app.editor else { return };
-    let block = Block::bordered()
+    let hints = format!(
+        " {} save · {} close ",
+        app.hint(Command::Save),
+        app.hint(Command::Close)
+    );
+    let mut block = Block::bordered()
         .border_style(fg(if focused { ui.accent } else { ui.border }))
-        .title(Line::styled(" EDIT ", bold(ui.accent)))
-        .title_top(
-            Line::styled(
-                format!(
-                    " {} save · {} close ",
-                    app.hint(Command::Save),
-                    app.hint(Command::Close)
-                ),
-                dim,
-            )
-            .right_aligned(),
-        );
+        .title_top(Line::styled(" EDIT ", bold(ui.accent)));
+    // The hints share the top border with the title, and give it up when
+    // the pane is too narrow for both.
+    if area.width as usize > hints.chars().count() + 10 {
+        block = block.title_top(Line::styled(hints, dim).right_aligned());
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 {

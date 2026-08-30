@@ -40,6 +40,17 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// A path as the system spells it, with Windows' `\\?\` prefix taken off:
+/// git does not take that shape on a command line, and neither do the
+/// comparisons the editor makes against paths it was given.
+pub fn canonical(path: &Path) -> PathBuf {
+    let full = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    match full.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => full,
+    }
+}
+
 fn first_line(out: String) -> String {
     out.lines().next().unwrap_or("").trim().to_string()
 }
@@ -52,8 +63,7 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
     if top.is_empty() {
         return None;
     }
-    let root = PathBuf::from(&top);
-    let root = root.canonicalize().unwrap_or(root);
+    let root = canonical(&PathBuf::from(&top));
     let branch = match first_line(git(&root, &["branch", "--show-current"]).unwrap_or_default()) {
         b if b.is_empty() => "detached".to_string(),
         b => b,
@@ -109,7 +119,7 @@ pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, Stri
     }
     let path = dir.join(&slug);
     if path.join(".git").exists() {
-        return Ok(path.canonicalize().unwrap_or(path));
+        return Ok(canonical(&path));
     }
     let _ = std::fs::create_dir_all(dir);
     let branch_exists = git(&repo.root, &["rev-parse", "--verify", "--quiet", &slug]).is_ok();
@@ -120,7 +130,7 @@ pub fn worktree_add(repo: &Repo, dir: &Path, name: &str) -> Result<PathBuf, Stri
         vec!["worktree", "add", "-q", "-b", &slug, &path_text]
     };
     git(&repo.root, &args)?;
-    Ok(path.canonicalize().unwrap_or(path))
+    Ok(canonical(&path))
 }
 
 /// The repositories inside `root` — a folder that holds several of them,
@@ -622,7 +632,7 @@ mod tests {
         let (dir, repo) = repo("yara-git-add-worktree");
         let trees = dir.path().join("trees");
         let path = worktree_add(&repo, &trees, " task/login flow ").unwrap();
-        assert_eq!(path, trees.join("task-login-flow").canonicalize().unwrap());
+        assert_eq!(path, canonical(&trees.join("task-login-flow")));
         let added = open(&path, "main").unwrap();
         assert_eq!(added.branch, "task-login-flow");
         assert_eq!(added.worktree.as_deref(), Some("task-login-flow"));

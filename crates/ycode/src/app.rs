@@ -170,7 +170,7 @@ pub struct Folder {
 
 impl Folder {
     fn new(path: PathBuf, settings: &Settings) -> Self {
-        let path = path.canonicalize().unwrap_or(path);
+        let path = git::canonical(&path);
         let repo = git::open(&path, &settings.base_branch);
         let pr = Arc::new(Mutex::new(None));
         if let Some(root) = repo.as_ref().map(|r| r.root.clone()) {
@@ -528,10 +528,7 @@ impl App {
     pub fn with_workspace(folders: Vec<PathBuf>, settings: Settings, theme: Theme) -> Self {
         // A path as the user typed it — `.`, most often — is not the name
         // the chrome should show.
-        let workspace: Vec<PathBuf> = folders
-            .into_iter()
-            .map(|p| p.canonicalize().unwrap_or(p))
-            .collect();
+        let workspace: Vec<PathBuf> = folders.iter().map(|p| git::canonical(p)).collect();
         Self {
             tasks: vec![Task::new(&workspace, &settings)],
             workspace,
@@ -615,8 +612,8 @@ impl App {
     /// updated so the start page remembers it.
     pub fn open_workspace(&mut self, folders: Vec<PathBuf>) {
         let folders: Vec<PathBuf> = folders
-            .into_iter()
-            .map(|p| p.canonicalize().unwrap_or(p))
+            .iter()
+            .map(|p| git::canonical(p))
             .filter(|p| p.is_dir())
             .collect();
         if folders.is_empty() {
@@ -642,7 +639,7 @@ impl App {
             self.note = Some(format!("{} is not a folder", path.display()));
             return;
         }
-        let path = path.canonicalize().unwrap_or(path);
+        let path = git::canonical(&path);
         if self.workspace.contains(&path) {
             self.note = Some("that folder is already in this workspace".into());
             return;

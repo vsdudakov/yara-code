@@ -4,8 +4,9 @@ site_name: Yara Code
 site_description: >-
   Yara Code is the terminal editor for the agent loop: your coding agent —
   Claude Code, Codex, Cursor's CLI — runs in the left pane, and the right pane
-  follows the diff of every edit it makes. Review as it works, scrub back,
-  run agents in parallel in git worktrees. One small Rust binary, over SSH.
+  follows the diff of every edit it makes. Review as it works, scrub back, and
+  run agents in parallel, each in a git worktree of its own. One small Rust
+  binary that runs over SSH.
 site_author: Yara Code contributors
 site_url: https://vsdudakov.github.io/yara-code/
 repo_name: vsdudakov/yara-code
@@ -84,7 +85,8 @@ nav:
       - First run: getting-started/first-run.md
   - Guides:
       - The follow loop: guides/follow.md
-      - Tasks: guides/tasks.md
+      - Workspaces and tasks: guides/tasks.md
+      - The terminal: guides/terminal.md
       - Files and editing: guides/editing.md
       - Search and the palette: guides/search.md
       - Key bindings: guides/keys.md

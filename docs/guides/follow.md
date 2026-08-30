@@ -4,11 +4,14 @@ description: The follow loop in Yara Code — the timeline of the agent's edits,
 
 # The follow loop
 
-The FOLLOW pane watches the working tree of the project. Every half second
-(`refresh_ms`) it looks at what changed; every file whose text moved since
-the last look becomes an **edit** on the timeline — the step the agent just
-took, not the whole distance from `main`. A file put back the way it was is
-an edit too.
+The FOLLOW pane watches every folder of the task. Each half second
+(`refresh_ms`) it looks for movement; every file whose text moved becomes an
+**edit** on the timeline — the step the agent just took, not the whole
+distance from `main`. A file put back the way it was is an edit too.
+
+A folder that is a repository is asked of git, which is quick and knows what
+is committed. One that is not is read as it stands. Either way the edits land
+on the same timeline, each named by the folder it came from.
 
 ## Live
 
@@ -22,36 +25,38 @@ current edit with `‥` at the ends.
 
 ## Paused
 
-++left++ and ++right++ scrub through the edits and pause the pane — the
-title says **PAUSED** and offers `[ f → live ]`. New edits still join the
-timeline; the pane stays where you put it. ++f++, or stepping onto the newest
-edit, goes live again. Clicking a tick jumps to it.
+++left++ and ++right++ scrub through the edits and pause the pane — the title
+says **PAUSED** and offers `[ f → live ]`. New edits still join the timeline;
+the pane stays where you put it. ++f++, or stepping onto the newest edit, goes
+live again. Clicking a tick jumps to it.
 
 ![Scrubbed back to an earlier edit](../assets/shots/paused.svg)
 
 ## Reviewing
 
-++enter++ marks the current edit reviewed and moves to the oldest edit that
-is not; when none remain the pane goes live. The status bar shows
+++enter++ marks the current edit reviewed and moves to the oldest edit that is
+not; when none remain the pane goes live. The status bar shows
 `◆ N unreviewed`, and clicking it jumps to the next unreviewed edit; once
 everything is reviewed it reads `✓ all reviewed`.
 
 ## Diff and file
 
-The body is the unified diff of the edit: gutter, line number, `+` or `−`,
-the line, added rows on a green ground and removed rows on a red one.
-++v++ toggles to the **file** as it stands now, with a bar beside every line
-this edit added.
+The body is the unified diff of the edit: gutter, line number, `+` or `−`, the
+line, added rows on a green ground and removed rows on a red one. ++v++
+toggles to the **file** as it stands now, with a bar beside every line this
+edit added.
 
 ![The file view](../assets/shots/file-view.svg)
 
+The wheel scrolls either; any follow key puts it back at the top.
+
 ## CHANGES
 
-++f4++ opens CHANGES: what the branch differs from `main` by, one
-row a file — `A` added, `M` modified, `D` deleted, `U` untracked — with its
-counts, and the totals in the footer. It is the *result*; the timeline is
-the *history*. ++enter++ on a row opens that file's whole diff in the follow
-pane (`FOLLOW · CHANGES`), and ++esc++ returns to the timeline.
+++f4++ opens CHANGES: what the branch differs from `main` by, one row a file —
+`A` added, `M` modified, `D` deleted, `U` untracked — with its counts, and a
+heading for each folder that is a repository. The totals are in the footer.
+++enter++ on a row opens that file's whole diff in the follow pane
+(`FOLLOW · CHANGES`); ++esc++ returns to the timeline.
 
 ![What differs from main](../assets/shots/changes.svg)
 

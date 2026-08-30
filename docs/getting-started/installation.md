@@ -4,9 +4,8 @@ description: Install Yara Code with Homebrew, apt, dnf, the AUR, a prebuilt bina
 
 # Installation
 
-Yara Code is one binary, **`ycode`**. The command is `ycode` rather than
-`yara` because `yara` belongs to VirusTotal's scanner in every package
-manager.
+Yara Code is one binary, **`ycode`**. The command is `ycode` rather than `yara`
+because `yara` belongs to VirusTotal's scanner in every package manager.
 
 ## Homebrew — macOS and Linux
 
@@ -77,8 +76,8 @@ sudo mv ycode-vX.Y.Z-x86_64-unknown-linux-gnu/ycode /usr/local/bin/
 ```
 
 `Help → Check for Updates…` downloads a newer release over the binary in
-place, when the folder it lives in is writable; otherwise it says which
-package manager to ask.
+place, when the folder it lives in is writable; otherwise it says which package
+manager to ask.
 
 ## From source
 
@@ -89,9 +88,18 @@ cargo install --git https://github.com/vsdudakov/yara-code ycode
 Nothing but a Rust toolchain and `git` on the `PATH` is needed: there is no
 graphics stack, and git is driven through its own CLI.
 
-## The terminal
+## What it expects to find
+
+- **git**, for everything the follow loop and CHANGES do.
+- **An agent** — `claude` by default; `codex`, `cursor-agent` or any command
+  at all, named by `agent` in [settings](../guides/settings.md).
+- **`gh`**, optionally: a task is named by its pull request when it can be
+  asked for one.
+- **A clipboard tool**, optionally: `pbcopy`, `wl-copy`, `xclip` or `xsel`.
+  Without one — over SSH, say — copying falls back on OSC 52 and the terminal
+  does it.
 
 Any terminal works: the default keys are function keys and plain `Ctrl`
-chords, which every terminal sends. Where the kitty keyboard protocol is
-there — Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later — the agent in
-the pane gets it too.
+chords, which every terminal sends. Where the kitty keyboard protocol is there
+— Ghostty, kitty, WezTerm, foot, iTerm2 3.5 and later — the agent in the pane
+gets it too.

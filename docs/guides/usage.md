@@ -1,22 +1,21 @@
 ---
-description: The AGENT USAGE panel in Yara Code, fed by a command per agent, and how the editor checks for and installs its own updates.
+description: Agent usage in Yara Code — F8 asks the agent for its own figures, or shows a panel fed by a command you name; and how the editor updates itself.
 ---
 
 # Agent usage and updates
 
 ## Agent usage
 
+The agents only show what is left of their plans from inside their own
+sessions — `/usage` in Claude Code and Cursor's CLI, `/status` in Codex — so
+++f8++ types that command at the agent and puts the keyboard there. Which
+command, by program name, is `usage_slash` in [settings](settings.md).
+
+For a panel of your own, name a command per agent in `usage_commands` that
+prints one JSON object. Set, it is what ++f8++ shows instead, and the header
+carries a `◐ claude 62%` chip that opens it.
+
 ![What each agent has used](../assets/shots/usage.svg)
-
-The agents only show their limits from inside their own session — `/usage`
-in Claude Code and Cursor's CLI, `/status` in Codex — so ++f8++
-types that command at the agent and puts the keyboard there. Which command,
-per program name, is `usage_slash` in settings.
-
-For a panel of your own — the ten-cell bar, red from 80%, the percent, the
-detail and the reset, and the `◐ claude 62%` chip in the header — name a
-command per agent in `usage_commands` that prints one JSON object; set, it
-is what ++f8++ shows instead:
 
 ```json
 "usage_commands": {
@@ -29,9 +28,9 @@ is what ++f8++ shows instead:
 {"plan": "Max", "percent": 62, "detail": "1.2M tokens · 340 requests", "reset": "resets in 3h 20m"}
 ```
 
-The commands run in the background when the panel opens and at start; an
-agent whose command fails or prints something else is listed with the error
-in its detail. Without any command the panel says so.
+The commands run in the background, and the panel says how old its figures
+are; an agent whose command fails or prints something else is listed with the
+error in its detail.
 
 ## Updates
 

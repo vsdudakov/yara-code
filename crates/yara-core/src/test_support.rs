@@ -24,8 +24,10 @@ impl Dir {
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         // Symlinked temp directories (macOS puts /tmp behind /private) would
-        // otherwise make canonicalised paths compare unequal.
-        Self(path.canonicalize().unwrap_or(path))
+        // otherwise make canonicalised paths compare unequal, and Windows
+        // spells a canonical path with a `\\?\` prefix that git will not
+        // take on a command line.
+        Self(crate::git::canonical(&path))
     }
 
     pub fn path(&self) -> &Path {

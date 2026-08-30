@@ -1649,3 +1649,42 @@ fn a_terminal_opens_under_the_agent_and_takes_the_keys() {
     assert!(app.terminal.is_none() && app.focus == Focus::Agent);
     assert!(!text(&mut app).contains("TERMINAL"));
 }
+
+#[test]
+fn a_worktree_the_agent_makes_inside_a_folder_is_followed_too() {
+    let repo = Repo::new("yara-frame-nested");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    assert_eq!(app.folders.len(), 1);
+
+    // The agent sets up a worktree of its own, inside the folder.
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "agent-work",
+        repo.0.join(".worktrees/agent-work").to_str().unwrap(),
+    ]);
+    app.refresh();
+    assert_eq!(app.folders.len(), 2, "the worktree joined the task");
+    assert!(app.folders[1].nested);
+
+    // What it edits there lands on the timeline, named by the worktree.
+    std::fs::write(
+        repo.0.join(".worktrees/agent-work/src/main.rs"),
+        "fn main() { done() }\n",
+    )
+    .unwrap();
+    app.refresh();
+    assert_eq!(app.follow.len(), 1);
+    let all = text(&mut app);
+    assert!(all.contains("agent-work/src/main.rs"), "{all}");
+    assert!(all.contains("+ fn main() { done() }"), "{all}");
+
+    // Taken away again, it is no longer followed.
+    repo.git(&["worktree", "remove", "--force", ".worktrees/agent-work"]);
+    app.refresh();
+    assert_eq!(app.folders.len(), 1);
+}

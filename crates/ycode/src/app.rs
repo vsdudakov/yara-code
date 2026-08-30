@@ -158,6 +158,9 @@ pub const MENUS: [(&str, command::Menu); 2] = [("File", FILE_MENU), ("Help", HEL
 pub struct Folder {
     pub path: PathBuf,
     pub repo: Option<Repo>,
+    /// A worktree found inside one of the task's own folders — the agent
+    /// made it — rather than a folder of the workspace.
+    pub nested: bool,
     watcher: Watcher,
     /// What differs from the base branch, refreshed with the watcher.
     pub changes: Vec<Change>,
@@ -181,6 +184,7 @@ impl Folder {
         Self {
             path,
             repo,
+            nested: false,
             watcher: Watcher::default(),
             changes: Vec::new(),
             pr,
@@ -302,6 +306,7 @@ impl Task {
     fn resync(&mut self, workspace: &[PathBuf], settings: &Settings) {
         let slug = self.slug();
         let mut kept: Vec<Folder> = Vec::new();
+        self.folders.retain(|f| !f.nested);
         for path in workspace {
             let path = match (&slug, git::open(path, "")) {
                 (Some(slug), Some(repo)) => {
@@ -338,9 +343,13 @@ impl Task {
         self.main().and_then(|f| f.repo.as_ref())
     }
 
-    /// The folder a path belongs to.
+    /// The folder a path belongs to: the closest one, so a worktree inside
+    /// a folder wins over the folder itself.
     pub fn folder_of(&self, path: &std::path::Path) -> Option<&Folder> {
-        self.folders.iter().find(|f| path.starts_with(&f.path))
+        self.folders
+            .iter()
+            .filter(|f| path.starts_with(&f.path))
+            .max_by_key(|f| f.path.components().count())
     }
 
     /// A path as the panes show it: relative to its folder, and named by
@@ -1236,8 +1245,37 @@ impl App {
     /// its CHANGES list is brought up to date. Called every `refresh_ms`.
     pub fn refresh(&mut self) {
         let rules = self.settings.ignore_folders.clone();
+        // Another task's worktree is that task's business, even when it
+        // lies inside this one's folder.
+        let taken: Vec<PathBuf> = self
+            .tasks
+            .iter()
+            .flat_map(|task| task.folders.iter().map(|f| f.path.clone()))
+            .collect();
         for session in &mut self.tasks {
             let mut edits = Vec::new();
+            // A worktree the agent made inside a folder of the task is
+            // where it is working; the task follows it too.
+            let mut nested: Vec<PathBuf> = Vec::new();
+            for folder in &session.folders {
+                let Some(repo) = &folder.repo else { continue };
+                if folder.nested {
+                    continue;
+                }
+                nested.extend(
+                    git::worktrees(repo)
+                        .into_iter()
+                        .filter(|path| path.starts_with(&folder.path)),
+                );
+            }
+            nested.retain(|path| !taken.contains(path));
+            for path in nested {
+                let mut folder = Folder::new(path, &self.settings);
+                folder.nested = true;
+                session.folders.push(folder);
+            }
+            // One that has been removed since is no longer followed.
+            session.folders.retain(|f| !f.nested || f.path.is_dir());
             for folder in &mut session.folders {
                 // Only a folder that moved is worth reading, or asking git.
                 if !folder

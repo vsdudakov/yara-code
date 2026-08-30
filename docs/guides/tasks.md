@@ -56,6 +56,11 @@ folders, and one task across both:
   across both;
 - the status bar shows the main folder's branch and `+1 folders`.
 
+An agent that sets up a worktree of its own inside one of the task's
+folders — `.worktrees/the-branch`, say — is followed there without being
+asked: the worktree joins the task, its edits land on the same timeline
+named by it, and it leaves the task when it is removed.
+
 A folder that is not a repository is watched all the same: its files are read
 rather than asked of git, and their edits land on the timeline like any other.
 CHANGES has nothing to say about it, and says so.

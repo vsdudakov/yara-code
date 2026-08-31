@@ -838,31 +838,45 @@ impl App {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
-    /// The text the mouse dragged over, read off the last frame row by row,
-    /// trailing blanks dropped. In the file being edited the gutter is left
-    /// out, so what is copied is the code.
-    pub fn selected_text(&self) -> Option<String> {
+    /// The columns of row `y` the drag took, in the shape a selection has
+    /// everywhere text is: the first row from the press to its end, the last
+    /// up to the mouse, every row between whole. In the file being edited
+    /// the gutter is left out, so what is copied is the code.
+    pub fn selected_columns(&self, y: u16) -> Option<(u16, u16)> {
         let ((x0, y0), (x1, y1)) = self.selection?;
         if (x0, y0) == (x1, y1) {
             return None;
         }
         let pane = self.selection_bounds()?;
-        let (top, bottom) = (y0.min(y1), y0.max(y1).min(pane.bottom().saturating_sub(1)));
-        let (left, right) = if y0 == y1 {
-            (x0.min(x1), x0.max(x1))
+        let ((from_x, from_y), (to_x, to_y)) = if (y0, x0) <= (y1, x1) {
+            ((x0, y0), (x1, y1))
         } else {
-            (pane.x, pane.right().saturating_sub(1))
+            ((x1, y1), (x0, y0))
         };
-        let (left, right) = (left.max(pane.x), right.min(pane.right().saturating_sub(1)));
-        let lines: Vec<String> = (top..=bottom)
+        if y < from_y || y > to_y || y < pane.y || y >= pane.bottom() {
+            return None;
+        }
+        let (edge_left, edge_right) = (pane.x, pane.right().saturating_sub(1));
+        let left = if y == from_y { from_x } else { edge_left };
+        let right = if y == to_y { to_x } else { edge_right };
+        let (left, right) = (left.max(edge_left), right.min(edge_right));
+        (left <= right).then_some((left, right))
+    }
+
+    /// The text the mouse dragged over, read off the last frame row by row,
+    /// trailing blanks dropped.
+    pub fn selected_text(&self) -> Option<String> {
+        let pane = self.selection_bounds()?;
+        let lines: Vec<String> = (pane.y..pane.bottom())
             .filter_map(|y| {
+                let (left, right) = self.selected_columns(y)?;
                 let row: Vec<char> = self.last_frame.get(y as usize)?.chars().collect();
                 let to = (right as usize).min(row.len().saturating_sub(1));
                 let text: String = row.get(left as usize..=to).unwrap_or(&[]).iter().collect();
                 Some(text.trim_end().to_string())
             })
             .collect();
-        Some(lines.join("\n"))
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     fn copy(&mut self) {
@@ -882,6 +896,26 @@ impl App {
             self.note = Some("nothing to paste".into());
             return;
         };
+        self.handle_paste(&text);
+    }
+
+    /// Text pasted in one piece — by the terminal's own paste, or the paste
+    /// key reading the clipboard: typed at whichever pane has the keyboard.
+    pub fn handle_paste(&mut self, text: &str) {
+        self.note = None;
+        self.selection = None;
+        let pty = match self.focus {
+            Focus::Agent => self.agent.as_mut(),
+            Focus::Terminal => self.terminal.as_mut(),
+            _ => None,
+        };
+        if let Some(pty) = pty {
+            pty.paste(text);
+            return;
+        }
+        if self.focus != Focus::Editor {
+            return;
+        }
         self.caret_moved = true;
         if let Some(buffer) = self.editor.as_mut() {
             buffer.insert(&text.replace("\r\n", "\n"));
@@ -2048,7 +2082,14 @@ impl App {
                     self.agent.as_mut()
                 };
                 if let Some(pty) = pty {
-                    pty.send_key(&chord.key, chord.mods);
+                    // The chord's letter is lowercased so the settings can be
+                    // asked about it; the program is typed at with the letter
+                    // as it was pressed.
+                    let typed = match key.code {
+                        KeyCode::Char(c) => Key::Char(c),
+                        _ => chord.key.clone(),
+                    };
+                    pty.send_key(&typed, chord.mods);
                 }
                 return;
             }

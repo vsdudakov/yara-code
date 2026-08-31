@@ -147,17 +147,11 @@ fn draw_selection(frame: &mut Frame, app: &mut App) {
     let pane = app.selection_bounds();
     let buffer = frame.buffer_mut();
     let area = buffer.area;
-    if let (Some(((x0, y0), (x1, y1))), Some(pane)) = (app.selection, pane) {
-        if (x0, y0) != (x1, y1) {
-            let (top, bottom) = (y0.min(y1), y0.max(y1).min(pane.bottom().saturating_sub(1)));
-            let (left, right) = if y0 == y1 {
-                (x0.min(x1), x0.max(x1))
-            } else {
-                (pane.x, pane.right().saturating_sub(1))
-            };
-            let bg = color(app.theme.ui.selected_bg);
-            for y in top..=bottom.min(area.height.saturating_sub(1)) {
-                for x in left.max(pane.x)..=right.min(pane.right().saturating_sub(1)) {
+    if let Some(pane) = pane {
+        let bg = color(app.theme.ui.selected_bg);
+        for y in pane.y..pane.bottom().min(area.height) {
+            if let Some((left, right)) = app.selected_columns(y) {
+                for x in left..=right.min(area.width.saturating_sub(1)) {
                     buffer[(x, y)].set_bg(bg);
                 }
             }

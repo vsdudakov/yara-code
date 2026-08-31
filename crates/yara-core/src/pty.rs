@@ -121,6 +121,21 @@ impl Pty {
         }
     }
 
+    /// Pasted text, typed at the program in one piece: between the paste
+    /// markers when it has asked to be told a paste from typing, plain
+    /// otherwise, with each newline the Return a terminal pastes it as.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.replace("\r\n", "\r").replace('\n', "\r");
+        let bracketed = self.with_screen(|screen| screen.bracketed_paste());
+        let bytes = if bracketed {
+            format!("\x1b[200~{text}\x1b[201~")
+        } else {
+            text
+        };
+        self.set_scrollback(0);
+        self.write(bytes.as_bytes());
+    }
+
     /// One notch of the wheel over a cell: to a program that asked to hear
     /// about the mouse — an agent, a pager — it is sent as the SGR wheel
     /// event, rows and columns counted from one; to any other the view
@@ -235,6 +250,51 @@ mod tests {
             },
         );
         wait_for_exit(&mut pty);
+    }
+
+    #[test]
+    fn a_paste_is_typed_in_one_piece_and_marked_when_the_program_asked() {
+        let dir = Dir::new("yara-pty-paste");
+        let mut pty = Pty::spawn("cat", dir.path(), || {}).unwrap();
+        pty.resize(10, 40);
+        pty.paste("Ab\nCD\n");
+        // The terminal echoes the whole paste before cat prints it back: it
+        // arrived in one piece, case kept.
+        let screen = wait_for(&pty, "Ab\nCD\nAb\nCD");
+        assert!(screen.contains("Ab\nCD\nAb\nCD"), "{screen:?}");
+        wait_for_exit(&mut ended(pty));
+
+        // A program that asked for bracketed paste — printing the request is
+        // how one asks — hears the paste between the markers. `cat -v` shows
+        // the markers it was sent.
+        let script = dir.path().join("asks.sh");
+        std::fs::write(&script, "printf '\\033[?2004h'\nexec cat -v\n").unwrap();
+        let mut pty = Pty::spawn(&format!("sh {}", script.display()), dir.path(), || {}).unwrap();
+        pty.resize(10, 40);
+        let start = Instant::now();
+        while !pty.with_screen(|s| s.bracketed_paste()) && start.elapsed() < Duration::from_secs(5)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(pty.with_screen(|s| s.bracketed_paste()));
+        pty.paste("x");
+        // The line is only handed to cat once ended, which a Ctrl+D does.
+        let pty = ended(pty);
+        let screen = wait_for(&pty, "^[[200~x^[[201~");
+        assert!(screen.contains("^[[200~x^[[201~"), "{screen:?}");
+        wait_for_exit(&mut ended(pty));
+    }
+
+    /// Ctrl+D, which ends cat.
+    fn ended(mut pty: Pty) -> Pty {
+        pty.send_key(
+            &Key::Char('d'),
+            Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        );
+        pty
     }
 
     #[test]

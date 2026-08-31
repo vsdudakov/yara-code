@@ -195,6 +195,55 @@ fn the_agent_runs_in_its_pane_takes_the_keys_and_f6_hands_them_to_follow() {
     assert!(app.overlay.is_some(), "CHANGES opened");
 }
 
+#[cfg(unix)]
+#[test]
+fn the_agent_hears_a_capital_as_typed_and_a_paste_in_one_piece() {
+    let settings = Settings {
+        agent: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = App::with_settings(Some(scratch()), settings, Theme::default());
+    app.start_agent();
+    app.focus = Focus::Agent;
+    app.handle_key(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT));
+    app.handle_key(key(KeyCode::Char('i')));
+    app.handle_key(key(KeyCode::Enter));
+    let screen = |app: &App, want: &str| {
+        let start = std::time::Instant::now();
+        let mut screen = String::new();
+        while start.elapsed() < std::time::Duration::from_secs(5) && !screen.contains(want) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            screen = app.agent.as_ref().unwrap().with_screen(|s| s.contents());
+        }
+        screen
+    };
+    assert!(
+        screen(&app, "Hi\nHi").contains("Hi\nHi"),
+        "cat echoed it as typed"
+    );
+    app.handle_paste("Ab\ncD\n");
+    assert!(
+        screen(&app, "Ab\ncD\nAb\ncD").contains("Ab\ncD\nAb\ncD"),
+        "the terminal echoed the whole paste before cat printed it back"
+    );
+    // A paste with the keyboard in a file goes into the file, as it is.
+    let repo = Repo::new("yara-frame-paste");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.open_file(&repo.0.join("src/main.rs"));
+    app.focus = Focus::Editor;
+    app.handle_paste("// Hi\r\n");
+    assert!(app
+        .editor
+        .as_ref()
+        .unwrap()
+        .text
+        .starts_with("// Hi\nfn main() {"));
+    // Nowhere to type, a paste is nothing.
+    app.focus = Focus::Follow;
+    app.handle_paste("gone");
+    assert!(!app.editor.as_ref().unwrap().text.contains("gone"));
+}
+
 #[test]
 fn an_agent_that_cannot_start_is_a_note_not_a_crash() {
     let settings = Settings {
@@ -1057,17 +1106,37 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.note.as_deref().unwrap().starts_with("copied 2 lines"));
     assert!(app.selection.is_none());
-    // A drag that starts in the gutter takes the code, not the numbers.
+    // A drag that starts in the gutter takes the code, not the numbers; the
+    // last row stops where the mouse does.
+    app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x - 4, e.y));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        e.x + 6,
+        e.y + 1,
+    ));
+    assert_eq!(app.selected_text().as_deref(), Some("fn main() {\n    let"));
+    // Dragged upward, the same span is selected as the other way round.
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        e.x + 6,
+        e.y + 1,
+    ));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), e.x + 3, e.y));
+    assert_eq!(app.selected_text().as_deref(), Some("main() {\n    let"));
+    // Not the whole first row: the cells before the press stay unlit.
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    assert_ne!(buffer[(e.x, e.y)].bg, lit, "before the press");
+    assert_eq!(buffer[(e.x + 3, e.y)].bg, lit, "from the press on");
+    assert_eq!(buffer[(e.x + 6, e.y + 1)].bg, lit, "up to the mouse");
+    assert_ne!(buffer[(e.x + 7, e.y + 1)].bg, lit, "and no further");
     app.handle_mouse(ev(MouseEventKind::Down(MouseButton::Left), e.x - 4, e.y));
     app.handle_mouse(ev(
         MouseEventKind::Drag(MouseButton::Left),
         e.x + 3,
         e.y + 1,
     ));
-    assert_eq!(
-        app.selected_text().as_deref(),
-        Some("fn main() {\n    let x = 1;")
-    );
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
     assert_ne!(

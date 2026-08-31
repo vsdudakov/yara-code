@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -47,6 +47,7 @@ fn main() -> io::Result<()> {
         out,
         EnterAlternateScreen,
         EnableMouseCapture,
+        EnableBracketedPaste,
         crossterm::cursor::SetCursorStyle::BlinkingBar
     )?;
     // The defaults need nothing beyond what every terminal sends; where the
@@ -67,6 +68,7 @@ fn main() -> io::Result<()> {
     let _ = execute!(
         io::stdout(),
         crossterm::cursor::SetCursorStyle::DefaultUserShape,
+        DisableBracketedPaste,
         DisableMouseCapture,
         LeaveAlternateScreen
     );
@@ -102,6 +104,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> 
             match event::read()? {
                 Event::Key(key) => app.handle_key(key),
                 Event::Mouse(mouse) => app.handle_mouse(mouse),
+                Event::Paste(text) => app.handle_paste(&text),
                 Event::Resize(..) => {}
                 _ => continue,
             }

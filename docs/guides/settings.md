@@ -31,7 +31,7 @@ saves a setting. `//` comments are allowed.
 | `search_exclude` | `[]` | What Search Project leaves out on top of those, in VS Code's glob spelling |
 | `usage_slash` | `{"claude": "/usage", "cursor-agent": "/usage", "codex": "/status"}` | What ++f8++ types at each agent, by program name |
 | `usage_commands` | `{}` | A command per agent that prints its usage as JSON — see [Agent usage](usage.md) |
-| `agent_keys` | `["Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V"]` | Bound chords the agent keeps anyway |
+| `agent_keys` | `["Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C"]` | Bound chords the agent keeps anyway; the paste key always pastes |
 | `keys` | `{}` | Rebindings, command id to chord — see [Key bindings](keys.md) |
 | `recent_workspaces` | `[]` | Workspaces opened before, each its folders. Kept by the editor |
 

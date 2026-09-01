@@ -15,9 +15,10 @@ With the keyboard on the **agent** or the **terminal**, plain keys, ++enter++,
 ++esc++, ++tab++ and the arrows are theirs, whatever the editor binds them to —
 they are how a program is talked to. A bound ++ctrl++ or ++alt++ chord, or a
 function key, is the editor's, except the ones `agent_keys` lists — ++ctrl+r++,
-++ctrl+n++, ++ctrl+z++, ++ctrl+w++, ++ctrl+y++, ++ctrl+c++, ++ctrl+v++ by
-default — which the programs use themselves. Chords nobody bound reach the
-agent.
+++ctrl+n++, ++ctrl+z++, ++ctrl+w++, ++ctrl+y++, ++ctrl+c++ by default — which
+the programs use themselves. ++ctrl+c++ with text selected copies it all the
+same, and ++ctrl+v++ pastes the clipboard at the program whatever the list
+says. Chords nobody bound reach the agent.
 
 With the keyboard in the **editor**, everything is typing except ++esc++, which
 closes the file, and the bound ++ctrl++ chords and function keys.

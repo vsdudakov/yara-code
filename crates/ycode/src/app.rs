@@ -1232,6 +1232,7 @@ impl App {
         [
             (self.hits.editor, self.hits.editor),
             (inside(self.hits.agent), inside(self.hits.agent)),
+            (inside(self.hits.terminal), inside(self.hits.terminal)),
             (inside(self.hits.follow), follow),
             (inside(self.hits.files), inside(self.hits.files)),
         ]
@@ -2122,9 +2123,15 @@ impl App {
         // uses it itself.
         if self.focus == Focus::Agent || self.focus == Focus::Terminal {
             // Ctrl+C with something selected is a copy; with nothing it
-            // stays the interrupt every program expects.
+            // stays the interrupt every program expects. The paste key
+            // pastes the clipboard at the program, whatever agent_keys say:
+            // no program in that pane has a better use for it.
             if command == Some(Command::Copy) && self.selected_text().is_some() {
                 self.copy();
+                return;
+            }
+            if command == Some(Command::Paste) {
+                self.paste();
                 return;
             }
             let editors = command.is_some()

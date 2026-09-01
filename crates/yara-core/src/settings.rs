@@ -239,12 +239,10 @@ impl Default for Settings {
             .map(String::from)
             .to_vec(),
             search_exclude: Vec::new(),
-            agent_keys: [
-                "Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C", "Ctrl+V",
-            ]
-            .iter()
-            .filter_map(|c| c.parse().ok())
-            .collect(),
+            agent_keys: ["Ctrl+R", "Ctrl+N", "Ctrl+Z", "Ctrl+W", "Ctrl+Y", "Ctrl+C"]
+                .iter()
+                .filter_map(|c| c.parse().ok())
+                .collect(),
             keys: Keys::default(),
             recent_workspaces: Vec::new(),
             unreadable: false,
@@ -582,6 +580,17 @@ mod tests {
         assert_eq!(settings.agent_side, Side::Right);
         assert_eq!(settings.agent_width, 50);
         assert_eq!(settings.sidebar_width, 30);
+    }
+
+    #[test]
+    fn the_paste_key_is_the_editors_even_in_the_agents_pane() {
+        let settings = Settings::default();
+        let paste = settings.chord(Command::Paste).unwrap();
+        assert!(
+            !settings.agent_keys.contains(paste),
+            "Ctrl+V pastes the clipboard at the program, it is never typed at it"
+        );
+        assert!(settings.agent_keys.contains(&"Ctrl+C".parse().unwrap()));
     }
 
     #[test]

@@ -1968,6 +1968,67 @@ fn a_worktree_the_agent_makes_inside_a_folder_is_followed_too() {
     assert_eq!(app.folders.len(), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_drag_in_the_terminal_selects_its_text_and_the_paste_key_is_not_typed_at_it() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let config =
+        std::env::temp_dir().join(format!("yara-frame-shell-select-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let settings = Settings {
+        agent: "cat".into(),
+        shell: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = following(settings);
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    frame(&mut app);
+    let shell = app.hits.terminal;
+    assert!(shell.height > 3);
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    // A drag down the shell lights the text inside its frame, as in the
+    // agent's pane, and Ctrl+C takes it rather than interrupting the shell.
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        shell.x + 2,
+        shell.y + 1,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        shell.x + 6,
+        shell.y + 2,
+    ));
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let lit = ycode::theme::color(app.theme.ui.selected_bg);
+    assert_eq!(buffer[(shell.x + 2, shell.y + 1)].bg, lit, "from the press");
+    assert_eq!(buffer[(shell.x + 6, shell.y + 2)].bg, lit, "to the mouse");
+    assert_ne!(buffer[(shell.x, shell.y + 1)].bg, lit, "not the frame");
+    assert_ne!(buffer[(shell.x + 2, shell.y)].bg, lit, "not the title row");
+    assert_eq!(app.focus, Focus::Terminal);
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(
+        app.note.as_deref().unwrap().starts_with("copied"),
+        "{:?}",
+        app.note
+    );
+    assert!(app.selection.is_none());
+    // Ctrl+V is the paste key here too: it reads the clipboard for the
+    // shell instead of being typed at it as a control character.
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let screen = app.terminal.as_ref().unwrap().with_screen(|s| s.contents());
+    assert!(!screen.contains("^V"), "{screen}");
+    release_config_dir();
+    let _ = std::fs::remove_dir_all(&config);
+}
+
 /// A repository named `name` inside a bench folder, with one committed file.
 fn bench_repo(bench: &std::path::Path, name: &str) -> std::path::PathBuf {
     let path = bench.join(name);

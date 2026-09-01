@@ -103,17 +103,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// What the mouse rests on, lit: a row, a tab, a button, a tick — and a
 /// seam, which shows itself as a line so it reads as something to drag.
+/// The terminal's top border is its seam, and takes the same colour.
 fn draw_hover(frame: &mut Frame, app: &mut App) {
     let Some((x, y)) = app.hover else { return };
     let hits = &app.hits;
     let inside = |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
     let seam = [hits.seam, hits.tree_seam].into_iter().find(|r| inside(*r));
+    let accent = color(app.theme.ui.accent);
+    let terminal_seam = app.terminal_seam();
     let buffer = frame.buffer_mut();
     if let Some(seam) = seam {
         for row in seam.y..seam.bottom() {
             let cell = &mut buffer[(seam.x, row)];
             cell.set_symbol("┃");
-            cell.set_fg(color(app.theme.ui.accent));
+            cell.set_fg(accent);
+        }
+        return;
+    }
+    if inside(terminal_seam) {
+        for col in terminal_seam.x..terminal_seam.right().min(buffer.area.width) {
+            buffer[(col, terminal_seam.y)].set_fg(accent);
         }
         return;
     }

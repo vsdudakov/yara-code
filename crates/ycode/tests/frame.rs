@@ -42,6 +42,15 @@ fn scratch() -> std::path::PathBuf {
     path
 }
 
+/// Where a test that is done with its own config folder leaves the
+/// variable: pointed at a scratch folder, never unset. Tests run side by
+/// side, and one letting go of `YARA_CONFIG_DIR` while another still drags
+/// a seam sent that seam's save into the real settings.json.
+fn release_config_dir() {
+    let shared = std::env::temp_dir().join("yara-frame-config-shared");
+    std::env::set_var("YARA_CONFIG_DIR", shared);
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -742,7 +751,7 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
     std::env::set_var("YARA_CONFIG_DIR", &lock);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let _ = std::fs::remove_dir_all(&lock);
     assert_eq!(app.project(), Some(repo.0.as_path()));
     assert_eq!(
@@ -884,7 +893,7 @@ fn a_new_file_is_made_where_the_files_cursor_is_and_settings_opens_its_own_file(
         std::env::temp_dir().join(format!("yara-frame-newfile-config-{}", std::process::id()));
     std::env::set_var("YARA_CONFIG_DIR", &config);
     app.execute(yara_core::command::Command::Settings);
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let shown = text(&mut app);
     let _ = std::fs::remove_dir_all(&config);
     assert!(shown.contains("settings.json"), "{shown}");
@@ -1231,7 +1240,7 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 79, 5));
     app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), 79, 5));
     assert_eq!(app.settings.sidebar_width, 20);
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
 }
 
@@ -1564,7 +1573,7 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
     app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::Enter));
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
     assert_eq!(app.project(), Some(repo.0.as_path()));
     assert_eq!(
@@ -1596,7 +1605,7 @@ fn settings_open_over_the_start_page() {
     app.handle_key(key(KeyCode::Esc));
     app.handle_key(key(KeyCode::Char('n')));
     assert!(text(&mut app).contains("the terminal editor for the agent loop"));
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
 }
 
@@ -1725,7 +1734,7 @@ fn a_workspace_holds_the_folders_and_its_tasks_work_in_worktrees_of_them() {
     assert_eq!(app.tasks[0].folders.len(), 1);
     // The workspace is what the recent list remembers.
     assert_eq!(app.settings.recent_workspaces[0], app.workspace);
-    std::env::remove_var("YARA_CONFIG_DIR");
+    release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
 }
 
@@ -1781,6 +1790,104 @@ fn a_terminal_opens_under_the_agent_and_takes_the_keys() {
     assert!(!text(&mut app).contains("TERMINAL"));
 }
 
+#[cfg(unix)]
+#[test]
+fn the_terminal_scrolls_by_the_wheel_and_its_top_border_drags_its_height() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let config =
+        std::env::temp_dir().join(format!("yara-frame-shell-config-{}", std::process::id()));
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let settings = Settings {
+        agent: "cat".into(),
+        shell: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = following(settings);
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
+    frame(&mut app);
+    let shell = app.hits.terminal;
+    assert!(shell.height > 0, "the shell has a place of its own");
+
+    // Enough lines for the shell's few rows to overflow — each one typed
+    // comes back twice, echoed by the tty and printed by cat.
+    for _ in 0..shell.height {
+        for c in "line".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+    }
+    let start = std::time::Instant::now();
+    let mut screen = String::new();
+    while start.elapsed().as_secs() < 5 && screen.matches("line").count() < shell.height as usize {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        screen = app.terminal.as_ref().unwrap().with_screen(|s| s.contents());
+    }
+    let scrollback = |app: &App| app.terminal.as_ref().unwrap().scrollback();
+    assert_eq!(scrollback(&app), 0);
+    app.handle_mouse(ev(MouseEventKind::ScrollUp, shell.x + 3, shell.y + 2));
+    assert!(
+        scrollback(&app) > 0,
+        "the wheel over the shell scrolls it back"
+    );
+    app.handle_mouse(ev(MouseEventKind::ScrollDown, shell.x + 3, shell.y + 2));
+    assert_eq!(scrollback(&app), 0);
+
+    // The top border is the seam: lit under the mouse, and dragged up it
+    // gives the shell more of the pane — here from 40% to the row it was
+    // let go on. The share is saved.
+    let accent = ycode::theme::color(app.theme.ui.accent);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    app.handle_mouse(ev(MouseEventKind::Moved, shell.x + 5, shell.y));
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(
+        terminal.backend().buffer()[(shell.x + 5, shell.y)].fg,
+        accent
+    );
+    assert_ne!(
+        terminal.backend().buffer()[(shell.x + 5, shell.y + 1)].fg,
+        accent,
+        "only the border"
+    );
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        shell.x + 5,
+        shell.y,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        shell.x + 5,
+        shell.y - 4,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Up(MouseButton::Left),
+        shell.x + 5,
+        shell.y - 4,
+    ));
+    let pane = app.hits.terminal.bottom() - app.hits.agent.y;
+    let expected = (app.hits.terminal.bottom() - (shell.y - 4)) as u32 * 100 / pane as u32;
+    assert_eq!(app.settings.terminal_height as u32, expected);
+    assert_eq!(app.focus, Focus::Terminal, "a drag is not a click");
+    frame(&mut app);
+    assert!(app.hits.terminal.y < shell.y, "the border moved up");
+    // Dragged past the top it stops at four fifths of the pane.
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        shell.x + 5,
+        app.hits.terminal.y,
+    ));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), shell.x + 5, 0));
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), shell.x + 5, 0));
+    assert_eq!(app.settings.terminal_height, 80);
+    release_config_dir();
+    let _ = std::fs::remove_dir_all(&config);
+}
+
 #[test]
 fn a_worktree_the_agent_makes_inside_a_folder_is_followed_too() {
     let repo = Repo::new("yara-frame-nested");
@@ -1820,6 +1927,28 @@ fn a_worktree_the_agent_makes_inside_a_folder_is_followed_too() {
     assert_eq!(app.folders.len(), 1);
 }
 
+/// A repository named `name` inside a bench folder, with one committed file.
+fn bench_repo(bench: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = bench.join(name);
+    std::fs::create_dir_all(path.join("src")).unwrap();
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&path)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(path.join("src/main.rs"), "fn main() {}\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    path
+}
+
 #[test]
 fn a_folder_of_repositories_is_followed_through_each_of_them() {
     // A bench: one folder holding several repositories, and a worktree of
@@ -1828,35 +1957,8 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
     let _ = std::fs::remove_dir_all(&bench);
     std::fs::create_dir_all(&bench).unwrap();
     let bench = bench.canonicalize().unwrap();
-    let make = |name: &str| {
-        let path = bench.join(name);
-        std::fs::create_dir_all(path.join("src")).unwrap();
-        for args in [
-            vec!["init", "-q", "-b", "main"],
-            vec!["config", "user.email", "t@t"],
-            vec!["config", "user.name", "t"],
-        ] {
-            assert!(std::process::Command::new("git")
-                .arg("-C")
-                .arg(&path)
-                .args(&args)
-                .status()
-                .unwrap()
-                .success());
-        }
-        std::fs::write(path.join("src/main.rs"), "fn main() {}\n").unwrap();
-        for args in [vec!["add", "."], vec!["commit", "-q", "-m", "first"]] {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&path)
-                .args(&args)
-                .status()
-                .unwrap();
-        }
-        path
-    };
-    let backend = make("backend");
-    let frontend = make("frontend");
+    let backend = bench_repo(&bench, "backend");
+    let frontend = bench_repo(&bench, "frontend");
     let mut app = App::with_workspace(vec![bench.clone()], Settings::default(), Theme::default());
     app.focus = Focus::Follow;
     app.refresh();
@@ -1880,6 +1982,89 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
         all.contains(" backend ") && all.contains(" frontend "),
         "{all}"
     );
+    let _ = std::fs::remove_dir_all(&bench);
+}
+
+#[test]
+fn a_worktree_the_agent_makes_under_the_bench_is_followed_by_the_task_it_is_named_after() {
+    // On a bench the agent's worktrees lie beside the repositories, under
+    // the bench rather than inside the repository they belong to.
+    let bench = std::env::temp_dir().join(format!("yara-frame-bench-wt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&bench);
+    std::fs::create_dir_all(&bench).unwrap();
+    let bench = bench.canonicalize().unwrap();
+    let backend = bench_repo(&bench, "backend");
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&backend)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    let settings = Settings {
+        agent: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = App::with_workspace(vec![bench.clone()], settings, Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    assert_eq!(app.folders.len(), 2, "the bench and the repository");
+
+    // A worktree named after no task belongs to the task that is there.
+    let odd = bench.join(".worktrees/backend-odd");
+    git(&["worktree", "add", "-q", "-b", "odd", odd.to_str().unwrap()]);
+    app.refresh();
+    assert_eq!(app.folders.len(), 3, "the worktree joined the task");
+    assert!(app.folders[2].nested);
+    std::fs::write(odd.join("src/main.rs"), "fn main() { odd() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.follow.len(), 1);
+    let all = text(&mut app);
+    assert!(all.contains("backend-odd/src/main.rs"), "{all}");
+
+    // A task named 3016 follows the worktree named after it, and the
+    // first task does not.
+    app.handle_key(key(KeyCode::F(7)));
+    for c in "3016".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.tasks.len(), 2, "{:?}", app.note);
+    let mine = bench.join(".worktrees/backend-SCRUM-3016");
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "fix/3016",
+        mine.to_str().unwrap(),
+    ]);
+    app.refresh();
+    assert!(
+        app.tasks[1]
+            .folders
+            .iter()
+            .any(|f| f.nested && f.path == mine),
+        "{:?}",
+        app.tasks[1]
+            .folders
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !app.tasks[0].folders.iter().any(|f| f.path == mine),
+        "the first task leaves it alone"
+    );
+    std::fs::write(mine.join("src/main.rs"), "fn main() { fixed() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.tasks[1].follow.len(), 1, "the edit landed on its task");
+    assert_eq!(app.tasks[0].follow.len(), 1, "and on no other");
+    let all = text(&mut app);
+    assert!(all.contains("backend-SCRUM-3016/src/main.rs"), "{all}");
+    assert!(all.contains("+ fn main() { fixed() }"), "{all}");
     let _ = std::fs::remove_dir_all(&bench);
 }
 

@@ -20,7 +20,7 @@ saves a setting. `//` comments are allowed.
 | `show_sidebar` | `false` | Whether FILES is open at start |
 | `narrow_width` | `80` | Under this many columns — a phone over SSH, a narrow split — the panes take turns: the one with the keyboard fills the body and ++f6++ brings up the next; `0` keeps them side by side at any width |
 | `shell` | `""` | The shell ++ctrl+t++ runs under the agent; empty means `$SHELL` |
-| `terminal_height` | `40` | That terminal's share of the agent pane's height, in percent |
+| `terminal_height` | `40` | That terminal's share of the agent pane's height, in percent; dragging its top border sets it |
 | `timeline_ticks` | `12` | Edits on the strip before it windows around the current one |
 | `cursor_blink_ms` | `500` | One step of the editor caret's blink; `0` keeps it on |
 | `blame` | `true` | Whether the editor says, at the end of the line under the mouse, who last committed it and when |

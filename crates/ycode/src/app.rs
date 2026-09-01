@@ -341,6 +341,10 @@ impl Task {
                 found.extend(git::discover_repos(path));
             }
         }
+        // A linked worktree on the bench — a `.git` file, not a folder — is
+        // some task's rather than every task's: `refresh` hands it to the
+        // task it is named after, as it does one made while the app runs.
+        found.retain(|path| !path.join(".git").is_file());
         for path in found {
             if !wanted.contains(&path) {
                 wanted.push(path);
@@ -1380,6 +1384,15 @@ impl App {
             .iter()
             .flat_map(|task| task.folders.iter().map(|f| f.path.clone()))
             .collect();
+        // A repository some task follows is watched there, in its own
+        // right; a plain folder around it — the bench — does not report its
+        // files, whichever task the bench belongs to.
+        let repos: Vec<PathBuf> = self
+            .tasks
+            .iter()
+            .flat_map(|task| task.folders.iter().filter(|f| f.repo.is_some()))
+            .map(|f| f.path.clone())
+            .collect();
         // A worktree named after a task — `backend-3016` for the task
         // `3016` — is that task's wherever it lies, and no other's.
         let names: Vec<String> = self
@@ -1417,21 +1430,25 @@ impl App {
             nested.dedup();
             nested.retain(|path| !taken.contains(path));
             let mine = session.slug().map(|slug| slug.to_lowercase());
-            nested.retain(|path| {
+            let claimable = |path: &std::path::Path| {
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
                 mine.as_ref().is_some_and(|slug| name.contains(slug))
                     || !names.iter().any(|slug| name.contains(slug))
-            });
+            };
+            nested.retain(|path| claimable(path));
             for path in nested {
                 let mut folder = Folder::new(path, &self.settings);
                 folder.nested = true;
                 session.folders.push(folder);
             }
-            // One that has been removed since is no longer followed.
-            session.folders.retain(|f| !f.nested || f.path.is_dir());
+            // One that has been removed since is no longer followed, nor is
+            // one a task made since turns out to be named after.
+            session
+                .folders
+                .retain(|f| !f.nested || (f.path.is_dir() && claimable(&f.path)));
             for folder in &mut session.folders {
                 // Only a folder that moved is worth reading, or asking git.
                 if !folder
@@ -1455,6 +1472,11 @@ impl App {
                 if session
                     .folder_of(&edit.path)
                     .is_some_and(|f| f.path != from)
+                    || repos
+                        .iter()
+                        .filter(|repo| edit.path.starts_with(repo))
+                        .max_by_key(|repo| repo.components().count())
+                        .is_some_and(|repo| *repo != from)
                 {
                     continue;
                 }

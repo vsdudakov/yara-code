@@ -1707,7 +1707,10 @@ fn local_settings_make_the_folders_file_and_a_workspace_opens_with_it_laid_over(
     let mut app = App::with_settings(None, Settings::default(), Theme::default());
     app.open_workspace(vec![repo.0.clone()]);
     assert_eq!(app.settings.agent, "cat");
-    assert_eq!(Settings::load().0.agent, "claude");
+    // Read by path: the config variable is the whole process's, and another
+    // test may point it elsewhere between here and a load through it.
+    let global = std::fs::read_to_string(config.join("settings.json")).unwrap();
+    assert!(global.contains("\"agent\": \"claude\""), "{global}");
     release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
 }
@@ -2175,6 +2178,84 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
         all.contains(" backend ") && all.contains(" frontend "),
         "{all}"
     );
+    let _ = std::fs::remove_dir_all(&bench);
+}
+
+#[test]
+fn worktrees_already_on_the_bench_go_to_the_tasks_they_are_named_after() {
+    // A bench where the worktrees lie beside the repository, made before
+    // the app starts: each is its task's, not every task's.
+    let bench = std::env::temp_dir().join(format!("yara-frame-bench-old-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&bench);
+    std::fs::create_dir_all(&bench).unwrap();
+    let bench = yara_core::git::canonical(&bench);
+    let backend = bench_repo(&bench, "backend");
+    let git = |args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .arg("-C")
+            .arg(&backend)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    let alpha = bench.join("backend-alpha");
+    let beta = bench.join("backend-beta");
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "alpha",
+        alpha.to_str().unwrap(),
+    ]);
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "beta",
+        beta.to_str().unwrap(),
+    ]);
+    let settings = Settings {
+        agent: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = App::with_workspace(vec![bench.clone()], settings, Theme::default());
+    app.focus = Focus::Follow;
+    for name in ["alpha", "beta"] {
+        app.handle_key(key(KeyCode::F(7)));
+        for c in name.chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+    }
+    assert_eq!(app.tasks.len(), 3, "{:?}", app.note);
+    app.refresh();
+    let paths = |task: &ycode::app::Task| -> Vec<std::path::PathBuf> {
+        task.folders.iter().map(|f| f.path.clone()).collect()
+    };
+    assert_eq!(
+        paths(&app.tasks[1]),
+        vec![bench.clone(), backend.clone(), alpha.clone()]
+    );
+    assert_eq!(
+        paths(&app.tasks[2]),
+        vec![bench.clone(), backend.clone(), beta.clone()]
+    );
+    assert_eq!(
+        paths(&app.tasks[0]),
+        vec![bench.clone(), backend.clone()],
+        "the unnamed task leaves both alone"
+    );
+
+    std::fs::write(beta.join("src/main.rs"), "fn main() { beta() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.tasks[2].follow.len(), 1, "the edit landed on its task");
+    assert_eq!(app.tasks[1].follow.len(), 0, "and on no other");
+    assert_eq!(app.tasks[0].follow.len(), 0);
+    let all = text(&mut app);
+    assert!(all.contains("backend-beta/src/main.rs"), "{all}");
     let _ = std::fs::remove_dir_all(&bench);
 }
 

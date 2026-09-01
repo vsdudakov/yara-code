@@ -12,10 +12,11 @@ again closes it. Each task has one of its own.
 It is a real pseudo-terminal: completion, full-screen programs and colours all
 behave as they do outside the editor. Which shell it runs is `shell` in
 [settings](settings.md) — empty means `$SHELL` — and how much of the pane it
-takes is `terminal_height`, in percent. Its top border is a seam like the one
-between the panes: it lights up under the mouse and stays lit while held, and
-dragging it up or down shares the pane out between the agent and the shell,
-from a tenth to four fifths, and keeps the share in the settings.
+takes is `terminal_height`, in percent. The blank row between it and the
+agent is a seam like the one between the panes: it shows itself as a line
+under the mouse and stays lit while held, and dragging it up or down shares
+the pane out between the agent and the shell, from a tenth to four fifths, and
+keeps the share in the settings.
 
 While the keyboard is in it, every key is the shell's but the editor's own
 bound `Ctrl` chords and the function keys. ++f6++ walks the keyboard round —

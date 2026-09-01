@@ -122,6 +122,9 @@ pub struct Hits {
     pub seam: Rect,
     /// The blank column between the tree and the pane beside it.
     pub tree_seam: Rect,
+    /// The blank row between the agent and the terminal under it; dragging
+    /// it shares the pane out between them.
+    pub terminal_seam: Rect,
     /// The row the panes sit in, for the drag to measure against.
     pub body: Rect,
     /// The text of the file being edited, without its gutter.
@@ -177,10 +180,10 @@ impl Folder {
         let path = git::canonical(&path);
         let repo = git::open(&path, &settings.base_branch);
         let pr = Arc::new(Mutex::new(None));
-        if let Some(root) = repo.as_ref().map(|r| r.root.clone()) {
+        if let Some(repo) = repo.clone() {
             let slot = pr.clone();
             std::thread::spawn(move || {
-                if let Some(title) = git::pull_request(&root) {
+                if let Some(title) = git::pull_request(&repo) {
                     *slot.lock().unwrap() = Some(title);
                 }
             });
@@ -812,8 +815,8 @@ impl App {
     /// A seam dragged to column `x`, row `y`. Between the panes, the agent's
     /// share of the width follows it, kept between a fifth and four fifths;
     /// the tree's seam sets the tree's width, from a dozen columns to half;
-    /// the terminal's top border sets its share of the agent's pane, from a
-    /// tenth to four fifths.
+    /// the terminal's seam sets its share of the agent's pane, from a tenth
+    /// to four fifths, with the terminal starting on the row under it.
     fn resize_to(&mut self, x: u16, y: u16) {
         use yara_core::settings::Side;
         let body = self.hits.body;
@@ -828,7 +831,7 @@ impl App {
                 if pane == 0 {
                     return;
                 }
-                let share = bottom.saturating_sub(y.max(top)) as u32 * 100 / pane as u32;
+                let share = bottom.saturating_sub(y.max(top) + 1) as u32 * 100 / pane as u32;
                 self.settings.terminal_height = share.clamp(10, 80) as u16;
             }
             Some(Seam::Panes) => {
@@ -933,13 +936,6 @@ impl App {
         if let Some(buffer) = self.editor.as_mut() {
             buffer.insert(&text.replace("\r\n", "\n"));
         }
-    }
-
-    /// The terminal's top border — the seam between it and the agent, which
-    /// drags to share the pane out; nothing while the terminal is closed.
-    pub fn terminal_seam(&self) -> Rect {
-        let shell = self.hits.terminal;
-        Rect::new(shell.x, shell.y, shell.width, u16::from(shell.height > 0))
     }
 
     /// The wheel, over whatever is under it: the agent's own scrollback, the
@@ -1050,7 +1046,7 @@ impl App {
                 self.resizing = Some(Seam::Tree);
                 return;
             }
-            MouseEventKind::Down(MouseButton::Left) if hit(self.terminal_seam(), x, y) => {
+            MouseEventKind::Down(MouseButton::Left) if hit(self.hits.terminal_seam, x, y) => {
                 self.resizing = Some(Seam::Terminal);
                 return;
             }
@@ -1531,7 +1527,10 @@ impl App {
             self.note = Some("no worktree of this task's own to remove".into());
             return;
         }
+        // Nothing of the task's may be at work in the folder while it goes:
+        // on Windows a process's working directory cannot be removed.
         self.agent = None;
+        self.terminal = None;
         let mut removed = 0;
         for repo in &worktrees {
             match git::worktree_remove(repo, &repo.root) {

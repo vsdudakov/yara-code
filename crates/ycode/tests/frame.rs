@@ -1238,10 +1238,10 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     let seam = app.hits.seam;
     assert!(seam.x > 2);
     let at = |rows: &[String]| rows[5].chars().nth(seam.x as usize).unwrap();
-    assert_eq!(at(&rows), '┃');
+    assert_eq!(at(&rows), '│');
     app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), 2, 5));
     let rows = frame(&mut app);
-    assert_ne!(at(&rows), '┃', "let go, the seam is air again");
+    assert_ne!(at(&rows), '│', "let go, the seam is air again");
     // The tree's seam sets the tree's width; the tree keeps a column of air.
     app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
     frame(&mut app);
@@ -1288,11 +1288,11 @@ fn what_the_mouse_rests_on_lights_up_and_a_seam_shows_itself() {
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
     assert_eq!(
         terminal.backend().buffer()[(seam.x, seam.y + 4)].symbol(),
-        "┃"
+        "│"
     );
     assert_eq!(
         terminal.backend().buffer()[(seam.x, seam.y + 9)].symbol(),
-        "┃",
+        "│",
         "the whole seam"
     );
 }
@@ -1804,7 +1804,7 @@ fn a_terminal_opens_under_the_agent_and_takes_the_keys() {
 
 #[cfg(unix)]
 #[test]
-fn the_terminal_scrolls_by_the_wheel_and_its_top_border_drags_its_height() {
+fn the_terminal_scrolls_by_the_wheel_and_its_seam_drags_its_height() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let config =
         std::env::temp_dir().join(format!("yara-frame-shell-config-{}", std::process::id()));
@@ -1850,62 +1850,80 @@ fn the_terminal_scrolls_by_the_wheel_and_its_top_border_drags_its_height() {
     app.handle_mouse(ev(MouseEventKind::ScrollDown, shell.x + 3, shell.y + 2));
     assert_eq!(scrollback(&app), 0);
 
-    // The top border is the seam: lit under the mouse, and dragged up it
-    // gives the shell more of the pane — here from 40% to the row it was
+    // A blank row between the agent and the shell is the seam, as between
+    // the panes: it shows itself as a line under the mouse, and dragged up
+    // it gives the shell more of the pane — here from 40% to the row it was
     // let go on. The share is saved.
-    let accent = ycode::theme::color(app.theme.ui.accent);
+    let seam = app.hits.terminal_seam;
+    assert_eq!(
+        (seam.height, seam.bottom()),
+        (1, shell.y),
+        "the row above the shell"
+    );
+    assert_eq!(seam.y, app.hits.agent.bottom(), "the row below the agent");
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
-    app.handle_mouse(ev(MouseEventKind::Moved, shell.x + 5, shell.y));
+    let symbol = |terminal: &Terminal<TestBackend>, x, y| {
+        terminal.backend().buffer()[(x, y)].symbol().to_string()
+    };
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
     assert_eq!(
-        terminal.backend().buffer()[(shell.x + 5, shell.y)].fg,
-        accent
+        symbol(&terminal, seam.x + 5, seam.y),
+        " ",
+        "air until the mouse comes"
     );
-    assert_ne!(
-        terminal.backend().buffer()[(shell.x + 5, shell.y + 1)].fg,
-        accent,
-        "only the border"
+    app.handle_mouse(ev(MouseEventKind::Moved, seam.x + 5, seam.y));
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_eq!(symbol(&terminal, seam.x, seam.y), "─");
+    assert_eq!(
+        symbol(&terminal, seam.right() - 1, seam.y),
+        "─",
+        "the whole row"
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(seam.right() - 3, seam.y + 1)].fg,
+        ycode::theme::color(app.theme.ui.fg_dim),
+        "the border under it is untouched"
     );
     app.handle_mouse(ev(
         MouseEventKind::Down(MouseButton::Left),
-        shell.x + 5,
-        shell.y,
+        seam.x + 5,
+        seam.y,
     ));
     app.handle_mouse(ev(
         MouseEventKind::Drag(MouseButton::Left),
-        shell.x + 5,
-        shell.y - 4,
+        seam.x + 5,
+        seam.y - 4,
     ));
     app.handle_mouse(ev(
         MouseEventKind::Up(MouseButton::Left),
-        shell.x + 5,
-        shell.y - 4,
+        seam.x + 5,
+        seam.y - 4,
     ));
     let pane = app.hits.terminal.bottom() - app.hits.agent.y;
-    let expected = (app.hits.terminal.bottom() - (shell.y - 4)) as u32 * 100 / pane as u32;
+    let expected = (app.hits.terminal.bottom() - (seam.y - 3)) as u32 * 100 / pane as u32;
     assert_eq!(app.settings.terminal_height as u32, expected);
     assert_eq!(app.focus, Focus::Terminal, "a drag is not a click");
     frame(&mut app);
-    assert!(app.hits.terminal.y < shell.y, "the border moved up");
+    assert!(app.hits.terminal_seam.y < seam.y, "the seam moved up");
     // Dragged past the top it stops at four fifths of the pane.
     app.handle_mouse(ev(
         MouseEventKind::Down(MouseButton::Left),
-        shell.x + 5,
-        app.hits.terminal.y,
+        seam.x + 5,
+        app.hits.terminal_seam.y,
     ));
-    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), shell.x + 5, 0));
+    app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), seam.x + 5, 0));
     assert_eq!(app.settings.terminal_height, 80);
-    // The border is rows below the pointer now, and stays lit while held.
+    // The seam is rows below the pointer now, and stays lit while held.
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    let held = app.hits.terminal.y;
-    assert!(held > 1, "the border stopped short of the pointer");
-    assert_eq!(terminal.backend().buffer()[(shell.x + 5, held)].fg, accent);
-    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), shell.x + 5, 0));
+    let held = app.hits.terminal_seam.y;
+    assert!(held > 1, "the seam stopped short of the pointer");
+    assert_eq!(symbol(&terminal, seam.x + 5, held), "─");
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), seam.x + 5, 0));
     terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
-    assert_ne!(
-        terminal.backend().buffer()[(shell.x + 5, held)].fg,
-        accent,
-        "let go, the border is a border again"
+    assert_eq!(
+        symbol(&terminal, seam.x + 5, held),
+        " ",
+        "let go, the seam is air again"
     );
     release_config_dir();
     let _ = std::fs::remove_dir_all(&config);

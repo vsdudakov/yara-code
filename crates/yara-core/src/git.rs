@@ -12,6 +12,12 @@ use crate::tree;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Repo {
     pub root: PathBuf,
+    /// The main working copy's root — `root` itself unless this is a
+    /// linked worktree. Work on a worktree's behalf that need not run inside
+    /// it runs here: on Windows a folder that is some process's working
+    /// directory cannot be removed, and a background `gh` or the very git
+    /// that removes the worktree would hold it.
+    pub main: PathBuf,
     /// The checked-out branch, or `detached`.
     pub branch: String,
     /// The folder's name when it is a linked worktree; the main working
@@ -73,6 +79,11 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
     let list = git(&root, &["worktree", "list", "--porcelain"]).unwrap_or_default();
     let mut entries = list.split("\n\n").filter(|e| !e.trim().is_empty());
     let main = entries.next().unwrap_or_default();
+    let main_root = main
+        .lines()
+        .find_map(|l| l.strip_prefix("worktree "))
+        .map(|p| canonical(&PathBuf::from(p)))
+        .unwrap_or_else(|| root.clone());
     // A linked worktree keeps a `.git` file pointing at the repository; the
     // main working copy keeps the repository itself in a folder. That is a
     // surer test than comparing paths, which git spells its own way.
@@ -96,6 +107,7 @@ pub fn open(dir: &Path, main_branch: &str) -> Option<Repo> {
         .unwrap_or_else(|| "HEAD".to_string());
     Some(Repo {
         root,
+        main: main_root,
         branch,
         worktree,
         base,
@@ -179,29 +191,35 @@ pub fn worktrees(repo: &Repo) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Removes a linked worktree, folder and all; its branch stays.
+/// Removes a linked worktree, folder and all; its branch stays. Git runs in
+/// the main working copy, never in the folder it is taking away.
 pub fn worktree_remove(repo: &Repo, path: &Path) -> Result<(), String> {
     git(
-        &repo.root,
+        &repo.main,
         &["worktree", "remove", "--force", &path.to_string_lossy()],
     )
     .map(|_| ())
 }
 
 /// The pull request the branch is on, as `#number title`, through the `gh`
-/// CLI when it is installed and logged in; nothing otherwise. Slow, so it
-/// is asked off the drawing thread.
-pub fn pull_request(root: &Path) -> Option<String> {
+/// CLI when it is installed and logged in; nothing otherwise, and nothing
+/// for a detached head. Slow, so it is asked off the drawing thread — and
+/// from the main working copy, so a worktree can go while it is asked.
+pub fn pull_request(repo: &Repo) -> Option<String> {
+    if repo.branch == "detached" {
+        return None;
+    }
     let out = std::process::Command::new("gh")
         .args([
             "pr",
             "view",
+            &repo.branch,
             "--json",
             "number,title",
             "-q",
             r##""#\(.number) \(.title)""##,
         ])
-        .current_dir(root)
+        .current_dir(&repo.main)
         .output()
         .ok()?;
     let line = first_line(String::from_utf8_lossy(&out.stdout).into_owned());
@@ -707,6 +725,8 @@ mod tests {
         let added = open(&path, "main").unwrap();
         assert_eq!(added.branch, "task-login-flow");
         assert_eq!(added.worktree.as_deref(), Some("task-login-flow"));
+        assert_eq!(added.main, repo.root, "it knows the main working copy");
+        assert_eq!(repo.main, repo.root);
         assert!(worktree_add(&repo, &trees, " ").is_err());
         // The same name again is the same workspace, not an error.
         assert_eq!(
@@ -716,11 +736,13 @@ mod tests {
         // A branch that exists without a worktree is checked out, not remade.
         git(dir.path(), &["branch", "-q", "older"]).unwrap();
         let older = worktree_add(&repo, &trees, "older").unwrap();
-        assert_eq!(open(&older, "main").unwrap().branch, "older");
+        let older_repo = open(&older, "main").unwrap();
+        assert_eq!(older_repo.branch, "older");
         let mut listed = worktrees(&repo);
         listed.sort();
         assert_eq!(listed, [older.clone(), path.clone()]);
-        worktree_remove(&repo, &older).unwrap();
+        // Asked of the worktree itself, git still runs in the main copy.
+        worktree_remove(&older_repo, &older).unwrap();
         assert_eq!(worktrees(&repo), [path]);
         assert!(!older.exists());
     }

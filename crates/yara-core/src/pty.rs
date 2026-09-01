@@ -168,8 +168,11 @@ impl Pty {
 }
 
 impl Drop for Pty {
+    /// Killed and reaped: a folder the program was working in can go the
+    /// moment the pty is dropped, which on Windows needs the process gone.
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

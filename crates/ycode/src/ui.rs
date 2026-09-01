@@ -104,34 +104,32 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 /// What the mouse rests on, lit: a row, a tab, a button, a tick — and a
-/// seam, which shows itself as a line so it reads as something to drag.
-/// The terminal's top border is its seam, and takes the same colour. A
-/// seam in hand stays lit wherever the mouse has got to: the border snaps
-/// to a share of the pane and so trails the pointer by a row or a column.
+/// seam, which shows itself as a line so it reads as something to drag: a
+/// column between panes side by side, a row between the agent and the
+/// terminal under it. A seam in hand stays lit wherever the mouse has got
+/// to: it snaps to a share of the pane and so trails the pointer by a row
+/// or a column.
 fn draw_hover(frame: &mut Frame, app: &mut App) {
     let Some((x, y)) = app.hover else { return };
     let hits = &app.hits;
     let inside = |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
-    let terminal_seam = app.terminal_seam();
+    let seams = [hits.seam, hits.tree_seam, hits.terminal_seam];
     let seam = match app.resizing {
         Some(Seam::Panes) => Some(hits.seam),
         Some(Seam::Tree) => Some(hits.tree_seam),
-        Some(Seam::Terminal) => None,
-        None => [hits.seam, hits.tree_seam].into_iter().find(|r| inside(*r)),
+        Some(Seam::Terminal) => Some(hits.terminal_seam),
+        None => seams.into_iter().find(|r| r.width > 0 && inside(*r)),
     };
     let accent = color(app.theme.ui.accent);
     let buffer = frame.buffer_mut();
     if let Some(seam) = seam {
-        for row in seam.y..seam.bottom() {
-            let cell = &mut buffer[(seam.x, row)];
-            cell.set_symbol("┃");
-            cell.set_fg(accent);
-        }
-        return;
-    }
-    if app.resizing == Some(Seam::Terminal) || inside(terminal_seam) {
-        for col in terminal_seam.x..terminal_seam.right().min(buffer.area.width) {
-            buffer[(col, terminal_seam.y)].set_fg(accent);
+        let symbol = if seam.height == 1 { "─" } else { "│" };
+        for row in seam.y..seam.bottom().min(buffer.area.height) {
+            for col in seam.x..seam.right().min(buffer.area.width) {
+                let cell = &mut buffer[(col, row)];
+                cell.set_symbol(symbol);
+                cell.set_fg(accent);
+            }
         }
         return;
     }
@@ -1047,11 +1045,17 @@ fn draw_files(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_agent(frame: &mut Frame, app: &mut App, area: Rect) {
-    // The shell, when it is open, takes the bottom of the agent's pane.
+    // The shell, when it is open, takes the bottom of the agent's pane, with
+    // a blank row between them: the seam that drags, as between the panes.
     let (area, shell) = if app.terminal.is_some() {
         let height = area.height * app.settings.terminal_height.clamp(10, 80) / 100;
-        let [agent, shell] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(height.max(3))]).areas(area);
+        let [agent, seam, shell] = Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(height.max(3)),
+        ])
+        .areas(area);
+        app.hits.terminal_seam = seam;
         (agent, Some(shell))
     } else {
         (area, None)

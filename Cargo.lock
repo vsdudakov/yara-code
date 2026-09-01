@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "yara-core"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "portable-pty",
  "serde",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "ycode"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "crossterm",
  "ratatui",

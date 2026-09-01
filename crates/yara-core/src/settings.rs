@@ -416,7 +416,8 @@ impl Settings {
   "narrow_width": {narrow_width},
 
   // The terminal under the agent (Ctrl+T): the shell it runs ("" = $SHELL)
-  // and its share of that pane's height, in percent.
+  // and its share of that pane's height, in percent — dragging its top
+  // border sets it too.
   "shell": {shell},
   "terminal_height": {terminal_height},
 

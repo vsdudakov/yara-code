@@ -70,8 +70,11 @@ come from it. The bench itself is watched for the loose files around them, and
 no file is reported twice.
 
 An agent that sets up a worktree of its own inside one of the task's folders —
-`.worktrees/the-branch`, say — is followed there without being asked: the
-worktree joins the task while it is there, and leaves when it is removed.
+`.worktrees/the-branch`, say, whether inside the repository or beside it under
+the bench — is followed there without being asked: the worktree joins the task
+while it is there, and leaves when it is removed. One named after a task —
+`backend-3016` for the task `3016` — belongs to that task alone, however many
+tasks share the folder it lies in.
 
 A folder that is not a repository at all is watched the same way: its files are
 read rather than asked of git, and their edits land on the timeline like any

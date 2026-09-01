@@ -100,6 +100,8 @@ pub enum Overlay {
 pub enum Seam {
     Panes,
     Tree,
+    /// The terminal's top border, dragged up or down.
+    Terminal,
 }
 
 /// Where things were drawn, so a click can be told what it landed on.
@@ -807,10 +809,12 @@ impl App {
         let _ = self.settings.save();
     }
 
-    /// A seam dragged to column `x`. Between the panes, the agent's share of
-    /// the width follows it, kept between a fifth and four fifths; the
-    /// tree's seam sets the tree's width, from a dozen columns to half.
-    fn resize_to(&mut self, x: u16) {
+    /// A seam dragged to column `x`, row `y`. Between the panes, the agent's
+    /// share of the width follows it, kept between a fifth and four fifths;
+    /// the tree's seam sets the tree's width, from a dozen columns to half;
+    /// the terminal's top border sets its share of the agent's pane, from a
+    /// tenth to four fifths.
+    fn resize_to(&mut self, x: u16, y: u16) {
         use yara_core::settings::Side;
         let body = self.hits.body;
         if body.width == 0 {
@@ -818,6 +822,15 @@ impl App {
         }
         let from_left = x.saturating_sub(body.x);
         match self.resizing {
+            Some(Seam::Terminal) => {
+                let (top, bottom) = (self.hits.agent.y, self.hits.terminal.bottom());
+                let pane = bottom.saturating_sub(top);
+                if pane == 0 {
+                    return;
+                }
+                let share = bottom.saturating_sub(y.max(top)) as u32 * 100 / pane as u32;
+                self.settings.terminal_height = share.clamp(10, 80) as u16;
+            }
             Some(Seam::Panes) => {
                 let percent = from_left as u32 * 100 / body.width as u32;
                 let agent = match self.settings.agent_side {
@@ -922,8 +935,15 @@ impl App {
         }
     }
 
+    /// The terminal's top border — the seam between it and the agent, which
+    /// drags to share the pane out; nothing while the terminal is closed.
+    pub fn terminal_seam(&self) -> Rect {
+        let shell = self.hits.terminal;
+        Rect::new(shell.x, shell.y, shell.width, u16::from(shell.height > 0))
+    }
+
     /// The wheel, over whatever is under it: the agent's own scrollback, the
-    /// diff, the file being edited, the tree, a list.
+    /// terminal's, the diff, the file being edited, the tree, a list.
     fn wheel(&mut self, up: bool, x: u16, y: u16) {
         let step = |value: usize| {
             if up {
@@ -945,9 +965,13 @@ impl App {
                 }))
             }
             Some(_) => {}
-            None if hit(self.hits.agent, x, y) => {
-                let grid = self.hits.agent;
-                if let Some(pty) = self.agent.as_mut() {
+            None if hit(self.hits.agent, x, y) || hit(self.hits.terminal, x, y) => {
+                let (grid, pty) = if hit(self.hits.agent, x, y) {
+                    (self.hits.agent, self.agent.as_mut())
+                } else {
+                    (self.hits.terminal, self.terminal.as_mut())
+                };
+                if let Some(pty) = pty {
                     pty.wheel(
                         up,
                         y.saturating_sub(grid.y + 1),
@@ -981,7 +1005,7 @@ impl App {
             MouseEventKind::ScrollUp => Some(true),
             MouseEventKind::ScrollDown => Some(false),
             MouseEventKind::Drag(MouseButton::Left) if self.resizing.is_some() => {
-                self.resize_to(x);
+                self.resize_to(x, y);
                 return;
             }
             MouseEventKind::Drag(MouseButton::Left) if self.dragging_tab.is_some() => {
@@ -1024,6 +1048,10 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) if hit(self.hits.tree_seam, x, y) => {
                 self.resizing = Some(Seam::Tree);
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) if hit(self.terminal_seam(), x, y) => {
+                self.resizing = Some(Seam::Terminal);
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) => {
@@ -1329,10 +1357,26 @@ impl App {
             .iter()
             .flat_map(|task| task.folders.iter().map(|f| f.path.clone()))
             .collect();
+        // A worktree named after a task — `backend-3016` for the task
+        // `3016` — is that task's wherever it lies, and no other's.
+        let names: Vec<String> = self
+            .tasks
+            .iter()
+            .filter_map(|task| task.slug())
+            .map(|slug| slug.to_lowercase())
+            .collect();
         for session in &mut self.tasks {
             let mut edits = Vec::new();
             // A worktree the agent made inside a folder of the task is
-            // where it is working; the task follows it too.
+            // where it is working; the task follows it too. The folder
+            // need not be the repository's own: on a bench of repositories
+            // the agent puts its worktrees beside them, under the bench.
+            let roots: Vec<PathBuf> = session
+                .folders
+                .iter()
+                .filter(|f| !f.nested)
+                .map(|f| f.path.clone())
+                .collect();
             let mut nested: Vec<PathBuf> = Vec::new();
             for folder in &session.folders {
                 let Some(repo) = &folder.repo else { continue };
@@ -1342,10 +1386,22 @@ impl App {
                 nested.extend(
                     git::worktrees(repo)
                         .into_iter()
-                        .filter(|path| path.starts_with(&folder.path)),
+                        .filter(|path| roots.iter().any(|root| path.starts_with(root))),
                 );
             }
+            // Two folders of one repository list the same worktrees.
+            nested.sort();
+            nested.dedup();
             nested.retain(|path| !taken.contains(path));
+            let mine = session.slug().map(|slug| slug.to_lowercase());
+            nested.retain(|path| {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                mine.as_ref().is_some_and(|slug| name.contains(slug))
+                    || !names.iter().any(|slug| name.contains(slug))
+            });
             for path in nested {
                 let mut folder = Folder::new(path, &self.settings);
                 folder.nested = true;

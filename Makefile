@@ -1,4 +1,4 @@
-.PHONY: build run lint format test coverage coverage-html icons themes shots docs docs-serve docs-install clean
+.PHONY: build run lint format test coverage coverage-html themes shots docs docs-serve docs-install clean
 
 # Everything the CI gate runs, in one target.
 lint:
@@ -26,10 +26,6 @@ build:
 
 run:
 	cargo run --release --bin ycode -- $(ARGS)
-
-# The application icon, in the colours the editor ships with. Needs Pillow.
-icons:
-	python3 packaging/icons.py
 
 # The bundled themes, fetched afresh from where each is published.
 themes:

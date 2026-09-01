@@ -1230,6 +1230,16 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     ));
     app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), 2, 5));
     assert_eq!(app.settings.agent_width, 20, "never narrower than a fifth");
+    // The seam stopped at a fifth while the pointer went on to column 2;
+    // held, it shows itself where it is.
+    let rows = frame(&mut app);
+    let seam = app.hits.seam;
+    assert!(seam.x > 2);
+    let at = |rows: &[String]| rows[5].chars().nth(seam.x as usize).unwrap();
+    assert_eq!(at(&rows), '┃');
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), 2, 5));
+    let rows = frame(&mut app);
+    assert_ne!(at(&rows), '┃', "let go, the seam is air again");
     // The tree's seam sets the tree's width; the tree keeps a column of air.
     app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
     frame(&mut app);
@@ -1882,8 +1892,19 @@ fn the_terminal_scrolls_by_the_wheel_and_its_top_border_drags_its_height() {
         app.hits.terminal.y,
     ));
     app.handle_mouse(ev(MouseEventKind::Drag(MouseButton::Left), shell.x + 5, 0));
-    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), shell.x + 5, 0));
     assert_eq!(app.settings.terminal_height, 80);
+    // The border is rows below the pointer now, and stays lit while held.
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let held = app.hits.terminal.y;
+    assert!(held > 1, "the border stopped short of the pointer");
+    assert_eq!(terminal.backend().buffer()[(shell.x + 5, held)].fg, accent);
+    app.handle_mouse(ev(MouseEventKind::Up(MouseButton::Left), shell.x + 5, 0));
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    assert_ne!(
+        terminal.backend().buffer()[(shell.x + 5, held)].fg,
+        accent,
+        "let go, the border is a border again"
+    );
     release_config_dir();
     let _ = std::fs::remove_dir_all(&config);
 }

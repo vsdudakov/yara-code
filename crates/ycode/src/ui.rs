@@ -15,7 +15,9 @@ use yara_core::follow::{EditEvent, LineKind, Tick};
 use yara_core::settings::Side;
 use yara_core::theme::{ansi256, Theme, Ui};
 
-use crate::app::{App, ChangeRow, Focus, Folder, Hits, Overlay, View, MENUS, TAB_MENU, TREE_MENU};
+use crate::app::{
+    App, ChangeRow, Focus, Folder, Hits, Overlay, Seam, View, MENUS, TAB_MENU, TREE_MENU,
+};
 use crate::theme::{base, bold, color, fg, on};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -103,14 +105,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// What the mouse rests on, lit: a row, a tab, a button, a tick — and a
 /// seam, which shows itself as a line so it reads as something to drag.
-/// The terminal's top border is its seam, and takes the same colour.
+/// The terminal's top border is its seam, and takes the same colour. A
+/// seam in hand stays lit wherever the mouse has got to: the border snaps
+/// to a share of the pane and so trails the pointer by a row or a column.
 fn draw_hover(frame: &mut Frame, app: &mut App) {
     let Some((x, y)) = app.hover else { return };
     let hits = &app.hits;
     let inside = |r: Rect| x >= r.x && x < r.right() && y >= r.y && y < r.bottom();
-    let seam = [hits.seam, hits.tree_seam].into_iter().find(|r| inside(*r));
-    let accent = color(app.theme.ui.accent);
     let terminal_seam = app.terminal_seam();
+    let seam = match app.resizing {
+        Some(Seam::Panes) => Some(hits.seam),
+        Some(Seam::Tree) => Some(hits.tree_seam),
+        Some(Seam::Terminal) => None,
+        None => [hits.seam, hits.tree_seam].into_iter().find(|r| inside(*r)),
+    };
+    let accent = color(app.theme.ui.accent);
     let buffer = frame.buffer_mut();
     if let Some(seam) = seam {
         for row in seam.y..seam.bottom() {
@@ -120,7 +129,7 @@ fn draw_hover(frame: &mut Frame, app: &mut App) {
         }
         return;
     }
-    if inside(terminal_seam) {
+    if app.resizing == Some(Seam::Terminal) || inside(terminal_seam) {
         for col in terminal_seam.x..terminal_seam.right().min(buffer.area.width) {
             buffer[(col, terminal_seam.y)].set_fg(accent);
         }

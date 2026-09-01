@@ -361,7 +361,9 @@ impl Repo {
         let path = std::env::temp_dir().join(format!("{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
-        let path = path.canonicalize().unwrap();
+        // As the app spells it: Windows' canonicalize adds a \\?\ prefix
+        // that the app takes off and git will not take at all.
+        let path = yara_core::git::canonical(&path);
         let repo = Self(path);
         for args in [
             vec!["init", "-q", "-b", "main"],
@@ -1535,7 +1537,7 @@ fn a_task_watches_folders_that_are_no_repository_at_all() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/notes.md"), "one\n").unwrap();
-    let dir = dir.canonicalize().unwrap();
+    let dir = yara_core::git::canonical(&dir);
     let mut app = App::with_settings(Some(dir.clone()), Settings::default(), Theme::default());
     app.focus = Focus::Follow;
     app.refresh();
@@ -1977,7 +1979,7 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
     let bench = std::env::temp_dir().join(format!("yara-frame-bench-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&bench);
     std::fs::create_dir_all(&bench).unwrap();
-    let bench = bench.canonicalize().unwrap();
+    let bench = yara_core::git::canonical(&bench);
     let backend = bench_repo(&bench, "backend");
     let frontend = bench_repo(&bench, "frontend");
     let mut app = App::with_workspace(vec![bench.clone()], Settings::default(), Theme::default());
@@ -2013,7 +2015,7 @@ fn a_worktree_the_agent_makes_under_the_bench_is_followed_by_the_task_it_is_name
     let bench = std::env::temp_dir().join(format!("yara-frame-bench-wt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&bench);
     std::fs::create_dir_all(&bench).unwrap();
-    let bench = bench.canonicalize().unwrap();
+    let bench = yara_core::git::canonical(&bench);
     let backend = bench_repo(&bench, "backend");
     let git = |args: &[&str]| {
         assert!(std::process::Command::new("git")

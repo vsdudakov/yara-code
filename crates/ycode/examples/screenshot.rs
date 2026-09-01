@@ -307,7 +307,7 @@ impl Bench {
         let _ = std::fs::remove_dir_all(&base);
         let root = base.join("checkout");
         std::fs::create_dir_all(&root).unwrap();
-        let root = root.canonicalize().unwrap();
+        let root = yara_core::git::canonical(&root);
         let bench = Self {
             agent: base.join("claude"),
             root,

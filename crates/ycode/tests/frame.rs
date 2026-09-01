@@ -1681,6 +1681,38 @@ fn settings_open_over_the_start_page() {
 }
 
 #[test]
+fn local_settings_make_the_folders_file_and_a_workspace_opens_with_it_laid_over() {
+    let repo = Repo::new("yara-frame-local-settings");
+    let config = std::env::temp_dir().join(format!("yara-frame-local-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&config);
+    std::env::set_var("YARA_CONFIG_DIR", &config);
+
+    // Over the start page there is no folder to pin them to.
+    let mut app = App::with_settings(None, Settings::default(), Theme::default());
+    app.execute(yara_core::command::Command::LocalSettings);
+    assert!(app.editor.is_none());
+    assert!(app.note.as_deref().unwrap().contains("folder"));
+
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.execute(yara_core::command::Command::LocalSettings);
+    let local = repo.0.join(".ycode").join("settings.json");
+    assert!(local.exists());
+    assert_eq!(app.focus, Focus::Editor);
+    assert!(text(&mut app).contains("settings.json"));
+    assert!(app.editor.as_ref().unwrap().text.contains("wins over"));
+
+    // The folder pins its agent; opening it as a workspace takes that up,
+    // and the global file is left as it was.
+    std::fs::write(&local, "{\"agent\": \"cat\"}").unwrap();
+    let mut app = App::with_settings(None, Settings::default(), Theme::default());
+    app.open_workspace(vec![repo.0.clone()]);
+    assert_eq!(app.settings.agent, "cat");
+    assert_eq!(Settings::load().0.agent, "claude");
+    release_config_dir();
+    let _ = std::fs::remove_dir_all(&config);
+}
+
+#[test]
 fn the_tree_makes_files_and_folders_from_a_right_click() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let repo = Repo::new("yara-frame-treemenu");

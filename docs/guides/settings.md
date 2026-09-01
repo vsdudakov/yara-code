@@ -35,6 +35,16 @@ saves a setting. `//` comments are allowed.
 | `keys` | `{}` | Rebindings, command id to chord — see [Key bindings](keys.md) |
 | `recent_workspaces` | `[]` | Workspaces opened before, each its folders. Kept by the editor |
 
+## Local settings
+
+`File → Local Settings` opens `.ycode/settings.json` in the workspace's main
+folder, writing an empty one first if there is none. Any key from the table
+above set there wins over the global file while that folder is open — one
+project runs `codex`, another keeps a wider agent pane — and a map, `keys` or
+`usage_slash`, merges entry by entry. The editor never writes a key the
+folder's file pins into the global file: a seam dragged there is saved for
+every other folder, a theme the folder pins stays the folder's.
+
 A file that cannot be read is reported in the status bar and never written
 over: the mistake is yours to fix, and the editor runs on the defaults until
 you do. A chord that cannot be read keeps its default, and is written back as

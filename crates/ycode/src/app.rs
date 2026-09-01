@@ -584,7 +584,7 @@ impl App {
     /// The user's settings and themes, with a complaint about the settings
     /// file — if there is one — shown in the status bar.
     pub fn load(project: Option<PathBuf>) -> Self {
-        let (settings, complaint) = Settings::load();
+        let (settings, complaint) = Settings::load_in(project.as_deref());
         let theme = theme::by_name(&theme::load_all(), &settings.theme)
             .cloned()
             .unwrap_or_default();
@@ -643,6 +643,7 @@ impl App {
             return;
         }
         self.workspace = folders;
+        self.reload_settings();
         self.tasks = vec![Task::new(&self.workspace, &self.settings)];
         self.active = 0;
         self.settings.push_recent(&self.workspace.clone());
@@ -668,6 +669,9 @@ impl App {
         }
         let first = self.workspace.is_empty();
         self.workspace.push(path);
+        if first {
+            self.reload_settings();
+        }
         self.resync_tasks();
         self.settings.push_recent(&self.workspace.clone());
         let _ = self.settings.save();
@@ -688,6 +692,23 @@ impl App {
         self.settings.push_recent(&self.workspace.clone());
         let _ = self.settings.save();
         self.note = Some(format!("{} left the workspace", gone.display()));
+    }
+
+    /// Reads the settings again with the workspace's own file — the main
+    /// folder's `.ycode/settings.json` — laid over the global one. The last
+    /// workspace's file no longer applies; this one's does.
+    fn reload_settings(&mut self) {
+        let (settings, complaint) = Settings::load_in(self.workspace.first().map(|p| p.as_path()));
+        if complaint.is_some() {
+            self.note = complaint;
+        }
+        if settings.theme != self.settings.theme {
+            if let Some(theme) = theme::by_name(&self.themes, &settings.theme).cloned() {
+                self.syntax.set_theme(&theme);
+                self.theme = theme;
+            }
+        }
+        self.settings = settings;
     }
 
     /// Points every task at the workspace's folders again.
@@ -2299,6 +2320,13 @@ impl App {
             Command::Settings => match self.settings.ensure_file() {
                 Ok(path) => self.open_file(&path),
                 Err(e) => self.note = Some(e.to_string()),
+            },
+            Command::LocalSettings => match self.workspace.first() {
+                Some(folder) => match Settings::ensure_local_file(folder) {
+                    Ok(path) => self.open_file(&path),
+                    Err(e) => self.note = Some(e.to_string()),
+                },
+                None => self.note = Some("local settings need a folder open".into()),
             },
             // The agents only show their limits from inside their own
             // session, so the usual answer is to ask the agent: its slash

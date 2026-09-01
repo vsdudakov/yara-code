@@ -3,7 +3,7 @@
 //! the keys — lives here rather than in the code.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,19 @@ impl<'de> Deserialize<'de> for Keys {
     }
 }
 
+/// The folder's own settings, relative to the project.
+pub const LOCAL_FILE: &str = ".ycode/settings.json";
+
+/// What a folder's settings file says when the editor makes it: nothing is
+/// set yet, and here is what setting something would do.
+const LOCAL_STUB: &str = "\
+// Yara Code settings for this folder. Any key from the global settings.json
+// set here wins over it while the folder is open; a map — keys, usage_slash —
+// merges entry by entry. Every key is optional; // comments are allowed.
+{
+}
+";
+
 /// Keys every terminal can send: function keys and plain Ctrl+letter. There
 /// is no Ctrl+Shift here on purpose — without the kitty keyboard protocol a
 /// terminal cannot tell it from Ctrl, and most terminals do not have it.
@@ -94,6 +107,8 @@ pub fn default_chord(command: Command) -> Option<&'static str> {
         Command::OpenRecent => "Ctrl+R",
         Command::Save => "Ctrl+S",
         Command::Settings => "F12",
+        // The folder's settings are a menu and palette action.
+        Command::LocalSettings => return None,
         Command::Quit => "Ctrl+Q",
         Command::Help => "F1",
         // Updating, moving the panes, the Help menu and the documentation are
@@ -198,6 +213,11 @@ pub struct Settings {
     /// a save would replace the user's file, typo and all, with defaults.
     #[serde(skip)]
     pub unreadable: bool,
+    /// What the folder's own file — `.ycode/settings.json` in the project —
+    /// laid over the global one: those keys are the folder's, and a save
+    /// leaves them out of the global file.
+    #[serde(skip)]
+    pub local: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for Settings {
@@ -246,6 +266,7 @@ impl Default for Settings {
             keys: Keys::default(),
             recent_workspaces: Vec::new(),
             unreadable: false,
+            local: serde_json::Map::new(),
         }
     }
 }
@@ -292,6 +313,58 @@ impl Settings {
     /// `$XDG_CONFIG_HOME/ycode/settings.json`, else `~/.config/ycode/...`.
     pub fn path() -> Option<PathBuf> {
         Some(crate::config_dir()?.join("settings.json"))
+    }
+
+    /// The folder's own settings file, laid over the global one while the
+    /// folder is open.
+    pub fn local_path(folder: &Path) -> PathBuf {
+        folder.join(LOCAL_FILE)
+    }
+
+    /// The global settings with the folder's file laid over them: a key the
+    /// folder sets wins, a map — the keys, the usage commands — merges entry
+    /// by entry. A folder file that cannot be read is reported and skipped.
+    pub fn load_in(folder: Option<&Path>) -> (Self, Option<String>) {
+        let (global, complaint) = Self::load();
+        let Some(path) = folder.map(Self::local_path) else {
+            return (global, complaint);
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return (global, complaint);
+        };
+        let local = match serde_json::from_str::<serde_json::Value>(&strip_comments(&text)) {
+            Ok(serde_json::Value::Object(map)) => map,
+            Ok(_) => {
+                return (
+                    global,
+                    Some(format!("{} ignored: not an object", path.display())),
+                )
+            }
+            Err(e) => return (global, Some(format!("{} ignored: {e}", path.display()))),
+        };
+        let mut merged = match serde_json::to_value(&global) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return (global, complaint),
+        };
+        for (key, value) in &local {
+            match (merged.get_mut(key), value) {
+                (Some(serde_json::Value::Object(mine)), serde_json::Value::Object(theirs)) => {
+                    mine.extend(theirs.clone());
+                }
+                _ => {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        match serde_json::from_value::<Self>(serde_json::Value::Object(merged)) {
+            Ok(mut settings) => {
+                settings.unreadable = global.unreadable;
+                settings.local = local;
+                let complaint = complaint.or_else(|| settings.binding_complaint());
+                (settings, complaint)
+            }
+            Err(e) => (global, Some(format!("{} ignored: {e}", path.display()))),
+        }
     }
 
     /// Loads the file, falling back to defaults for anything missing. Returns
@@ -353,7 +426,39 @@ impl Settings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&path, self.to_commented_json())?;
+        std::fs::write(&path, self.for_global()?.to_commented_json())?;
+        Ok(path)
+    }
+
+    /// What the global file gets: everything but the keys the folder's file
+    /// pins, which stay as the global file has them — a folder that runs
+    /// codex must not make every other folder run it.
+    fn for_global(&self) -> std::io::Result<Self> {
+        if self.local.is_empty() {
+            return Ok(self.clone());
+        }
+        let (global, _) = Self::load();
+        let mut mine = serde_json::to_value(self).map_err(std::io::Error::other)?;
+        let theirs = serde_json::to_value(&global).map_err(std::io::Error::other)?;
+        for key in self.local.keys() {
+            if let Some(value) = theirs.get(key) {
+                mine[key] = value.clone();
+            }
+        }
+        serde_json::from_value(mine).map_err(std::io::Error::other)
+    }
+
+    /// The folder's settings file, written empty first if it is not there —
+    /// so "Local Settings" always opens something real, and what it opens
+    /// says what it is for.
+    pub fn ensure_local_file(folder: &Path) -> std::io::Result<PathBuf> {
+        let path = Self::local_path(folder);
+        if !path.exists() {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(&path, LOCAL_STUB)?;
+        }
         Ok(path)
     }
 
@@ -389,7 +494,8 @@ impl Settings {
         format!(
             r#"// Yara Code settings. Every key is optional: leave one out and the built-in
 // default applies. Lines starting with // are comments; the editor writes the
-// file afresh, with these comments, whenever it saves a setting.
+// file afresh, with these comments, whenever it saves a setting. A folder's
+// own .ycode/settings.json lays any of these keys over this file.
 {{
   // Colour theme, one of those built in:
   //   {themes}
@@ -583,6 +689,88 @@ mod tests {
     }
 
     #[test]
+    fn a_folders_file_lays_its_keys_over_the_global_ones_and_maps_merge() {
+        let dir = Dir::new("yara-settings-local");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path().join("config"));
+        Settings {
+            agent: "codex".into(),
+            agent_width: 60,
+            keys: serde_json::from_str(r#"{"save": "Ctrl+O"}"#).unwrap(),
+            ..Default::default()
+        }
+        .save()
+        .unwrap();
+        let folder = dir.path().join("project");
+        std::fs::create_dir_all(folder.join(".ycode")).unwrap();
+        std::fs::write(
+            Settings::local_path(&folder),
+            "// this folder's agent\n{\"agent\": \"claude\", \"keys\": {\"quit\": \"Ctrl+X\"}}",
+        )
+        .unwrap();
+
+        let (settings, complaint) = Settings::load_in(Some(&folder));
+        assert_eq!(complaint, None);
+        assert_eq!(settings.agent, "claude", "the folder's key wins");
+        assert_eq!(settings.agent_width, 60, "the rest is the global file's");
+        assert_eq!(
+            settings.chord(Command::Save),
+            Some(&"Ctrl+O".parse().unwrap())
+        );
+        assert_eq!(
+            settings.chord(Command::Quit),
+            Some(&"Ctrl+X".parse().unwrap())
+        );
+        assert_eq!(settings.local.len(), 2);
+
+        // A save from that folder keeps its keys out of the global file.
+        let mut settings = settings;
+        settings.agent_width = 50;
+        settings.save().unwrap();
+        let (global, _) = Settings::load();
+        assert_eq!(global.agent, "codex");
+        assert_eq!(global.agent_width, 50);
+        assert_eq!(
+            global.chord(Command::Quit),
+            Some(&"Ctrl+Q".parse().unwrap())
+        );
+        assert!(global.local.is_empty());
+
+        // Without a folder, or with one that has no file, it is the global file.
+        assert_eq!(Settings::load_in(None).0, global);
+        assert_eq!(Settings::load_in(Some(dir.path())).0, global);
+        std::env::remove_var("YARA_CONFIG_DIR");
+    }
+
+    #[test]
+    fn a_broken_folder_file_is_named_and_skipped_and_a_made_one_sets_nothing() {
+        let dir = Dir::new("yara-settings-local-broken");
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("YARA_CONFIG_DIR", dir.path().join("config"));
+        let folder = dir.path().join("project");
+        std::fs::create_dir_all(folder.join(".ycode")).unwrap();
+        std::fs::write(Settings::local_path(&folder), "{\"agent\": \"codex\",}").unwrap();
+        let (settings, complaint) = Settings::load_in(Some(&folder));
+        assert_eq!(settings, Settings::default());
+        assert!(complaint.unwrap().contains(".ycode"));
+
+        std::fs::remove_file(Settings::local_path(&folder)).unwrap();
+        let path = Settings::ensure_local_file(&folder).unwrap();
+        assert_eq!(path, folder.join(".ycode").join("settings.json"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("wins over"), "{text}");
+        let (settings, complaint) = Settings::load_in(Some(&folder));
+        assert_eq!(complaint, None);
+        assert_eq!(settings, Settings::default());
+        assert_eq!(
+            Settings::ensure_local_file(&folder).unwrap(),
+            path,
+            "a second time opens the file as it is"
+        );
+        std::env::remove_var("YARA_CONFIG_DIR");
+    }
+
+    #[test]
     fn the_paste_key_is_the_editors_even_in_the_agents_pane() {
         let settings = Settings::default();
         let paste = settings.chord(Command::Paste).unwrap();
@@ -606,6 +794,7 @@ mod tests {
                     | Command::AddFolder
                     | Command::RemoveFolder
                     | Command::NewFolder
+                    | Command::LocalSettings
                     | Command::Documentation
             );
             assert_eq!(

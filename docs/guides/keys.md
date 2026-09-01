@@ -41,6 +41,7 @@ shown) → editor or follow pane → agent. A click moves it too.
 | New Folder | — a right click in the tree |
 | Save | ++ctrl+s++ |
 | Settings | ++f12++ |
+| Local Settings | — the File menu and the palette |
 | Quit | ++ctrl+q++ |
 | Toggle Files | ++ctrl+b++ |
 | Terminal | ++ctrl+t++ |

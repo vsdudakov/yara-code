@@ -18,6 +18,7 @@ pub enum Command {
     OpenRecent,
     Save,
     Settings,
+    LocalSettings,
     Quit,
     // Help.
     Documentation,
@@ -68,6 +69,7 @@ impl Command {
             Self::OpenRecent => "open_recent",
             Self::Save => "save",
             Self::Settings => "settings",
+            Self::LocalSettings => "local_settings",
             Self::Quit => "quit",
             Self::Documentation => "documentation",
             Self::Help => "help",
@@ -117,6 +119,7 @@ impl Command {
             Self::OpenRecent => "Open Recent Workspace…",
             Self::Save => "Save",
             Self::Settings => "Settings",
+            Self::LocalSettings => "Local Settings",
             Self::Quit => "Quit",
             Self::Documentation => "Documentation",
             Self::Help => "Key Bindings",
@@ -161,6 +164,7 @@ pub const ALL: &[Command] = &[
     Command::OpenRecent,
     Command::Save,
     Command::Settings,
+    Command::LocalSettings,
     Command::Quit,
     Command::Documentation,
     Command::Help,
@@ -207,6 +211,7 @@ pub const FILE_MENU: Menu = &[
     Some(Command::NewTab),
     None,
     Some(Command::Settings),
+    Some(Command::LocalSettings),
     None,
     Some(Command::Quit),
 ];
@@ -520,6 +525,7 @@ mod tests {
                 Command::RemoveFolder,
                 Command::NewTab,
                 Command::Settings,
+                Command::LocalSettings,
                 Command::Quit
             ]
         );

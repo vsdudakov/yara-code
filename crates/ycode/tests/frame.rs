@@ -8,7 +8,7 @@ use yara_core::command::Command;
 use yara_core::follow::EditEvent;
 use yara_core::settings::{Settings, Side};
 use yara_core::theme::Theme;
-use ycode::app::{App, Focus, Overlay};
+use ycode::app::{App, Focus, Overlay, View};
 use ycode::ui;
 
 fn frame(app: &mut App) -> Vec<String> {
@@ -1189,6 +1189,65 @@ fn a_drag_selects_text_and_ctrl_c_copies_it_without_the_gutter() {
     ] {
         assert_ne!(buffer[(x, y)].bg, lit, "{what}");
     }
+}
+
+#[test]
+fn a_drag_in_the_follow_pane_takes_the_lines_without_their_numbers() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let repo = Repo::new("yara-frame-select-follow");
+    let mut app = App::with_settings(Some(repo.0.clone()), Settings::default(), Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    repo.file("src/main.rs", "fn main() {\n    let x = 2;\n}\n");
+    app.refresh();
+    assert_eq!(app.follow.len(), 1);
+    let ev = |kind, x, y| MouseEvent {
+        kind,
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    let no_numbers = |text: &str| {
+        text.lines()
+            .all(|l| !l.trim_start().starts_with(|c: char| c.is_ascii_digit()))
+    };
+    // A drag from the pane's edge, over the numbers and signs, takes the
+    // diff's text alone.
+    frame(&mut app);
+    let (follow, text) = (app.hits.follow, app.hits.follow_text);
+    assert!(text.width > 0 && text.x > follow.x + 5, "{text:?}");
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        follow.x + 1,
+        text.y,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        text.right() - 1,
+        text.y + 3,
+    ));
+    let selected = app.selected_text().unwrap();
+    assert!(selected.contains("let x = 2;"), "{selected}");
+    assert!(no_numbers(&selected), "{selected}");
+    assert!(!selected.contains("+ "), "no signs either: {selected}");
+    // The same in the file as it stands.
+    app.view = View::File;
+    frame(&mut app);
+    let text = app.hits.follow_text;
+    app.handle_mouse(ev(
+        MouseEventKind::Down(MouseButton::Left),
+        follow.x + 1,
+        text.y,
+    ));
+    app.handle_mouse(ev(
+        MouseEventKind::Drag(MouseButton::Left),
+        text.right() - 1,
+        text.y + 2,
+    ));
+    assert_eq!(
+        app.selected_text().as_deref(),
+        Some("fn main() {\n    let x = 2;\n}")
+    );
 }
 
 #[test]

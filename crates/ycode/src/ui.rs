@@ -1350,6 +1350,13 @@ fn draw_follow(frame: &mut Frame, app: &mut App, area: Rect) {
     let scroll = scroll.min((lines.len() as u16).saturating_sub(body.height));
     app.scroll = scroll;
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+    // The number, the sign and the air around them make nine columns.
+    app.hits.follow_text = Rect::new(
+        body.x + 9,
+        body.y,
+        body.width.saturating_sub(9),
+        body.height,
+    );
 }
 
 /// A file being edited where the follow pane was: its path, a dot while it
@@ -1523,6 +1530,13 @@ fn draw_file(frame: &mut Frame, app: &mut App, edit: &EditEvent, area: Rect) {
         })
         .collect();
     frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    // The bar and the number make eight columns.
+    app.hits.follow_text = Rect::new(
+        area.x + 8,
+        area.y,
+        area.width.saturating_sub(8),
+        area.height,
+    );
 }
 
 /// The CHANGES overlay: what differs from the base branch, a heading per

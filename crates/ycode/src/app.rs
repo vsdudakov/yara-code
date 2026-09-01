@@ -117,6 +117,9 @@ pub struct Hits {
     /// The shell under the agent, while it is open.
     pub terminal: Rect,
     pub follow: Rect,
+    /// The text of the follow pane's body, without the line numbers beside
+    /// it: what a drag there selects.
+    pub follow_text: Rect,
     /// The blank column between the agent and the follow pane; dragging
     /// it resizes them.
     pub seam: Rect,
@@ -1221,11 +1224,13 @@ impl App {
                 r.height.saturating_sub(2),
             )
         };
-        // In a file, the text is all there is to take: a drag that starts
-        // in the gutter or on the file's name still selects code, not line
-        // numbers.
+        // The text is all there is to take: a drag that starts in the
+        // gutter or on the file's name still selects code, not line numbers
+        // — in the file being edited, the diff and the file as it stands.
         let follow = if self.editor.is_some() {
             self.hits.editor
+        } else if self.hits.follow_text.width > 0 {
+            self.hits.follow_text
         } else {
             inside(self.hits.follow)
         };

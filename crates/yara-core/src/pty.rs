@@ -261,10 +261,17 @@ mod tests {
         let mut pty = Pty::spawn("cat", dir.path(), || {}).unwrap();
         pty.resize(10, 40);
         pty.paste("Ab\nCD\n");
-        // The terminal echoes the whole paste before cat prints it back: it
-        // arrived in one piece, case kept.
-        let screen = wait_for(&pty, "Ab\nCD\nAb\nCD");
-        assert!(screen.contains("Ab\nCD\nAb\nCD"), "{screen:?}");
+        // Both lines come back twice, echoed by the terminal and printed by
+        // cat — in whichever order those two race — with their case kept.
+        // That the paste arrived in one piece, the markers below show.
+        let start = Instant::now();
+        let mut screen = pty.with_screen(|s| s.contents());
+        while screen.matches("CD").count() < 2 && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+            screen = pty.with_screen(|s| s.contents());
+        }
+        assert_eq!(screen.matches("Ab").count(), 2, "{screen:?}");
+        assert_eq!(screen.matches("CD").count(), 2, "{screen:?}");
         wait_for_exit(&mut ended(pty));
 
         // A program that asked for bracketed paste — printing the request is

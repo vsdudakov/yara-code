@@ -51,6 +51,16 @@ fn release_config_dir() {
     std::env::set_var("YARA_CONFIG_DIR", shared);
 }
 
+/// Points `YARA_CONFIG_DIR` at a test's own folder, and holds it there:
+/// the variable is the whole process's, so the tests that set it take
+/// turns, or one's save lands in another's folder — or nowhere.
+fn claim_config_dir(dir: &std::path::Path) -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("YARA_CONFIG_DIR", dir);
+    turn
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -750,7 +760,7 @@ fn the_start_page_lists_recent_projects_and_enter_opens_one() {
     assert!(!all.contains("FOLLOW"), "no panes without a project");
 
     let lock = std::env::temp_dir().join(format!("yara-frame-start-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &lock);
+    let _config = claim_config_dir(&lock);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Enter));
     release_config_dir();
@@ -893,7 +903,7 @@ fn a_new_file_is_made_where_the_files_cursor_is_and_settings_opens_its_own_file(
 
     let config =
         std::env::temp_dir().join(format!("yara-frame-newfile-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     app.execute(yara_core::command::Command::Settings);
     release_config_dir();
     let shown = text(&mut app);
@@ -1255,7 +1265,7 @@ fn the_panes_move_to_the_other_side_from_the_palette_and_the_seam_drags_the_widt
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let config =
         std::env::temp_dir().join(format!("yara-frame-swap-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     let mut app = following(Settings::default());
     let rows = frame(&mut app);
     assert!(rows[1].find("AGENT").unwrap() < rows[1].find("FOLLOW").unwrap());
@@ -1629,7 +1639,7 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
         "a task needs a folder first"
     );
     let config = std::env::temp_dir().join(format!("yara-newtask-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     // Start the walk in the folder that holds the repository.
     app.overlay = Some(Overlay::AddFolder {
         dir: repo.0.parent().unwrap().to_path_buf(),
@@ -1658,7 +1668,7 @@ fn a_new_task_without_a_project_asks_for_a_folder() {
 fn settings_open_over_the_start_page() {
     let config = std::env::temp_dir().join(format!("yara-frame-settings-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&config);
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     let mut app = App::with_settings(None, Settings::default(), Theme::default());
     app.handle_key(key(KeyCode::F(12)));
     let all = text(&mut app);
@@ -1685,7 +1695,7 @@ fn local_settings_make_the_folders_file_and_a_workspace_opens_with_it_laid_over(
     let repo = Repo::new("yara-frame-local-settings");
     let config = std::env::temp_dir().join(format!("yara-frame-local-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&config);
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
 
     // Over the start page there is no folder to pin them to.
     let mut app = App::with_settings(None, Settings::default(), Theme::default());
@@ -1782,7 +1792,7 @@ fn a_workspace_holds_the_folders_and_its_tasks_work_in_worktrees_of_them() {
         ..Settings::default()
     };
     let config = std::env::temp_dir().join(format!("yara-ws-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     let mut app = App::with_workspace(vec![backend.0.clone()], settings, Theme::default());
     app.focus = Focus::Follow;
     app.refresh();
@@ -1902,7 +1912,7 @@ fn the_terminal_scrolls_by_the_wheel_and_its_seam_drags_its_height() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let config =
         std::env::temp_dir().join(format!("yara-frame-shell-config-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     let settings = Settings {
         agent: "cat".into(),
         shell: "cat".into(),
@@ -2068,7 +2078,7 @@ fn a_drag_in_the_terminal_selects_its_text_and_the_paste_key_is_not_typed_at_it(
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let config =
         std::env::temp_dir().join(format!("yara-frame-shell-select-{}", std::process::id()));
-    std::env::set_var("YARA_CONFIG_DIR", &config);
+    let _config = claim_config_dir(&config);
     let settings = Settings {
         agent: "cat".into(),
         shell: "cat".into(),
@@ -2178,6 +2188,82 @@ fn a_folder_of_repositories_is_followed_through_each_of_them() {
         all.contains(" backend ") && all.contains(" frontend "),
         "{all}"
     );
+    let _ = std::fs::remove_dir_all(&bench);
+}
+
+#[test]
+fn a_task_on_a_bench_gets_a_worktree_of_each_repository_on_it() {
+    // Two tasks on one bench: each works in worktrees of its own, beside
+    // the repositories, and sees only what happens there.
+    let bench = std::env::temp_dir().join(format!("yara-frame-bench-new-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&bench);
+    std::fs::create_dir_all(&bench).unwrap();
+    let bench = yara_core::git::canonical(&bench);
+    let backend = bench_repo(&bench, "backend");
+    let frontend = bench_repo(&bench, "frontend");
+    std::fs::write(bench.join("up.sh"), "make up\n").unwrap();
+    let settings = Settings {
+        agent: "cat".into(),
+        ..Settings::default()
+    };
+    let mut app = App::with_workspace(vec![bench.clone()], settings, Theme::default());
+    app.focus = Focus::Follow;
+    app.refresh();
+    for name in ["alpha", "beta"] {
+        app.handle_key(key(KeyCode::F(7)));
+        for c in name.chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+    }
+    assert_eq!(app.tasks.len(), 3, "{:?}", app.note);
+    app.refresh();
+    let paths = |task: &ycode::app::Task| -> Vec<std::path::PathBuf> {
+        task.folders.iter().map(|f| f.path.clone()).collect()
+    };
+    let alpha = bench.join("backend-worktrees/alpha");
+    assert_eq!(
+        paths(&app.tasks[1]),
+        vec![
+            bench.clone(),
+            alpha.clone(),
+            bench.join("frontend-worktrees/alpha")
+        ]
+    );
+    assert_eq!(
+        paths(&app.tasks[2]),
+        vec![
+            bench.clone(),
+            bench.join("backend-worktrees/beta"),
+            bench.join("frontend-worktrees/beta")
+        ]
+    );
+    assert_eq!(
+        paths(&app.tasks[0]),
+        vec![bench.clone(), backend.clone(), frontend.clone()],
+        "the unnamed task works in the repositories themselves"
+    );
+
+    std::fs::write(alpha.join("src/main.rs"), "fn main() { alpha() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.tasks[1].follow.len(), 1, "the edit landed on its task");
+    assert_eq!(app.tasks[2].follow.len(), 0, "and on no other");
+    assert_eq!(app.tasks[0].follow.len(), 0);
+
+    // An edit in the repository itself is the unnamed task's alone; the
+    // bench under the others does not carry it.
+    std::fs::write(backend.join("src/main.rs"), "fn main() { shared() }\n").unwrap();
+    app.refresh();
+    assert_eq!(app.tasks[0].follow.len(), 1);
+    assert_eq!(app.tasks[1].follow.len(), 1);
+    assert_eq!(app.tasks[2].follow.len(), 0);
+
+    // A loose file on the bench is everyone's.
+    std::fs::write(bench.join("up.sh"), "make up && make logs\n").unwrap();
+    app.refresh();
+    assert_eq!(app.tasks[0].follow.len(), 2);
+    assert_eq!(app.tasks[1].follow.len(), 2);
+    assert_eq!(app.tasks[2].follow.len(), 1);
     let _ = std::fs::remove_dir_all(&bench);
 }
 

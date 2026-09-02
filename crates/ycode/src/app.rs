@@ -220,6 +220,23 @@ impl Folder {
     }
 }
 
+/// Whether a worktree's folder is called after the task — `backend-3016`
+/// for the task `3016`, in whichever case.
+fn named_after(path: &std::path::Path, slug: &str) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .is_some_and(|name| name.contains(&slug.to_lowercase()))
+}
+
+/// Whether a repository lies between `root` and `path`: a folder with a
+/// `.git` in it, strictly inside `root`, strictly above `path`.
+fn in_repository_under(path: &std::path::Path, root: &std::path::Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .take_while(|dir| *dir != root && dir.starts_with(root))
+        .any(|dir| dir.join(".git").exists())
+}
+
 /// Where a task's own worktree of a repository lives: under the folder the
 /// settings name, or beside the repository, and called by the task.
 pub fn worktree_path(repo: &Repo, settings: &Settings, slug: &str) -> PathBuf {
@@ -318,9 +335,10 @@ impl Task {
         let slug = self.slug();
         let mut kept: Vec<Folder> = Vec::new();
         self.folders.retain(|f| !f.nested);
-        let mut wanted: Vec<PathBuf> = Vec::new();
-        for path in workspace {
-            let path = match (&slug, git::open(path, "")) {
+        // A repository the task has a worktree of its own for is followed
+        // there, in the repository's place.
+        let own = |path: &PathBuf| -> PathBuf {
+            match (&slug, git::open(path, "")) {
                 (Some(slug), Some(repo)) => {
                     let mine = worktree_path(&repo, settings, slug);
                     if mine.is_dir() {
@@ -330,9 +348,9 @@ impl Task {
                     }
                 }
                 _ => path.clone(),
-            };
-            wanted.push(path);
-        }
+            }
+        };
+        let mut wanted: Vec<PathBuf> = workspace.iter().map(own).collect();
         // A folder that holds repositories rather than being one — a bench
         // of related projects — is followed through each of them.
         let mut found: Vec<PathBuf> = Vec::new();
@@ -345,7 +363,7 @@ impl Task {
         // some task's rather than every task's: `refresh` hands it to the
         // task it is named after, as it does one made while the app runs.
         found.retain(|path| !path.join(".git").is_file());
-        for path in found {
+        for path in found.iter().map(own) {
             if !wanted.contains(&path) {
                 wanted.push(path);
             }
@@ -725,8 +743,9 @@ impl App {
     }
 
     /// A new task, named by the user: a worktree of that name for every
-    /// folder of the workspace that is a repository, the folder itself for
-    /// every folder that is not, and an agent of its own over them.
+    /// repository of the workspace — a folder that is one, or each one on
+    /// a bench — the folder itself for every folder that is not, and an
+    /// agent of its own over them.
     fn new_tab(&mut self, name: &str) {
         if self.workspace.is_empty() {
             self.note = Some("a task needs a folder to work in".into());
@@ -738,26 +757,38 @@ impl App {
             self.note = Some("a task needs a name".into());
             return;
         };
-        let mut paths = Vec::new();
-        for folder in &self.workspace.clone() {
+        let mut repos: Vec<Repo> = Vec::new();
+        for folder in &self.workspace {
             match git::open(folder, &self.settings.base_branch) {
-                Some(repo) => {
-                    let dir = worktree_path(&repo, &self.settings, &slug);
-                    let parent = dir.parent().unwrap_or(&dir).to_path_buf();
-                    match git::worktree_add(&repo, &parent, &slug) {
-                        Ok(path) => paths.push(path),
-                        Err(e) => {
-                            self.note = Some(e);
-                            return;
-                        }
-                    }
-                }
+                Some(repo) => repos.push(repo),
                 // A folder outside git is shared: there is no branch of it
-                // to make.
-                None => paths.push(folder.clone()),
+                // to make. The repositories it holds are another matter.
+                None => repos.extend(
+                    git::discover_repos(folder)
+                        .into_iter()
+                        .filter(|path| !path.join(".git").is_file())
+                        .filter_map(|path| git::open(&path, &self.settings.base_branch)),
+                ),
             }
         }
-        task.resync(&paths, &self.settings);
+        for repo in &repos {
+            // A worktree already named after the task is the task's, and
+            // `refresh` hands it over; a second one would only get in its
+            // way.
+            if git::worktrees(repo)
+                .iter()
+                .any(|path| named_after(path, &slug))
+            {
+                continue;
+            }
+            let dir = worktree_path(repo, &self.settings, &slug);
+            let parent = dir.parent().unwrap_or(&dir).to_path_buf();
+            if let Err(e) = git::worktree_add(repo, &parent, &slug) {
+                self.note = Some(e);
+                return;
+            }
+        }
+        task.resync(&self.workspace, &self.settings);
         self.tasks.push(task);
         self.active = self.tasks.len() - 1;
         self.start_agent();
@@ -1384,23 +1415,9 @@ impl App {
             .iter()
             .flat_map(|task| task.folders.iter().map(|f| f.path.clone()))
             .collect();
-        // A repository some task follows is watched there, in its own
-        // right; a plain folder around it — the bench — does not report its
-        // files, whichever task the bench belongs to.
-        let repos: Vec<PathBuf> = self
-            .tasks
-            .iter()
-            .flat_map(|task| task.folders.iter().filter(|f| f.repo.is_some()))
-            .map(|f| f.path.clone())
-            .collect();
         // A worktree named after a task — `backend-3016` for the task
         // `3016` — is that task's wherever it lies, and no other's.
-        let names: Vec<String> = self
-            .tasks
-            .iter()
-            .filter_map(|task| task.slug())
-            .map(|slug| slug.to_lowercase())
-            .collect();
+        let names: Vec<String> = self.tasks.iter().filter_map(|task| task.slug()).collect();
         for session in &mut self.tasks {
             let mut edits = Vec::new();
             // A worktree the agent made inside a folder of the task is
@@ -1429,14 +1446,10 @@ impl App {
             nested.sort();
             nested.dedup();
             nested.retain(|path| !taken.contains(path));
-            let mine = session.slug().map(|slug| slug.to_lowercase());
+            let mine = session.slug();
             let claimable = |path: &std::path::Path| {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_lowercase())
-                    .unwrap_or_default();
-                mine.as_ref().is_some_and(|slug| name.contains(slug))
-                    || !names.iter().any(|slug| name.contains(slug))
+                mine.as_ref().is_some_and(|slug| named_after(path, slug))
+                    || !names.iter().any(|slug| named_after(path, slug))
             };
             nested.retain(|path| claimable(path));
             for path in nested {
@@ -1465,18 +1478,16 @@ impl App {
                     folder.changes = git::changes(repo).unwrap_or_default();
                 }
             }
-            // A repository inside a plain folder is watched in its own
-            // right; the folder around it does not report those files
-            // again.
+            // A repository inside a folder is watched in its own right —
+            // by the task that has it, or in a worktree's place — and the
+            // folder around it does not report its files: not the bench
+            // for the repositories on it, nor a repository for a worktree
+            // inside it.
             for (from, edit) in edits {
                 if session
                     .folder_of(&edit.path)
                     .is_some_and(|f| f.path != from)
-                    || repos
-                        .iter()
-                        .filter(|repo| edit.path.starts_with(repo))
-                        .max_by_key(|repo| repo.components().count())
-                        .is_some_and(|repo| *repo != from)
+                    || in_repository_under(&edit.path, &from)
                 {
                     continue;
                 }

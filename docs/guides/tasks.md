@@ -25,8 +25,10 @@ in a worktree of its own for each of them.
 
 ++f7++ — or `[+]` in the header, or `File → New Task…` — asks for a name. For
 every folder of the workspace that is a repository it makes a worktree on a
-branch of that name; folders that are not repositories are shared as they are.
-An agent starts in the result, and the tab is called by the name.
+branch of that name; folders that are not repositories are shared as they are,
+but every repository on one — a [bench](#folders-that-hold-repositories) —
+gets a worktree of its own too. An agent starts in the result, and the tab is
+called by the name.
 
 ![Naming a new task](../assets/shots/new-task.svg)
 
@@ -67,7 +69,10 @@ projects, `backend/`, `frontend/`, `python-orbis/` side by side — is followed
 through each of them: every repository inside it, two levels deep, is watched
 in its own right, heads its own section in CHANGES, and names the edits that
 come from it. The bench itself is watched for the loose files around them, and
-no file is reported twice.
+no file is reported twice. A named task takes a worktree of each repository on
+the bench, beside it — `backend-worktrees/3016` for the task `3016` — and
+follows that in the repository's place, so two tasks on one bench never see
+each other's edits; the loose files stay shared.
 
 An agent that sets up a worktree of its own inside one of the task's folders —
 `.worktrees/the-branch`, say, whether inside the repository or beside it under
